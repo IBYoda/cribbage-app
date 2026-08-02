@@ -43,12 +43,20 @@ export default function Home() {
           <p>
             Logged in as <span className="font-medium">{session.user.email}</span>
           </p>
-          <button
-            onClick={handleLogout}
-            className="rounded bg-foreground px-4 py-2 text-background"
-          >
-            Log Out
-          </button>
+          <div className="flex gap-4">
+            <Link
+              href="/profile"
+              className="rounded border border-zinc-300 px-4 py-2 dark:border-zinc-700"
+            >
+              Edit Profile
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="rounded bg-foreground px-4 py-2 text-background"
+            >
+              Log Out
+            </button>
+          </div>
         </>
       ) : (
         <div className="flex gap-4">
