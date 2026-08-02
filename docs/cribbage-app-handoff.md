@@ -48,8 +48,9 @@ Suggested first step once `lib/supabase.ts` is verified: a minimal sign-up and l
 ## Working conventions (please follow these)
 
 - **Small, testable vertical slices** — one feature end-to-end and validated before the next. If a slice can't reasonably be split further, say so explicitly rather than quietly bundling extra things in.
-- **Each feature slice gets its own branch**, built and validated before merging — never build directly on `main` (the one exception was the initial scaffold commit, which is the baseline everything else branches from).
-- **The user runs all git commands themselves** (add/commit/push/PR/merge). Don't execute git operations automatically — describe what to run and let them run it.
+- **Every slice starts with creating its own branch** — the very first git command run for a new slice is `git checkout -b feature/whatever-the-slice-is`, done by Claude Code at the start of the session, before any code is written. Never build on main.
+- **After that, no more git commands** — no add, commit, push, or merge. The user handles all of that themselves once the slice is built and verified.
+- **The one exception is small, self-contained doc-only changes like this one** — same rule applies: create the branch first, then edit, nothing else.
 - **Explain the "why," not just the code** — the user is learning to direct AI-assisted development, not memorize every line.
 - User is on **PowerShell (Windows 11)** — quote file paths that contain `[` or `]` (not relevant yet, but will matter once dynamic routes like `app/games/[id]/page.tsx` show up).
 - Before doing real-world-data work (e.g. touching Supabase schema, external APIs), do a real reconnaissance pass first — check actual current structure, don't assume.
