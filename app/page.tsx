@@ -50,6 +50,12 @@ export default function Home() {
             >
               Edit Profile
             </Link>
+            <Link
+              href="/tables/new"
+              className="rounded border border-zinc-300 px-4 py-2 dark:border-zinc-700"
+            >
+              Start a Table
+            </Link>
             <button
               onClick={handleLogout}
               className="rounded bg-foreground px-4 py-2 text-background"
