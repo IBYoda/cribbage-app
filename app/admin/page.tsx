@@ -109,7 +109,7 @@ export default function AdminPage() {
 
     const { error: updateError } = await supabase
       .from("games")
-      .update({ status: "ended" })
+      .update({ status: "ended", ended_reason: "admin" })
       .eq("id", gameId);
 
     setActionInFlight(null);
@@ -129,11 +129,15 @@ export default function AdminPage() {
 
     // End any active game at this table too, so nothing is left "active"
     // pointing at a table that's no longer open.
-    await supabase.from("games").update({ status: "ended" }).eq("table_id", tableId).eq("status", "active");
+    await supabase
+      .from("games")
+      .update({ status: "ended", ended_reason: "admin" })
+      .eq("table_id", tableId)
+      .eq("status", "active");
 
     const { error: updateError } = await supabase
       .from("tables")
-      .update({ status: "ended" })
+      .update({ status: "ended", ended_reason: "admin" })
       .eq("id", tableId);
 
     setActionInFlight(null);
