@@ -25,6 +25,12 @@ type Game = {
 
 const UNIQUE_VIOLATION = "23505";
 
+function tableEndedMessage(endedReason: string | null | undefined) {
+  return endedReason === "timeout"
+    ? "This table was automatically ended after being open for 12 hours."
+    : "This table has been ended by an admin.";
+}
+
 export default function TablePage() {
   const params = useParams<{ code: string }>();
   const code = params.code;
@@ -103,7 +109,7 @@ export default function TablePage() {
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status")
+        .select("id, code, status, ended_reason")
         .eq("code", code)
         .maybeSingle();
 
@@ -118,7 +124,7 @@ export default function TablePage() {
         return;
       }
       if (tableRow.status !== "open") {
-        setError("This table is no longer open.");
+        setError(tableEndedMessage(tableRow.ended_reason));
         return;
       }
 
@@ -281,9 +287,9 @@ export default function TablePage() {
           filter: `id=eq.${table.id}`,
         },
         (payload) => {
-          const updatedTable = payload.new as { status: string };
+          const updatedTable = payload.new as { status: string; ended_reason: string | null };
           if (updatedTable.status !== "open") {
-            setError("This table has been ended by an admin.");
+            setError(tableEndedMessage(updatedTable.ended_reason));
           }
         }
       )
