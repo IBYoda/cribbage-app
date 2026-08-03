@@ -37,6 +37,10 @@ export default function TablePage() {
   const [activeGame, setActiveGame] = useState<Game | null>(null);
   const [gameStatus, setGameStatus] = useState<"idle" | "creating" | "error">("idle");
   const [gameMessage, setGameMessage] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "disconnected">(
+    "connecting"
+  );
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -45,13 +49,58 @@ export default function TablePage() {
     });
   }, []);
 
+  // Fetches the current active game + full roster for a table. Used both for
+  // the initial load and to "catch up" after the realtime connection drops
+  // and reconnects, since postgres_changes only streams events that happen
+  // while connected -- anything missed during a disconnect has to be re-fetched.
+  async function refreshTableState(tableId: string) {
+    const { data: existingGame } = await supabase
+      .from("games")
+      .select("id, created_at")
+      .eq("table_id", tableId)
+      .eq("status", "active")
+      .maybeSingle();
+
+    setActiveGame(existingGame ?? null);
+
+    const { data: memberRows, error: membersError } = await supabase
+      .from("table_members")
+      .select("user_id, joined_at")
+      .eq("table_id", tableId)
+      .order("joined_at", { ascending: true });
+
+    if (membersError) {
+      setError(membersError.message);
+      return;
+    }
+
+    const userIds = (memberRows ?? []).map((m) => m.user_id);
+    const { data: profileRows } = await supabase
+      .from("profiles")
+      .select("id, nickname")
+      .in("id", userIds.length > 0 ? userIds : [""]);
+
+    const nicknameById = new Map((profileRows ?? []).map((p) => [p.id, p.nickname]));
+
+    setMembers(
+      (memberRows ?? []).map((m) => ({
+        user_id: m.user_id,
+        joined_at: m.joined_at,
+        nickname: nicknameById.get(m.user_id) ?? null,
+      }))
+    );
+  }
+
   // Look up the table, join it (idempotent), then load the current roster.
+  // retryKey lets the error screen's "Retry" button re-run this from scratch.
   useEffect(() => {
     if (!session) return;
 
     let cancelled = false;
 
     async function setup() {
+      setError(null);
+
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
         .select("id, code, status")
@@ -75,16 +124,6 @@ export default function TablePage() {
 
       setTable(tableRow);
 
-      const { data: existingGame } = await supabase
-        .from("games")
-        .select("id, created_at")
-        .eq("table_id", tableRow.id)
-        .eq("status", "active")
-        .maybeSingle();
-
-      if (cancelled) return;
-      setActiveGame(existingGame ?? null);
-
       const { error: joinError } = await supabase
         .from("table_members")
         .upsert(
@@ -98,35 +137,7 @@ export default function TablePage() {
         return;
       }
 
-      const { data: memberRows, error: membersError } = await supabase
-        .from("table_members")
-        .select("user_id, joined_at")
-        .eq("table_id", tableRow.id)
-        .order("joined_at", { ascending: true });
-
-      if (cancelled) return;
-      if (membersError) {
-        setError(membersError.message);
-        return;
-      }
-
-      const userIds = (memberRows ?? []).map((m) => m.user_id);
-      const { data: profileRows } = await supabase
-        .from("profiles")
-        .select("id, nickname")
-        .in("id", userIds.length > 0 ? userIds : [""]);
-
-      if (cancelled) return;
-
-      const nicknameById = new Map((profileRows ?? []).map((p) => [p.id, p.nickname]));
-
-      setMembers(
-        (memberRows ?? []).map((m) => ({
-          user_id: m.user_id,
-          joined_at: m.joined_at,
-          nickname: nicknameById.get(m.user_id) ?? null,
-        }))
-      );
+      await refreshTableState(tableRow.id);
     }
 
     setup();
@@ -134,7 +145,7 @@ export default function TablePage() {
     return () => {
       cancelled = true;
     };
-  }, [session, code]);
+  }, [session, code, retryKey]);
 
   async function handleStartNewGame() {
     if (!table || !session) return;
@@ -175,6 +186,11 @@ export default function TablePage() {
   // Live updates: append anyone who joins after we've loaded the roster.
   useEffect(() => {
     if (!table) return;
+
+    // Tracks whether we've seen the channel go down, so we only resync on a
+    // genuine reconnect -- not on the very first successful subscribe (the
+    // setup effect above already fetched fresh state for that case).
+    let wasDisconnected = false;
 
     const channel = supabase
       .channel(`table-members-${table.id}`)
@@ -239,7 +255,22 @@ export default function TablePage() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setRealtimeStatus("connected");
+          if (wasDisconnected) {
+            wasDisconnected = false;
+            // We were disconnected and just reconnected -- postgres_changes
+            // only streams events that happen while connected, so anything
+            // that changed while we were down (a join, a new game, a
+            // nickname edit) was missed. Re-fetch to catch up.
+            refreshTableState(table.id);
+          }
+        } else if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+          wasDisconnected = true;
+          setRealtimeStatus("disconnected");
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -269,9 +300,20 @@ export default function TablePage() {
     return (
       <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
         <p className="text-red-600">{error}</p>
-        <Link href="/tables/join" className="underline">
-          Try a different code
-        </Link>
+        <div className="flex gap-4">
+          <button
+            onClick={() => setRetryKey((k) => k + 1)}
+            className="rounded bg-foreground px-4 py-2 text-background"
+          >
+            Retry
+          </button>
+          <Link
+            href="/tables/join"
+            className="rounded border border-zinc-300 px-4 py-2 dark:border-zinc-700"
+          >
+            Try a different code
+          </Link>
+        </div>
       </main>
     );
   }
@@ -279,6 +321,10 @@ export default function TablePage() {
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
       <h1 className="text-2xl font-semibold">Table {code}</h1>
+
+      {realtimeStatus === "disconnected" && (
+        <p className="text-sm text-amber-600 dark:text-amber-500">Reconnecting...</p>
+      )}
 
       {activeGame ? (
         <p className="rounded border border-green-600 px-4 py-2 text-green-700 dark:text-green-500">
