@@ -56,6 +56,12 @@ export default function Home() {
             >
               Start a Table
             </Link>
+            <Link
+              href="/tables/join"
+              className="rounded border border-zinc-300 px-4 py-2 dark:border-zinc-700"
+            >
+              Join a Table
+            </Link>
             <button
               onClick={handleLogout}
               className="rounded bg-foreground px-4 py-2 text-background"
