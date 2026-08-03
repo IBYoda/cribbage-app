@@ -255,6 +255,38 @@ export default function TablePage() {
           }
         }
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "games",
+          filter: `table_id=eq.${table.id}`,
+        },
+        (payload) => {
+          const updatedGame = payload.new as { status: string };
+          // An admin force-ending the active game (or it ending some other
+          // way in future) should clear it live for anyone still watching.
+          if (updatedGame.status !== "active") {
+            setActiveGame(null);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "tables",
+          filter: `id=eq.${table.id}`,
+        },
+        (payload) => {
+          const updatedTable = payload.new as { status: string };
+          if (updatedTable.status !== "open") {
+            setError("This table has been ended by an admin.");
+          }
+        }
+      )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
           setRealtimeStatus("connected");
