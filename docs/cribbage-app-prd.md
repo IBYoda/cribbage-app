@@ -163,6 +163,8 @@ This is here so the dealing/discard logic has one clear source of truth to build
 - Goal: players can log in, start or join a table by code, play multiple games at that table, and reconnect without losing their spot — before the actual cribbage logic exists yet
 
 **Phase 2 — 2-player game (core):**
+
+*(Numbering note: git/PR history for this phase started counting from "Slice 9" — a continuation of Phase 1's 1-8 — before switching to per-phase numbering to match this document. "Slice 9" in commit history = "Phase 2, Slice 1" here. All Phase 2 work going forward uses Phase 2's own numbering, starting at Slice 1.)*
 - Shared deck + dealing logic
 - Private hand display for each player
 - Real-time reveal of played cards during the pegging phase

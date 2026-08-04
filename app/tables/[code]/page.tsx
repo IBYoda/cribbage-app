@@ -24,9 +24,15 @@ type Game = {
   id: string;
   created_at: string;
   dealer_id: string | null;
+  // Who has discarded -- never WHAT they discarded. The crib's contents live in
+  // game_cribs, which nobody can read yet.
+  discarded_by: string[];
 };
 
 const REQUIRED_PLAYERS = 2;
+const CARDS_DEALT = 6;
+const CARDS_TO_DISCARD = 2;
+const CARDS_AFTER_DISCARD = CARDS_DEALT - CARDS_TO_DISCARD;
 
 function tableEndedMessage(endedReason: string | null | undefined) {
   return endedReason === "timeout"
@@ -56,6 +62,11 @@ export default function TablePage() {
   );
   const [myHand, setMyHand] = useState<string[]>([]);
   const [handSorted, setHandSorted] = useState(false);
+  // Tracked as card codes, not indices, so hitting Sort mid-selection doesn't
+  // scramble which cards are selected.
+  const [selectedCards, setSelectedCards] = useState<string[]>([]);
+  const [discardStatus, setDiscardStatus] = useState<"idle" | "sending" | "error">("idle");
+  const [discardMessage, setDiscardMessage] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -75,7 +86,12 @@ export default function TablePage() {
       .maybeSingle();
 
     setMyHand(data?.cards ?? []);
-    setHandSorted(false);
+    // Any selection referred to the pre-discard hand, so it's stale now.
+    // handSorted is deliberately NOT reset here: sorting is a display-only
+    // preference, and clearing it on every refetch would silently un-sort the
+    // remaining 4 cards the moment you discarded. It's reset when a genuinely
+    // new hand is dealt instead.
+    setSelectedCards([]);
   }, []);
 
   // Fetches the current active game + full roster for a table. Used both for
@@ -85,7 +101,7 @@ export default function TablePage() {
   const refreshTableState = useCallback(async (tableId: string) => {
     const { data: existingGame } = await supabase
       .from("games")
-      .select("id, created_at, dealer_id")
+      .select("id, created_at, dealer_id, discarded_by")
       .eq("table_id", tableId)
       .eq("status", "active")
       .maybeSingle();
@@ -207,7 +223,45 @@ export default function TablePage() {
     // the function may have handed us back someone else's game, and our hand
     // has to come from the server regardless.
     await refreshTableState(table.id);
+    setHandSorted(false); // genuinely new hand -- show it as dealt
     setGameStatus("idle");
+  }
+
+  function toggleCardSelection(card: string) {
+    setDiscardMessage(null);
+    setSelectedCards((current) => {
+      if (current.includes(card)) return current.filter((c) => c !== card);
+      // Silently ignore a third pick rather than swapping one out -- swapping
+      // would make it unclear which card you just deselected.
+      if (current.length >= CARDS_TO_DISCARD) return current;
+      return [...current, card];
+    });
+  }
+
+  async function handleDiscard() {
+    if (!activeGame || selectedCards.length !== CARDS_TO_DISCARD) return;
+
+    setDiscardStatus("sending");
+    setDiscardMessage(null);
+
+    const { error: rpcError } = await supabase.rpc("discard_to_crib", {
+      p_game_id: activeGame.id,
+      p_cards: selectedCards,
+    });
+
+    if (rpcError) {
+      // The function's guards (already discarded, not your card, game no longer
+      // active) surface here as readable messages.
+      setDiscardStatus("error");
+      setDiscardMessage(rpcError.message);
+      return;
+    }
+
+    // Re-read for the same reason as above: the hand and discarded_by are both
+    // server-owned now. The opponent learns about this via the games UPDATE
+    // broadcast, which carries discarded_by but never the crib's contents.
+    if (table) await refreshTableState(table.id);
+    setDiscardStatus("idle");
   }
 
   // Live updates: append anyone who joins after we've loaded the roster.
@@ -281,13 +335,16 @@ export default function TablePage() {
             created_at: string;
             status: string;
             dealer_id: string | null;
+            discarded_by: string[] | null;
           };
           if (newGame.status === "active") {
             setActiveGame({
               id: newGame.id,
               created_at: newGame.created_at,
               dealer_id: newGame.dealer_id,
+              discarded_by: newGame.discarded_by ?? [],
             });
+            setHandSorted(false); // genuinely new hand -- show it as dealt
             // The other player dealt -- go fetch our own cards. The hand itself
             // is never broadcast; only the fact that a game now exists is.
             fetchMyHand(newGame.id);
@@ -303,13 +360,24 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
-          const updatedGame = payload.new as { status: string };
+          const updatedGame = payload.new as {
+            status: string;
+            discarded_by: string[] | null;
+          };
           // An admin force-ending the active game (or it ending some other
           // way in future) should clear it live for anyone still watching.
           if (updatedGame.status !== "active") {
             setActiveGame(null);
             setMyHand([]);
+            setSelectedCards([]);
+            return;
           }
+          // Otherwise this is a discard: the opponent's "waiting for you"
+          // state flips the moment they send their 2 cards to the crib. Only
+          // the list of who has acted travels here -- never the cards.
+          setActiveGame((current) =>
+            current ? { ...current, discarded_by: updatedGame.discarded_by ?? [] } : current
+          );
         }
       )
       .on(
@@ -395,12 +463,25 @@ export default function TablePage() {
   // array rather than a single hardcoded opponent so 3- and 4-player tables
   // (Phase 3) slot in without restructuring the layout.
   const opponents = members.filter((m) => m.user_id !== session.user.id);
-  // We can't read an opponent's hand (RLS), and shouldn't -- but hand sizes are
-  // public knowledge from the rules, so mirroring our own count is both correct
-  // and stays correct after discarding in a later slice.
-  const opponentCardCount = myHand.length;
   const displayedHand = handSorted ? sortHand(myHand) : myHand;
   const canStartGame = members.length === REQUIRED_PLAYERS;
+
+  const discardedBy = activeGame?.discarded_by ?? [];
+  const iHaveDiscarded = discardedBy.includes(session.user.id);
+  const cribComplete = discardedBy.length >= REQUIRED_PLAYERS;
+  const iAmDealer = activeGame?.dealer_id === session.user.id;
+  const dealer = members.find((m) => m.user_id === activeGame?.dealer_id);
+  const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
+  const canDiscard = Boolean(activeGame) && !iHaveDiscarded && myHand.length === CARDS_DEALT;
+
+  // Derived from discarded_by rather than mirroring our own hand length: once
+  // you discard and your opponent hasn't, mirroring would show 4 cards for a
+  // player still holding 6. Hand sizes are public knowledge from the rules, so
+  // this reveals nothing that isn't already known.
+  function opponentCardCount(opponentId: string) {
+    if (!activeGame) return 0;
+    return discardedBy.includes(opponentId) ? CARDS_AFTER_DISCARD : CARDS_DEALT;
+  }
 
   return (
     <main className="flex flex-1 flex-col gap-4 p-4">
@@ -424,7 +505,7 @@ export default function TablePage() {
           opponents.map((opponent) => (
             <div key={opponent.user_id} className="flex w-full max-w-xs flex-col items-center gap-2">
               <div className="flex w-full gap-1">
-                {Array.from({ length: opponentCardCount }).map((_, i) => (
+                {Array.from({ length: opponentCardCount(opponent.user_id) }).map((_, i) => (
                   <FaceDownCard key={i} />
                 ))}
               </div>
@@ -442,9 +523,30 @@ export default function TablePage() {
       {/* MIDDLE -- game controls / status. Grows to push the hand to the bottom. */}
       <section className="flex flex-1 flex-col items-center justify-center gap-2">
         {activeGame ? (
-          <p className="rounded border border-green-600 px-4 py-2 text-sm text-green-700 dark:text-green-500">
-            Game in progress
-          </p>
+          <>
+            {cribComplete ? (
+              <div className="flex flex-col items-center gap-2">
+                {/* Face-down for EVERYONE, dealer included -- game_cribs has no
+                    read policy at all until the counting-phase reveal slice. */}
+                <div className="flex w-32 gap-1">
+                  {Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
+                    <FaceDownCard key={i} />
+                  ))}
+                </div>
+                <p className="text-sm font-medium">
+                  {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
+                </p>
+              </div>
+            ) : iHaveDiscarded ? (
+              <p className="text-sm text-zinc-500">
+                Waiting for {waitingOn.map(displayName).join(", ")} to discard...
+              </p>
+            ) : (
+              <p className="text-base font-medium">
+                Pick {CARDS_TO_DISCARD} cards for {iAmDealer ? "your" : "their"} crib
+              </p>
+            )}
+          </>
         ) : (
           <>
             <button
@@ -469,18 +571,48 @@ export default function TablePage() {
       {/* YOU -- always the bottom of the screen */}
       <section className="flex flex-col items-center gap-2">
         {myHand.length > 0 && (
-          <button
-            onClick={() => setHandSorted(true)}
-            disabled={handSorted}
-            className="rounded border border-zinc-400 px-6 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-          >
-            Sort
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setHandSorted(true)}
+              disabled={handSorted}
+              className="rounded border border-zinc-400 px-6 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+            >
+              Sort
+            </button>
+            {/* Only appears at exactly 2 selected -- there is no valid partial
+                discard, so a disabled-but-visible button would just be noise. */}
+            {canDiscard && selectedCards.length === CARDS_TO_DISCARD && (
+              <button
+                onClick={handleDiscard}
+                disabled={discardStatus === "sending"}
+                className="rounded bg-foreground px-6 py-1.5 text-sm font-medium text-background disabled:opacity-50"
+              >
+                {discardStatus === "sending" ? "Sending..." : "Send to Crib"}
+              </button>
+            )}
+          </div>
         )}
 
-        <div className="flex w-full max-w-md gap-1">
+        {discardStatus === "error" && discardMessage && (
+          <p className="text-center text-sm text-red-600">{discardMessage}</p>
+        )}
+
+        {/* max-w scales with hand size so 4 remaining cards don't stretch to
+            fill the width left by 6. */}
+        <div
+          className={`flex w-full gap-1 ${
+            myHand.length > CARDS_AFTER_DISCARD ? "max-w-md" : "max-w-xs"
+          }`}
+        >
           {displayedHand.map((card) => (
-            <PlayingCard key={card} card={card} />
+            <PlayingCard
+              key={card}
+              card={card}
+              selected={selectedCards.includes(card)}
+              // No handler once you've discarded -- the card renders as a plain
+              // div, so there's nothing to click or tab to.
+              onSelect={canDiscard ? () => toggleCardSelection(card) : undefined}
+            />
           ))}
         </div>
 
