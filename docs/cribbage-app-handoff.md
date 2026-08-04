@@ -45,6 +45,10 @@ Per the phased build order, Phase 1 is: Accounts, Tables & Admin basics — brok
 
 Suggested first step once `lib/supabase.ts` is verified: a minimal sign-up and login page using Supabase Auth's email/password methods (`supabase.auth.signUp`, `supabase.auth.signInWithPassword`, `supabase.auth.signOut`), on its own git branch (e.g. `feature/auth`), tested end-to-end (create an account, log out, log back in) before moving to Slice 2 (profiles).
 
+## Slice numbering
+
+Numbering note: Phase 1 used a single running count, Slices 1-8. Phase 2 restarted numbering at Slice 1 (per-phase, not global) — the deal-cards work is "Phase 2, Slice 1" in this document, even though its SQL file and early commits are labeled "slice-9" from before this was decided. All future Phase 2/3 work uses per-phase numbering.
+
 ## Working conventions (please follow these)
 
 - **Small, testable vertical slices** — one feature end-to-end and validated before the next. If a slice can't reasonably be split further, say so explicitly rather than quietly bundling extra things in.
