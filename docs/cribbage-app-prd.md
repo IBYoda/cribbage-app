@@ -72,6 +72,8 @@ The original plan (see revision history) included a fully virtual board with ani
 | IDE | Cursor (Windows 11) | Where you write the code |
 | Version control | Git + GitHub (IBYoda) | Saves history of your code and backs it up online |
 
+**Decided:** This is a **completely separate project** from Hello Fresh Helper — its own GitHub repo, its own Supabase project, and its own Vercel project. Nothing is shared between the two apps (not the codebase, not the database/user accounts, not the deployment). This keeps them fully isolated: no risk of cribbage code touching Hello Fresh Helper's data, no shared login between apps, and each stays on its own free-tier usage.
+
 **Decided:** This will be a **responsive web app** — a website built with Next.js, designed to work well on a phone browser (open a link, no app store, no install). This keeps your entire existing stack valid and avoids app-store complexity (developer accounts, code signing, review process) that would add cost without teaching you the parts of this project that actually matter (game logic, real-time sync).
 
 **Future option, not a v1 decision:** Once the game works, the app can be turned into a PWA (Progressive Web App) — a lightweight config change that lets players "Add to Home Screen" so it opens full-screen with its own icon, feeling like a native app without the app-store overhead. A "Donate" button (Ko-fi, Buy Me a Coffee, Stripe, etc.) would work identically on the web app as it would in a native app, without Apple/Google's in-app-payment rules — so native isn't required to support donation-based monetization down the road, if you decide to pursue that later.
@@ -130,6 +132,8 @@ This is here so the dealing/discard logic has one clear source of truth to build
 
 *(Confirmed: partners do not automatically see each other's hands — see Section 6, item 8.)*
 
+**First dealer determination (confirmed requirement, not yet built):** per standard cribbage rules, the very first dealer of a game is decided by each player drawing/cutting a card, with the **lowest card dealing first**. This hasn't been built yet — the first Phase 2 slice (shared deck + dealing) uses a random pick as a placeholder, explicitly flagged as temporary. The real cut-for-low-card mechanic needs to be implemented before Phase 2 is considered fully correct, not left as a permanent shortcut. After the first hand, the deal simply passes to the left each round, same as usual.
+
 ---
 
 ## 8. User Experience Requirements
@@ -140,6 +144,7 @@ This is here so the dealing/discard logic has one clear source of truth to build
 - Auto-scored pegging points should appear on the live score tracker clearly enough that players can see *why* the number moved (e.g., briefly show "Sam +2 — pair" rather than just the number changing), so it doesn't feel like a mystery to whoever's watching their physical board.
 - Big, legible cards and buttons — remember, intended use case includes "too drunk to count properly."
 - No manual refresh needed — state changes appear instantly for all players.
+- **Table layout (seating positions):** the game table is conceptually a square. Your own hand is **always at the bottom** of your own screen, regardless of player count — everyone sees themselves in the same spot. Other players fill in around the square as they're added: 2-player has one opponent, placed at the **top**. 3-player and 4-player add opponents to the **left** and **right** as well. This convention should be built into the UI from the first 2-player slice, even though 3/4-player support isn't built until Phase 3 — designing it this way now means adding more players later is just filling in empty seats, not restructuring the screen.
 
 ---
 
@@ -194,7 +199,7 @@ We'll consider v1 "done" when:
 
 ## 11. Open Questions (to resolve before/during building)
 
-
+*(None remaining — every open question raised during PRD review has been resolved in the sections above.)*
 
 ---
 

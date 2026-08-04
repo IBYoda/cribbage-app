@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { sortHand } from "@/lib/cards";
+import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 
 type TableRow = {
   id: string;
@@ -21,14 +23,19 @@ type Member = {
 type Game = {
   id: string;
   created_at: string;
+  dealer_id: string | null;
 };
 
-const UNIQUE_VIOLATION = "23505";
+const REQUIRED_PLAYERS = 2;
 
 function tableEndedMessage(endedReason: string | null | undefined) {
   return endedReason === "timeout"
     ? "This table was automatically ended after being open for 12 hours."
     : "This table has been ended by an admin.";
+}
+
+function displayName(member: Member | undefined) {
+  return member?.nickname || "Unnamed player";
 }
 
 export default function TablePage() {
@@ -47,6 +54,8 @@ export default function TablePage() {
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "disconnected">(
     "connecting"
   );
+  const [myHand, setMyHand] = useState<string[]>([]);
+  const [handSorted, setHandSorted] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -55,19 +64,39 @@ export default function TablePage() {
     });
   }, []);
 
+  // Fetches this player's own hand. RLS on game_hands means this can only ever
+  // return our own row -- asking for someone else's returns zero rows, so there
+  // is no filtering to do here on the client.
+  const fetchMyHand = useCallback(async (gameId: string) => {
+    const { data } = await supabase
+      .from("game_hands")
+      .select("cards")
+      .eq("game_id", gameId)
+      .maybeSingle();
+
+    setMyHand(data?.cards ?? []);
+    setHandSorted(false);
+  }, []);
+
   // Fetches the current active game + full roster for a table. Used both for
   // the initial load and to "catch up" after the realtime connection drops
   // and reconnects, since postgres_changes only streams events that happen
   // while connected -- anything missed during a disconnect has to be re-fetched.
-  async function refreshTableState(tableId: string) {
+  const refreshTableState = useCallback(async (tableId: string) => {
     const { data: existingGame } = await supabase
       .from("games")
-      .select("id, created_at")
+      .select("id, created_at, dealer_id")
       .eq("table_id", tableId)
       .eq("status", "active")
       .maybeSingle();
 
     setActiveGame(existingGame ?? null);
+
+    if (existingGame) {
+      await fetchMyHand(existingGame.id);
+    } else {
+      setMyHand([]);
+    }
 
     const { data: memberRows, error: membersError } = await supabase
       .from("table_members")
@@ -95,7 +124,7 @@ export default function TablePage() {
         nickname: nicknameById.get(m.user_id) ?? null,
       }))
     );
-  }
+  }, [fetchMyHand]);
 
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
@@ -151,42 +180,34 @@ export default function TablePage() {
     return () => {
       cancelled = true;
     };
-  }, [session, code, retryKey]);
+  }, [session, code, retryKey, refreshTableState]);
 
+  // Creating the game and dealing are one atomic server-side action now. The
+  // shuffle happens inside Postgres, so no browser ever receives the full deck
+  // -- which is what makes the deal fair even to whoever clicked the button.
   async function handleStartNewGame() {
     if (!table || !session) return;
 
     setGameStatus("creating");
     setGameMessage(null);
 
-    const { data, error: insertError } = await supabase
-      .from("games")
-      .insert({ table_id: table.id, created_by: session.user.id })
-      .select("id, created_at")
-      .single();
+    const { error: rpcError } = await supabase.rpc("start_game_with_deal", {
+      p_table_id: table.id,
+    });
 
-    if (!insertError) {
-      setActiveGame(data);
-      setGameStatus("idle");
+    if (rpcError) {
+      // The function's own guards (not a member, table closed, wrong player
+      // count) surface here as readable messages.
+      setGameStatus("error");
+      setGameMessage(rpcError.message);
       return;
     }
 
-    if (insertError.code === UNIQUE_VIOLATION) {
-      // Someone else's "New Game" click won the race -- pick up their game
-      // instead of showing an error.
-      const { data: existing } = await supabase
-        .from("games")
-        .select("id, created_at")
-        .eq("table_id", table.id)
-        .eq("status", "active")
-        .maybeSingle();
-      setActiveGame(existing ?? null);
-      setGameStatus("idle");
-      return;
-    }
-
-    setGameStatus("error");
-    setGameMessage(insertError.message);
+    // Re-read rather than trusting a local guess: on a simultaneous-click race
+    // the function may have handed us back someone else's game, and our hand
+    // has to come from the server regardless.
+    await refreshTableState(table.id);
+    setGameStatus("idle");
   }
 
   // Live updates: append anyone who joins after we've loaded the roster.
@@ -255,9 +276,21 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
-          const newGame = payload.new as { id: string; created_at: string; status: string };
+          const newGame = payload.new as {
+            id: string;
+            created_at: string;
+            status: string;
+            dealer_id: string | null;
+          };
           if (newGame.status === "active") {
-            setActiveGame({ id: newGame.id, created_at: newGame.created_at });
+            setActiveGame({
+              id: newGame.id,
+              created_at: newGame.created_at,
+              dealer_id: newGame.dealer_id,
+            });
+            // The other player dealt -- go fetch our own cards. The hand itself
+            // is never broadcast; only the fact that a game now exists is.
+            fetchMyHand(newGame.id);
           }
         }
       )
@@ -275,6 +308,7 @@ export default function TablePage() {
           // way in future) should clear it live for anyone still watching.
           if (updatedGame.status !== "active") {
             setActiveGame(null);
+            setMyHand([]);
           }
         }
       )
@@ -313,7 +347,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table]);
+  }, [table, refreshTableState, fetchMyHand]);
 
   if (loading) {
     return (
@@ -356,55 +390,107 @@ export default function TablePage() {
     );
   }
 
+  const me = members.find((m) => m.user_id === session.user.id);
+  // Seating: everyone who isn't you sits across the top. Rendered from an
+  // array rather than a single hardcoded opponent so 3- and 4-player tables
+  // (Phase 3) slot in without restructuring the layout.
+  const opponents = members.filter((m) => m.user_id !== session.user.id);
+  // We can't read an opponent's hand (RLS), and shouldn't -- but hand sizes are
+  // public knowledge from the rules, so mirroring our own count is both correct
+  // and stays correct after discarding in a later slice.
+  const opponentCardCount = myHand.length;
+  const displayedHand = handSorted ? sortHand(myHand) : myHand;
+  const canStartGame = members.length === REQUIRED_PLAYERS;
+
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Table {code}</h1>
-
-      {realtimeStatus === "disconnected" && (
-        <p className="text-sm text-amber-600 dark:text-amber-500">Reconnecting...</p>
-      )}
-
-      {activeGame ? (
-        <p className="rounded border border-green-600 px-4 py-2 text-green-700 dark:text-green-500">
-          Game in progress
-        </p>
-      ) : (
-        <div className="flex flex-col items-center gap-2">
-          <button
-            onClick={handleStartNewGame}
-            disabled={gameStatus === "creating"}
-            className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
-          >
-            {gameStatus === "creating" ? "Starting..." : "New Game"}
-          </button>
-          {gameStatus === "error" && gameMessage && (
-            <p className="text-sm text-red-600">{gameMessage}</p>
+    <main className="flex flex-1 flex-col gap-4 p-4">
+      <header className="flex items-baseline justify-between">
+        <h1 className="text-lg font-semibold">Table {code}</h1>
+        <div className="flex items-center gap-3 text-sm">
+          {realtimeStatus === "disconnected" && (
+            <span className="text-amber-600 dark:text-amber-500">Reconnecting...</span>
           )}
+          <Link href="/" className="underline text-zinc-600 dark:text-zinc-400">
+            Leave
+          </Link>
         </div>
-      )}
+      </header>
 
-      <div className="flex w-full max-w-sm flex-col gap-2">
-        <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-          Players ({members.length})
-        </p>
-        <ul className="flex flex-col gap-2">
-          {members.map((m) => (
-            <li
-              key={m.user_id}
-              className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700"
+      {/* OPPONENTS -- always the top of the screen */}
+      <section className="flex justify-center gap-6">
+        {opponents.length === 0 ? (
+          <p className="text-sm text-zinc-500">Waiting for another player to join...</p>
+        ) : (
+          opponents.map((opponent) => (
+            <div key={opponent.user_id} className="flex w-full max-w-xs flex-col items-center gap-2">
+              <div className="flex w-full gap-1">
+                {Array.from({ length: opponentCardCount }).map((_, i) => (
+                  <FaceDownCard key={i} />
+                ))}
+              </div>
+              <p className="text-sm font-medium">
+                {displayName(opponent)}
+                {activeGame?.dealer_id === opponent.user_id && (
+                  <span className="text-zinc-500"> · dealer</span>
+                )}
+              </p>
+            </div>
+          ))
+        )}
+      </section>
+
+      {/* MIDDLE -- game controls / status. Grows to push the hand to the bottom. */}
+      <section className="flex flex-1 flex-col items-center justify-center gap-2">
+        {activeGame ? (
+          <p className="rounded border border-green-600 px-4 py-2 text-sm text-green-700 dark:text-green-500">
+            Game in progress
+          </p>
+        ) : (
+          <>
+            <button
+              onClick={handleStartNewGame}
+              disabled={gameStatus === "creating" || !canStartGame}
+              className="rounded bg-foreground px-6 py-3 text-lg text-background disabled:opacity-50"
             >
-              {m.nickname || "Unnamed player"}
-              {m.user_id === session.user.id && (
-                <span className="text-zinc-500"> (you)</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
+              {gameStatus === "creating" ? "Dealing..." : "New Game"}
+            </button>
+            {!canStartGame && (
+              <p className="text-sm text-zinc-500">
+                Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
+              </p>
+            )}
+          </>
+        )}
+        {gameStatus === "error" && gameMessage && (
+          <p className="text-center text-sm text-red-600">{gameMessage}</p>
+        )}
+      </section>
 
-      <Link href="/" className="text-sm underline">
-        Back home
-      </Link>
+      {/* YOU -- always the bottom of the screen */}
+      <section className="flex flex-col items-center gap-2">
+        {myHand.length > 0 && (
+          <button
+            onClick={() => setHandSorted(true)}
+            disabled={handSorted}
+            className="rounded border border-zinc-400 px-6 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+          >
+            Sort
+          </button>
+        )}
+
+        <div className="flex w-full max-w-md gap-1">
+          {displayedHand.map((card) => (
+            <PlayingCard key={card} card={card} />
+          ))}
+        </div>
+
+        <p className="text-sm font-medium">
+          {displayName(me)} <span className="text-zinc-500">(you)</span>
+          {activeGame?.dealer_id === session.user.id && (
+            <span className="text-zinc-500"> · dealer</span>
+          )}
+        </p>
+      </section>
     </main>
   );
 }
