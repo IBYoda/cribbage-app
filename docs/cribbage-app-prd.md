@@ -132,7 +132,11 @@ This is here so the dealing/discard logic has one clear source of truth to build
 
 *(Confirmed: partners do not automatically see each other's hands — see Section 6, item 8.)*
 
-**First dealer determination (confirmed requirement, not yet built):** per standard cribbage rules, the very first dealer of a game is decided by each player drawing/cutting a card, with the **lowest card dealing first**. This hasn't been built yet — the first Phase 2 slice (shared deck + dealing) uses a random pick as a placeholder, explicitly flagged as temporary. The real cut-for-low-card mechanic needs to be implemented before Phase 2 is considered fully correct, not left as a permanent shortcut. After the first hand, the deal simply passes to the left each round, same as usual.
+**Order of operations (confirmed, per official cribbage rules — see docs/CribbageBasics.pdf):** cutting for deal must complete BEFORE any cards are dealt — this is a strict sequence, not simultaneous/pre-computed-then-revealed. The real order is: (1) cut for deal, lowest card deals; (2) dealer shuffles; (3) 6 cards dealt to each player; (4) each player discards 2 to the crib; (5) non-dealer cuts the remainder for the starter card (this part is already built correctly).
+
+**Deliberately excluded:** the official rules' step where the non-dealer makes a mandatory cut of the deck before dealing is intentionally NOT implemented — it's a house-rule casualty of remote play (their group's tradition is a shot penalty for asking someone else to cut your deck, which the app makes physically impossible anyway). Not a gap to fill later.
+
+**Known gap as of this note:** the first built version of cut-for-deal computed the dealer AND dealt all cards atomically in one step, then revealed the cut result as a ceremony layered on top afterward (chosen deliberately at the time, then found to feel wrong once actually played — a real "nothing is dealt until the cut resolves" two-phase flow is required instead). This needs correcting before Phase 2 is considered done. After the first game at a table, the deal alternates each hand as usual — no re-cut needed.
 
 ---
 
@@ -164,7 +168,9 @@ This is here so the dealing/discard logic has one clear source of truth to build
 
 **Phase 2 — 2-player game (core):**
 
-*(Numbering note: git/PR history for this phase started counting from "Slice 9" — a continuation of Phase 1's 1-8 — before switching to per-phase numbering to match this document. "Slice 9" in commit history = "Phase 2, Slice 1" here. All Phase 2 work going forward uses Phase 2's own numbering, starting at Slice 1.)*
+*(Numbering note: git/PR history for this phase started counting from "Slice 9" — a continuation of Phase 1's 1-8 — before switching to per-phase numbering to match this document. "Slice 9" in commit history = "Phase 2, Slice 1" here. All Phase 2 work going forward uses Phase 2's own numbering, starting at Slice 1.
+
+Actual Phase 2 slice order, since it's drifted from the original plan once already: 1) Shuffle and deal, 2) Discard to crib, 3) Leave-table bug fix (inserted out of the original plan once discovered — not originally numbered as its own slice, but claimed "Slice 3" once built), 4) Cut for starter card + real cut-for-lowest-card dealer selection [next]. Update this list as slices land rather than trusting memory of the original plan — it's already been wrong once.)*
 - Shared deck + dealing logic
 - Private hand display for each player
 - Real-time reveal of played cards during the pegging phase
