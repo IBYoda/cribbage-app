@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
@@ -46,6 +46,7 @@ function displayName(member: Member | undefined) {
 
 export default function TablePage() {
   const params = useParams<{ code: string }>();
+  const router = useRouter();
   const code = params.code;
 
   const [session, setSession] = useState<Session | null>(null);
@@ -67,6 +68,15 @@ export default function TablePage() {
   const [selectedCards, setSelectedCards] = useState<string[]>([]);
   const [discardStatus, setDiscardStatus] = useState<"idle" | "sending" | "error">("idle");
   const [discardMessage, setDiscardMessage] = useState<string | null>(null);
+  // Two-step confirm, but only when a game is live -- leaving then destroys a
+  // game for BOTH players, which is too much to hang off one stray tap.
+  const [leaveConfirming, setLeaveConfirming] = useState(false);
+  const [leaveStatus, setLeaveStatus] = useState<"idle" | "leaving" | "error">("idle");
+  const [leaveMessage, setLeaveMessage] = useState<string | null>(null);
+  // Explains why the remaining player's cards just vanished. Without it, a
+  // game silently evaporating is exactly the kind of mystery the PRD's UX
+  // section objects to.
+  const [gameEndedNotice, setGameEndedNotice] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -206,6 +216,7 @@ export default function TablePage() {
 
     setGameStatus("creating");
     setGameMessage(null);
+    setGameEndedNotice(null);
 
     const { error: rpcError } = await supabase.rpc("start_game_with_deal", {
       p_table_id: table.id,
@@ -225,6 +236,29 @@ export default function TablePage() {
     await refreshTableState(table.id);
     setHandSorted(false); // genuinely new hand -- show it as dealt
     setGameStatus("idle");
+  }
+
+  async function handleLeave() {
+    if (!table) return;
+
+    setLeaveStatus("leaving");
+    setLeaveMessage(null);
+
+    const { error: rpcError } = await supabase.rpc("leave_table", {
+      p_table_id: table.id,
+    });
+
+    if (rpcError) {
+      setLeaveStatus("error");
+      setLeaveMessage(rpcError.message);
+      setLeaveConfirming(false);
+      return;
+    }
+
+    // Navigating away matters as much as the delete: the setup effect re-joins
+    // (upserts table_members) on every visit to this URL, so staying here would
+    // silently put us straight back at the table we just left.
+    router.push("/");
   }
 
   function toggleCardSelection(card: string) {
@@ -310,6 +344,25 @@ export default function TablePage() {
       )
       .on(
         "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "table_members",
+          filter: `table_id=eq.${table.id}`,
+        },
+        (payload) => {
+          // DELETE payloads only carry the row's replica identity columns,
+          // which defaults to the primary key -- here (table_id, user_id).
+          // That's exactly what's needed: table_id for the filter above,
+          // user_id to know who to drop from the roster.
+          const goneRow = payload.old as { user_id?: string };
+          if (!goneRow?.user_id) return;
+
+          setMembers((current) => current.filter((m) => m.user_id !== goneRow.user_id));
+        }
+      )
+      .on(
+        "postgres_changes",
         { event: "UPDATE", schema: "public", table: "profiles" },
         (payload) => {
           const updated = payload.new as { id: string; nickname: string };
@@ -345,6 +398,7 @@ export default function TablePage() {
               discarded_by: newGame.discarded_by ?? [],
             });
             setHandSorted(false); // genuinely new hand -- show it as dealt
+            setGameEndedNotice(null); // stale once a fresh game is under way
             // The other player dealt -- go fetch our own cards. The hand itself
             // is never broadcast; only the fact that a game now exists is.
             fetchMyHand(newGame.id);
@@ -362,6 +416,7 @@ export default function TablePage() {
         (payload) => {
           const updatedGame = payload.new as {
             status: string;
+            ended_reason: string | null;
             discarded_by: string[] | null;
           };
           // An admin force-ending the active game (or it ending some other
@@ -370,6 +425,13 @@ export default function TablePage() {
             setActiveGame(null);
             setMyHand([]);
             setSelectedCards([]);
+            // Deliberately doesn't name the leaver: the roster DELETE arrives
+            // as a separate event with no ordering guarantee, so building the
+            // name in here would race. The roster visibly updating alongside
+            // this already shows *who* left.
+            if (updatedGame.ended_reason === "player_left") {
+              setGameEndedNotice("A player left the table — the game was ended.");
+            }
             return;
           }
           // Otherwise this is a discard: the opponent's "waiting for you"
@@ -491,11 +553,46 @@ export default function TablePage() {
           {realtimeStatus === "disconnected" && (
             <span className="text-amber-600 dark:text-amber-500">Reconnecting...</span>
           )}
-          <Link href="/" className="underline text-zinc-600 dark:text-zinc-400">
-            Leave
-          </Link>
+          {leaveConfirming ? (
+            <>
+              <button
+                onClick={handleLeave}
+                disabled={leaveStatus === "leaving"}
+                className="rounded bg-red-600 px-3 py-1 text-white disabled:opacity-50"
+              >
+                {leaveStatus === "leaving" ? "Leaving..." : "End game & leave"}
+              </button>
+              <button
+                onClick={() => setLeaveConfirming(false)}
+                className="underline text-zinc-600 dark:text-zinc-400"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => (activeGame ? setLeaveConfirming(true) : handleLeave())}
+              disabled={leaveStatus === "leaving"}
+              className="underline text-zinc-600 disabled:opacity-50 dark:text-zinc-400"
+            >
+              {leaveStatus === "leaving" ? "Leaving..." : "Leave"}
+            </button>
+          )}
         </div>
       </header>
+
+      {leaveStatus === "error" && leaveMessage && (
+        <p className="text-center text-sm text-red-600">{leaveMessage}</p>
+      )}
+
+      {gameEndedNotice && (
+        <div className="flex items-center justify-center gap-3 rounded border border-amber-500 px-3 py-2 text-sm text-amber-700 dark:text-amber-500">
+          <span>{gameEndedNotice}</span>
+          <button onClick={() => setGameEndedNotice(null)} className="underline">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* OPPONENTS -- always the top of the screen */}
       <section className="flex justify-center gap-6">
