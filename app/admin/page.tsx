@@ -5,12 +5,16 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
+// A game is "live" while it is either cutting for deal or being played. Both
+// occupy the table's one-live-game slot, so both must be listed and killable.
+const LIVE_GAME_STATUSES = ["cutting", "active"];
+
 type TableRow = {
   id: string;
   code: string;
   created_at: string;
   memberCount: number;
-  activeGame: { id: string; created_at: string } | null;
+  activeGame: { id: string; created_at: string; status: string } | null;
 };
 
 export default function AdminPage() {
@@ -66,8 +70,12 @@ export default function AdminPage() {
       const [{ data: activeGames }, { data: memberRows }] = await Promise.all([
         supabase
           .from("games")
-          .select("id, table_id, created_at")
-          .eq("status", "active")
+          // Must include 'cutting': a game still cutting for deal is live and
+          // holds the table's one-live-game slot, so it has to be visible here
+          // and force-endable. Filtering to 'active' alone made a game
+          // abandoned mid-cut invisible to admin and impossible to kill.
+          .select("id, table_id, created_at, status")
+          .in("status", LIVE_GAME_STATUSES)
           .in("table_id", tableIds.length > 0 ? tableIds : [""]),
         supabase
           .from("table_members")
@@ -78,7 +86,10 @@ export default function AdminPage() {
       if (cancelled) return;
 
       const gameByTableId = new Map(
-        (activeGames ?? []).map((g) => [g.table_id, { id: g.id, created_at: g.created_at }])
+        (activeGames ?? []).map((g) => [
+          g.table_id,
+          { id: g.id, created_at: g.created_at, status: g.status },
+        ])
       );
 
       const memberCountByTableId = new Map<string, number>();
@@ -127,13 +138,14 @@ export default function AdminPage() {
   async function handleForceEndTable(tableId: string) {
     setActionInFlight(tableId);
 
-    // End any active game at this table too, so nothing is left "active"
-    // pointing at a table that's no longer open.
+    // End any LIVE game at this table too, so nothing is left running against
+    // a table that's no longer open. Must include 'cutting' -- filtering to
+    // 'active' alone would end the table but leave a cutting game orphaned.
     await supabase
       .from("games")
       .update({ status: "ended", ended_reason: "admin" })
       .eq("table_id", tableId)
-      .eq("status", "active");
+      .in("status", LIVE_GAME_STATUSES);
 
     const { error: updateError } = await supabase
       .from("tables")
@@ -211,8 +223,20 @@ export default function AdminPage() {
               </p>
               {t.activeGame && (
                 <div className="flex items-center justify-between rounded bg-zinc-100 px-3 py-2 dark:bg-zinc-800">
-                  <span className="text-sm text-green-700 dark:text-green-500">
-                    Game in progress since {new Date(t.activeGame.created_at).toLocaleTimeString()}
+                  {/* A cutting game has no cards dealt yet -- worth
+                      distinguishing, since "abandoned mid-cut" is a likely
+                      reason to be killing one from here. */}
+                  <span
+                    className={
+                      t.activeGame.status === "cutting"
+                        ? "text-sm text-amber-700 dark:text-amber-500"
+                        : "text-sm text-green-700 dark:text-green-500"
+                    }
+                  >
+                    {t.activeGame.status === "cutting"
+                      ? "Cutting for deal (nothing dealt) since "
+                      : "Game in progress since "}
+                    {new Date(t.activeGame.created_at).toLocaleTimeString()}
                   </span>
                   <button
                     onClick={() => handleForceEndGame(t.id, t.activeGame!.id)}

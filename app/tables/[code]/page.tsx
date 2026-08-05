@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { sortHand } from "@/lib/cards";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
+import { CutForDealView } from "@/components/CutForDealView";
 
 type TableRow = {
   id: string;
@@ -20,14 +21,44 @@ type Member = {
   joined_at: string;
 };
 
+// Cards cut for the deal. deal_cut is the full history -- an array of rounds,
+// filled progressively as players tap the deck. The round in progress is always
+// the LAST element, so there is no separate pointer to drift out of sync.
+// Null on games where the deal simply alternated (no cut happened).
+type DealCutEntry = { user_id: string; card: string };
+type DealCutRound = DealCutEntry[];
+
 type Game = {
   id: string;
   created_at: string;
+  // 'cutting' -> cutting for deal, NOTHING dealt yet. 'active' -> cards are out.
+  status: string;
+  // Roster snapshot taken when the game was created. Dealing happens later than
+  // creation now, so the server deals to this rather than to whoever happens to
+  // be at the table at deal time.
+  players: string[] | null;
+  // Null for the whole 'cutting' phase -- nothing about the dealer is known
+  // until a round completes with a unique lowest card.
   dealer_id: string | null;
   // Who has discarded -- never WHAT they discarded. The crib's contents live in
   // game_cribs, which nobody can read yet.
   discarded_by: string[];
+  deal_cut: DealCutRound[] | null;
+  // Who has acknowledged the completed round. Gates both the tie redraw and the
+  // deal itself.
+  deal_cut_ack_by: string[];
+  // Public, unlike every other card in the game -- which is exactly why it can
+  // live on games rather than needing its own locked-down table.
+  starter_card: string | null;
 };
+
+const GAME_COLUMNS =
+  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card";
+
+// A game is "live" while it is either cutting for deal or actually being
+// played. Both block a second game at the table, and both must be found by the
+// client, the admin view, leave-table and the timeout sweep.
+const LIVE_GAME_STATUSES = ["cutting", "active"];
 
 const REQUIRED_PLAYERS = 2;
 const CARDS_DEALT = 6;
@@ -77,6 +108,12 @@ export default function TablePage() {
   // game silently evaporating is exactly the kind of mystery the PRD's UX
   // section objects to.
   const [gameEndedNotice, setGameEndedNotice] = useState<string | null>(null);
+  // The last game status this client processed. Used to spot the exact
+  // cutting -> active moment (when cards come into existence) from inside the
+  // realtime handler. A ref rather than state because reading it from a state
+  // updater would make that updater impure, and React re-invokes updaters in
+  // development -- which would fire the fetch twice.
+  const lastGameStatusRef = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -109,16 +146,20 @@ export default function TablePage() {
   // and reconnects, since postgres_changes only streams events that happen
   // while connected -- anything missed during a disconnect has to be re-fetched.
   const refreshTableState = useCallback(async (tableId: string) => {
+    // Must find cutting games too, or a game mid-cut reads as "no game" and
+    // the client would offer "New Game" for a table that already has one.
     const { data: existingGame } = await supabase
       .from("games")
-      .select("id, created_at, dealer_id, discarded_by")
+      .select(GAME_COLUMNS)
       .eq("table_id", tableId)
-      .eq("status", "active")
+      .in("status", LIVE_GAME_STATUSES)
       .maybeSingle();
 
     setActiveGame(existingGame ?? null);
+    lastGameStatusRef.current = existingGame?.status ?? null;
 
-    if (existingGame) {
+    // No hand exists during 'cutting' -- that is the entire point of the phase.
+    if (existingGame && existingGame.status === "active") {
       await fetchMyHand(existingGame.id);
     } else {
       setMyHand([]);
@@ -261,6 +302,41 @@ export default function TablePage() {
     router.push("/");
   }
 
+  // Draws THIS player's cut card. The card does not exist until this call --
+  // the server picks it, excluding anything already drawn this round, and
+  // returns it. Nothing about the dealer is known beforehand.
+  async function handleDrawCutCard(): Promise<string | null> {
+    if (!activeGame) return "No active game.";
+
+    const { error: rpcError } = await supabase.rpc("draw_cut_card", {
+      p_game_id: activeGame.id,
+    });
+
+    if (rpcError) return rpcError.message;
+
+    // Our own draw comes back through the games UPDATE broadcast too, but
+    // re-reading makes the card appear immediately for the player who tapped.
+    if (table) await refreshTableState(table.id);
+    return null;
+  }
+
+  // Acknowledges a completed round. On a tie the server opens a fresh round;
+  // on a decisive round it DEALS. Either way it only acts once every player has
+  // acknowledged -- one player clicking moves nobody's screen. Returns an error
+  // message rather than setting page state, since the cut view fills the screen.
+  async function handleAcknowledgeCut(): Promise<string | null> {
+    if (!activeGame) return "No active game.";
+
+    const { error: rpcError } = await supabase.rpc("acknowledge_deal_cut", {
+      p_game_id: activeGame.id,
+    });
+
+    if (rpcError) return rpcError.message;
+
+    if (table) await refreshTableState(table.id);
+    return null;
+  }
+
   function toggleCardSelection(card: string) {
     setDiscardMessage(null);
     setSelectedCards((current) => {
@@ -387,21 +463,33 @@ export default function TablePage() {
             id: string;
             created_at: string;
             status: string;
+            players: string[] | null;
             dealer_id: string | null;
             discarded_by: string[] | null;
+            deal_cut: DealCutRound[] | null;
+            deal_cut_ack_by: string[] | null;
+            starter_card: string | null;
           };
-          if (newGame.status === "active") {
+          // A new game now arrives as EITHER 'cutting' (first game at the
+          // table -- no cards yet) or 'active' (deal alternated, dealt at once).
+          if (LIVE_GAME_STATUSES.includes(newGame.status)) {
             setActiveGame({
               id: newGame.id,
               created_at: newGame.created_at,
+              status: newGame.status,
+              players: newGame.players,
               dealer_id: newGame.dealer_id,
               discarded_by: newGame.discarded_by ?? [],
+              deal_cut: newGame.deal_cut,
+              deal_cut_ack_by: newGame.deal_cut_ack_by ?? [],
+              starter_card: newGame.starter_card,
             });
+            lastGameStatusRef.current = newGame.status;
             setHandSorted(false); // genuinely new hand -- show it as dealt
             setGameEndedNotice(null); // stale once a fresh game is under way
-            // The other player dealt -- go fetch our own cards. The hand itself
-            // is never broadcast; only the fact that a game now exists is.
-            fetchMyHand(newGame.id);
+            // Only fetch a hand if one can exist. During 'cutting' there are no
+            // cards at all, which is the whole point of the phase.
+            if (newGame.status === "active") fetchMyHand(newGame.id);
           }
         }
       )
@@ -415,16 +503,27 @@ export default function TablePage() {
         },
         (payload) => {
           const updatedGame = payload.new as {
+            id: string;
             status: string;
             ended_reason: string | null;
+            players: string[] | null;
+            dealer_id: string | null;
             discarded_by: string[] | null;
+            deal_cut: DealCutRound[] | null;
+            deal_cut_ack_by: string[] | null;
+            starter_card: string | null;
           };
-          // An admin force-ending the active game (or it ending some other
-          // way in future) should clear it live for anyone still watching.
-          if (updatedGame.status !== "active") {
+          const previousStatus = lastGameStatusRef.current;
+          lastGameStatusRef.current = updatedGame.status;
+
+          // Ended, by an admin force-end, a departing player, or the timeout.
+          // 'cutting' is now a LIVE status, so this check can no longer be
+          // "not active" -- that would treat every cut as an ended game.
+          if (!LIVE_GAME_STATUSES.includes(updatedGame.status)) {
             setActiveGame(null);
             setMyHand([]);
             setSelectedCards([]);
+            lastGameStatusRef.current = null;
             // Deliberately doesn't name the leaver: the roster DELETE arrives
             // as a separate event with no ordering guarantee, so building the
             // name in here would race. The roster visibly updating alongside
@@ -434,12 +533,40 @@ export default function TablePage() {
             }
             return;
           }
-          // Otherwise this is a discard: the opponent's "waiting for you"
-          // state flips the moment they send their 2 cards to the crib. Only
-          // the list of who has acted travels here -- never the cards.
+          // Otherwise the game is live and something moved. This one broadcast
+          // now carries three different phases:
+          //   - a cut card being drawn (deal_cut grows)
+          //   - a redraw/deal acknowledgement (deal_cut_ack_by)
+          //   - a discard, and then the starter being cut (public by design)
+          // None of it ever carries a hand or the crib.
+          //
+          // The cutting -> active transition rides here too: the deal happens
+          // inside the same statement that flips the status, so both land in
+          // one event.
           setActiveGame((current) =>
-            current ? { ...current, discarded_by: updatedGame.discarded_by ?? [] } : current
+            current
+              ? {
+                  ...current,
+                  status: updatedGame.status,
+                  players: updatedGame.players ?? current.players,
+                  dealer_id: updatedGame.dealer_id,
+                  discarded_by: updatedGame.discarded_by ?? [],
+                  deal_cut: updatedGame.deal_cut ?? current.deal_cut,
+                  deal_cut_ack_by: updatedGame.deal_cut_ack_by ?? [],
+                  starter_card: updatedGame.starter_card,
+                }
+              : current
           );
+
+          // The exact moment cards come into existence: the OTHER player's
+          // acknowledgement dealt them, and this broadcast is how we find out.
+          // Gated on the transition rather than firing for every 'active'
+          // update, so an opponent's discard doesn't refetch our hand and wipe
+          // a selection we're part-way through making.
+          if (previousStatus === "cutting" && updatedGame.status === "active") {
+            setHandSorted(false); // freshly dealt -- show it as dealt
+            fetchMyHand(updatedGame.id);
+          }
         }
       )
       .on(
@@ -536,6 +663,10 @@ export default function TablePage() {
   const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
   const canDiscard = Boolean(activeGame) && !iHaveDiscarded && myHand.length === CARDS_DEALT;
 
+  // The cut phase. Only the table's FIRST game cuts -- later games alternate
+  // the deal, are created straight into 'active', and never enter this.
+  const isCutting = activeGame?.status === "cutting";
+
   // Derived from discarded_by rather than mirroring our own hand length: once
   // you discard and your opponent hasn't, mirroring would show 4 cards for a
   // player still holding 6. Hand sizes are public knowledge from the rules, so
@@ -594,6 +725,24 @@ export default function TablePage() {
         </div>
       )}
 
+      {/* THE CUT. Replaces the table entirely rather than overlaying it: during
+          'cutting' there are no hands, no crib and no starter, so there is
+          genuinely nothing to render underneath. It has its own seating (you at
+          the bottom) and no dismissal -- closing it would strand the player on
+          an empty table with no way back into the cut. */}
+      {isCutting && activeGame ? (
+        <CutForDealView
+          rounds={activeGame.deal_cut ?? [[]]}
+          players={activeGame.players ?? []}
+          myUserId={session.user.id}
+          dealerId={activeGame.dealer_id}
+          ackBy={activeGame.deal_cut_ack_by}
+          nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+          onDraw={handleDrawCutCard}
+          onAcknowledge={handleAcknowledgeCut}
+        />
+      ) : (
+      <>
       {/* OPPONENTS -- always the top of the screen */}
       <section className="flex justify-center gap-6">
         {opponents.length === 0 ? (
@@ -622,17 +771,34 @@ export default function TablePage() {
         {activeGame ? (
           <>
             {cribComplete ? (
-              <div className="flex flex-col items-center gap-2">
-                {/* Face-down for EVERYONE, dealer included -- game_cribs has no
-                    read policy at all until the counting-phase reveal slice. */}
-                <div className="flex w-32 gap-1">
-                  {Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
-                    <FaceDownCard key={i} />
-                  ))}
+              // items-end so the two labels sit on a shared baseline even
+              // though the starter is rendered larger than a crib card.
+              <div className="flex items-end justify-center gap-6">
+                <div className="flex flex-col items-center gap-2">
+                  {/* Face-down for EVERYONE, dealer included -- game_cribs has no
+                      read policy at all until the counting-phase reveal slice. */}
+                  <div className="flex w-32 gap-1">
+                    {Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
+                      <FaceDownCard key={i} />
+                    ))}
+                  </div>
+                  <p className="text-sm font-medium">
+                    {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
+                  </p>
                 </div>
-                <p className="text-sm font-medium">
-                  {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
-                </p>
+
+                {/* Deliberately larger than the crib backs: this is the one
+                    card everybody is meant to be looking at. Absent for the
+                    brief moment between the crib completing and the starter
+                    UPDATE arriving. */}
+                {activeGame.starter_card && (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex w-16 gap-1">
+                      <PlayingCard card={activeGame.starter_card} />
+                    </div>
+                    <p className="text-sm font-medium">Starter</p>
+                  </div>
+                )}
               </div>
             ) : iHaveDiscarded ? (
               <p className="text-sm text-zinc-500">
@@ -720,6 +886,8 @@ export default function TablePage() {
           )}
         </p>
       </section>
+      </>
+      )}
     </main>
   );
 }
