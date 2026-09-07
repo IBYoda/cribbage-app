@@ -24,3 +24,41 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* The "+2 — pair" flash on the score tracker. Done as a pure CSS animation
+   rather than a timer in React on purpose: re-running it is just a matter of
+   remounting the element (the component keys it on last_awarded_at), so there
+   is no setState-in-an-effect and no timeout to clean up. "forwards" holds the
+   final frame, leaving the badge hidden until the next award replaces it. */
+@keyframes score-flash {
+  0%,
+  70% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+}
+
+.score-flash {
+  animation: score-flash 3.5s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .score-flash {
+    animation-duration: 3.5s;
+    animation-name: score-flash-fade;
+  }
+}
+
+@keyframes score-flash-fade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
