@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase";
 import { sortHand } from "@/lib/cards";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
+import { PlayerScore } from "@/components/PlayerScore";
 
 type TableRow = {
   id: string;
@@ -19,7 +20,17 @@ type Member = {
   user_id: string;
   nickname: string | null;
   joined_at: string;
+  // The running score, and the last award that moved it. Lives on
+  // table_members because that table is already keyed (table_id, user_id) --
+  // exactly the grain a per-player running total needs.
+  score: number;
+  last_points: number | null;
+  last_reason: string | null;
+  last_awarded_at: string | null;
 };
+
+const MEMBER_COLUMNS =
+  "user_id, joined_at, score, last_points, last_reason, last_awarded_at";
 
 // Cards cut for the deal. deal_cut is the full history -- an array of rounds,
 // filled progressively as players tap the deck. The round in progress is always
@@ -167,7 +178,7 @@ export default function TablePage() {
 
     const { data: memberRows, error: membersError } = await supabase
       .from("table_members")
-      .select("user_id, joined_at")
+      .select(MEMBER_COLUMNS)
       .eq("table_id", tableId)
       .order("joined_at", { ascending: true });
 
@@ -189,6 +200,10 @@ export default function TablePage() {
         user_id: m.user_id,
         joined_at: m.joined_at,
         nickname: nicknameById.get(m.user_id) ?? null,
+        score: m.score ?? 0,
+        last_points: m.last_points,
+        last_reason: m.last_reason,
+        last_awarded_at: m.last_awarded_at,
       }))
     );
   }, [fetchMyHand]);
@@ -394,13 +409,29 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         async (payload) => {
-          const newRow = payload.new as { user_id: string; joined_at: string };
+          const newRow = payload.new as {
+            user_id: string;
+            joined_at: string;
+            score: number | null;
+          };
 
           setMembers((current) => {
             if (current.some((m) => m.user_id === newRow.user_id)) {
               return current; // already have it (e.g. our own join)
             }
-            return [...current, { user_id: newRow.user_id, joined_at: newRow.joined_at, nickname: null }];
+            return [
+              ...current,
+              {
+                user_id: newRow.user_id,
+                joined_at: newRow.joined_at,
+                nickname: null,
+                // A joining player starts at 0 with nothing to explain yet.
+                score: newRow.score ?? 0,
+                last_points: null,
+                last_reason: null,
+                last_awarded_at: null,
+              },
+            ];
           });
 
           const { data: profile } = await supabase
@@ -416,6 +447,45 @@ export default function TablePage() {
               )
             );
           }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "table_members",
+          filter: `table_id=eq.${table.id}`,
+        },
+        (payload) => {
+          // The score tracker's live channel. award_points() is the only thing
+          // that writes these columns, so in practice every event here is a
+          // score change -- the number moves on both screens at once, and the
+          // "+2 — pair" flash fires off last_awarded_at changing.
+          //
+          // table_members has been in the realtime publication since Slice 4
+          // with UPDATE already enabled, so this listener needed no SQL at all.
+          const updated = payload.new as {
+            user_id: string;
+            score: number | null;
+            last_points: number | null;
+            last_reason: string | null;
+            last_awarded_at: string | null;
+          };
+
+          setMembers((current) =>
+            current.map((m) =>
+              m.user_id === updated.user_id
+                ? {
+                    ...m,
+                    score: updated.score ?? m.score,
+                    last_points: updated.last_points,
+                    last_reason: updated.last_reason,
+                    last_awarded_at: updated.last_awarded_at,
+                  }
+                : m
+            )
+          );
         }
       )
       .on(
@@ -755,11 +825,19 @@ export default function TablePage() {
                   <FaceDownCard key={i} />
                 ))}
               </div>
-              <p className="text-sm font-medium">
-                {displayName(opponent)}
-                {activeGame?.dealer_id === opponent.user_id && (
-                  <span className="text-zinc-500"> · dealer</span>
-                )}
+              <p className="flex items-baseline gap-2 text-sm font-medium">
+                <span>
+                  {displayName(opponent)}
+                  {activeGame?.dealer_id === opponent.user_id && (
+                    <span className="text-zinc-500"> · dealer</span>
+                  )}
+                </span>
+                <PlayerScore
+                  score={opponent.score}
+                  lastPoints={opponent.last_points}
+                  lastReason={opponent.last_reason}
+                  lastAwardedAt={opponent.last_awarded_at}
+                />
               </p>
             </div>
           ))
@@ -879,10 +957,20 @@ export default function TablePage() {
           ))}
         </div>
 
-        <p className="text-sm font-medium">
-          {displayName(me)} <span className="text-zinc-500">(you)</span>
-          {activeGame?.dealer_id === session.user.id && (
-            <span className="text-zinc-500"> · dealer</span>
+        <p className="flex items-baseline gap-2 text-sm font-medium">
+          <span>
+            {displayName(me)} <span className="text-zinc-500">(you)</span>
+            {activeGame?.dealer_id === session.user.id && (
+              <span className="text-zinc-500"> · dealer</span>
+            )}
+          </span>
+          {me && (
+            <PlayerScore
+              score={me.score}
+              lastPoints={me.last_points}
+              lastReason={me.last_reason}
+              lastAwardedAt={me.last_awarded_at}
+            />
           )}
         </p>
       </section>
