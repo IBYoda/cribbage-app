@@ -5,10 +5,11 @@ import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import { sortHand } from "@/lib/cards";
+import { cardPlayValue, sortHand } from "@/lib/cards";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
 import { PlayerScore } from "@/components/PlayerScore";
+import { PlayArea, type PlayEvent } from "@/components/PlayArea";
 
 type TableRow = {
   id: string;
@@ -61,10 +62,21 @@ type Game = {
   // Public, unlike every other card in the game -- which is exactly why it can
   // live on games rather than needing its own locked-down table.
   starter_card: string | null;
+  // Where within a LIVE game we are. Separate from status, which means "is
+  // this game live at all" and is load-bearing in seven other places.
+  phase: string;
+  // Whose turn it is during play. Explicit rather than derived from "last
+  // player's opponent", because a go lets one player play several times in a row.
+  current_player: string | null;
+  play_count: number;
+  play_segment: number;
 };
 
+// Must stay a single string LITERAL, not a concatenation: supabase-js infers
+// the returned row shape from this exact literal type, and "a" + "b" widens to
+// plain `string`, which silently collapses the result type to an error type.
 const GAME_COLUMNS =
-  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card";
+  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment";
 
 // A game is "live" while it is either cutting for deal or actually being
 // played. Both block a second game at the table, and both must be found by the
@@ -110,6 +122,11 @@ export default function TablePage() {
   const [selectedCards, setSelectedCards] = useState<string[]>([]);
   const [discardStatus, setDiscardStatus] = useState<"idle" | "sending" | "error">("idle");
   const [discardMessage, setDiscardMessage] = useState<string | null>(null);
+  // The public play log for this game. Cards on the table are public the
+  // instant they're played, so unlike hands this needs no per-user filtering.
+  const [plays, setPlays] = useState<PlayEvent[]>([]);
+  const [playStatus, setPlayStatus] = useState<"idle" | "sending" | "error">("idle");
+  const [playMessage, setPlayMessage] = useState<string | null>(null);
   // Two-step confirm, but only when a game is live -- leaving then destroys a
   // game for BOTH players, which is too much to hang off one stray tap.
   const [leaveConfirming, setLeaveConfirming] = useState(false);
@@ -125,6 +142,10 @@ export default function TablePage() {
   // updater would make that updater impure, and React re-invokes updaters in
   // development -- which would fire the fetch twice.
   const lastGameStatusRef = useRef<string | null>(null);
+  // The realtime channel is subscribed per TABLE and never re-subscribes when
+  // the active game changes, so reading activeGame inside its handlers would
+  // capture a stale closure. A ref always reads current.
+  const activeGameIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -143,6 +164,9 @@ export default function TablePage() {
       .eq("game_id", gameId)
       .maybeSingle();
 
+    // NOTE: from the discard onwards this array is IMMUTABLE -- it is the four
+    // cards that get counted after play. Cards you've played are tracked
+    // separately in game_plays, and "what I still hold" is the difference.
     setMyHand(data?.cards ?? []);
     // Any selection referred to the pre-discard hand, so it's stale now.
     // handSorted is deliberately NOT reset here: sorting is a display-only
@@ -150,6 +174,16 @@ export default function TablePage() {
     // remaining 4 cards the moment you discarded. It's reset when a genuinely
     // new hand is dealt instead.
     setSelectedCards([]);
+  }, []);
+
+  const fetchPlays = useCallback(async (gameId: string) => {
+    const { data } = await supabase
+      .from("game_plays")
+      .select("seq, segment, user_id, kind, card, count_after")
+      .eq("game_id", gameId)
+      .order("seq", { ascending: true });
+
+    setPlays((data as PlayEvent[]) ?? []);
   }, []);
 
   // Fetches the current active game + full roster for a table. Used both for
@@ -172,8 +206,10 @@ export default function TablePage() {
     // No hand exists during 'cutting' -- that is the entire point of the phase.
     if (existingGame && existingGame.status === "active") {
       await fetchMyHand(existingGame.id);
+      await fetchPlays(existingGame.id);
     } else {
       setMyHand([]);
+      setPlays([]);
     }
 
     const { data: memberRows, error: membersError } = await supabase
@@ -206,7 +242,7 @@ export default function TablePage() {
         last_awarded_at: m.last_awarded_at,
       }))
     );
-  }, [fetchMyHand]);
+  }, [fetchMyHand, fetchPlays]);
 
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
@@ -350,6 +386,33 @@ export default function TablePage() {
 
     if (table) await refreshTableState(table.id);
     return null;
+  }
+
+  // Plays one card. Everything that follows -- whether the opponent can
+  // answer, whether a go gets recorded, whether the count resets, whether the
+  // hand is over -- is resolved server-side inside this one call.
+  async function handlePlayCard(card: string) {
+    if (!activeGame) return;
+
+    setPlayStatus("sending");
+    setPlayMessage(null);
+
+    const { error: rpcError } = await supabase.rpc("play_card", {
+      p_game_id: activeGame.id,
+      p_card: card,
+    });
+
+    if (rpcError) {
+      // The function's guards (not your turn, not your card, over 31) surface
+      // here as readable messages. The UI tries to make these unreachable, but
+      // the server is what actually enforces them.
+      setPlayStatus("error");
+      setPlayMessage(rpcError.message);
+      return;
+    }
+
+    if (table) await refreshTableState(table.id);
+    setPlayStatus("idle");
   }
 
   function toggleCardSelection(card: string) {
@@ -509,6 +572,26 @@ export default function TablePage() {
       )
       .on(
         "postgres_changes",
+        { event: "INSERT", schema: "public", table: "game_plays" },
+        (payload) => {
+          const event = payload.new as PlayEvent & { game_id: string };
+
+          // Unfiltered subscription, filtered here instead. game_plays has no
+          // table_id to match this channel's table filter on, and the active
+          // game changes within a table -- a game_id filter baked into the
+          // subscription would go stale on the next "New Game". Same approach
+          // as the profiles UPDATE listener: at this scale, letting the client
+          // discard what isn't its own is simpler than re-subscribing.
+          if (event.game_id !== activeGameIdRef.current) return;
+
+          setPlays((current) => {
+            if (current.some((p) => p.seq === event.seq)) return current; // already have it
+            return [...current, event].sort((a, b) => a.seq - b.seq);
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
         { event: "UPDATE", schema: "public", table: "profiles" },
         (payload) => {
           const updated = payload.new as { id: string; nickname: string };
@@ -539,6 +622,10 @@ export default function TablePage() {
             deal_cut: DealCutRound[] | null;
             deal_cut_ack_by: string[] | null;
             starter_card: string | null;
+            phase: string | null;
+            current_player: string | null;
+            play_count: number | null;
+            play_segment: number | null;
           };
           // A new game now arrives as EITHER 'cutting' (first game at the
           // table -- no cards yet) or 'active' (deal alternated, dealt at once).
@@ -553,10 +640,15 @@ export default function TablePage() {
               deal_cut: newGame.deal_cut,
               deal_cut_ack_by: newGame.deal_cut_ack_by ?? [],
               starter_card: newGame.starter_card,
+              phase: newGame.phase ?? "discard",
+              current_player: newGame.current_player,
+              play_count: newGame.play_count ?? 0,
+              play_segment: newGame.play_segment ?? 0,
             });
             lastGameStatusRef.current = newGame.status;
             setHandSorted(false); // genuinely new hand -- show it as dealt
             setGameEndedNotice(null); // stale once a fresh game is under way
+            setPlays([]); // a fresh game has no play history
             // Only fetch a hand if one can exist. During 'cutting' there are no
             // cards at all, which is the whole point of the phase.
             if (newGame.status === "active") fetchMyHand(newGame.id);
@@ -582,6 +674,10 @@ export default function TablePage() {
             deal_cut: DealCutRound[] | null;
             deal_cut_ack_by: string[] | null;
             starter_card: string | null;
+            phase: string | null;
+            current_player: string | null;
+            play_count: number | null;
+            play_segment: number | null;
           };
           const previousStatus = lastGameStatusRef.current;
           lastGameStatusRef.current = updatedGame.status;
@@ -604,10 +700,12 @@ export default function TablePage() {
             return;
           }
           // Otherwise the game is live and something moved. This one broadcast
-          // now carries three different phases:
+          // now carries every phase:
           //   - a cut card being drawn (deal_cut grows)
           //   - a redraw/deal acknowledgement (deal_cut_ack_by)
           //   - a discard, and then the starter being cut (public by design)
+          //   - a card played: current_player, play_count and play_segment,
+          //     which is what moves the turn indicator on BOTH screens
           // None of it ever carries a hand or the crib.
           //
           // The cutting -> active transition rides here too: the deal happens
@@ -624,6 +722,10 @@ export default function TablePage() {
                   deal_cut: updatedGame.deal_cut ?? current.deal_cut,
                   deal_cut_ack_by: updatedGame.deal_cut_ack_by ?? [],
                   starter_card: updatedGame.starter_card,
+                  phase: updatedGame.phase ?? current.phase,
+                  current_player: updatedGame.current_player,
+                  play_count: updatedGame.play_count ?? 0,
+                  play_segment: updatedGame.play_segment ?? 0,
                 }
               : current
           );
@@ -676,6 +778,12 @@ export default function TablePage() {
     };
   }, [table, refreshTableState, fetchMyHand]);
 
+  // Keeps the ref above in step with state. Assigning a ref is not a state
+  // update, so this is a legitimate effect rather than a cascading render.
+  useEffect(() => {
+    activeGameIdRef.current = activeGame?.id ?? null;
+  }, [activeGame?.id]);
+
   if (loading) {
     return (
       <main className="flex flex-1 items-center justify-center">
@@ -722,8 +830,31 @@ export default function TablePage() {
   // array rather than a single hardcoded opponent so 3- and 4-player tables
   // (Phase 3) slot in without restructuring the layout.
   const opponents = members.filter((m) => m.user_id !== session.user.id);
-  const displayedHand = handSorted ? sortHand(myHand) : myHand;
   const canStartGame = members.length === REQUIRED_PLAYERS;
+
+  const phase = activeGame?.phase ?? "discard";
+  const isPlaying = Boolean(activeGame) && phase === "play";
+  const isCounting = Boolean(activeGame) && phase === "counting";
+
+  // game_hands.cards is the immutable four-card hand; what you still HOLD is
+  // that minus what you've already played.
+  const playedByMe = new Set(
+    plays.filter((p) => p.kind === "play" && p.user_id === session.user.id).map((p) => p.card!)
+  );
+  // During counting you want the whole hand back -- those four cards are what
+  // gets scored. Only during play is it reduced to what's left to play.
+  const handForDisplay = isPlaying ? myHand.filter((c) => !playedByMe.has(c)) : myHand;
+  const displayedHand = handSorted ? sortHand(handForDisplay) : handForDisplay;
+
+  const isMyTurn = isPlaying && activeGame?.current_player === session.user.id;
+  const playCount = activeGame?.play_count ?? 0;
+
+  // Mirrors the server's Guard 7. Shown as an affordance so a player can see
+  // which cards are available rather than tapping and being rejected -- but
+  // play_card re-checks it, since this is only a hint.
+  function canPlayCard(card: string) {
+    return isMyTurn && cardPlayValue(card) + playCount <= 31;
+  }
 
   const discardedBy = activeGame?.discarded_by ?? [];
   const iHaveDiscarded = discardedBy.includes(session.user.id);
@@ -743,6 +874,14 @@ export default function TablePage() {
   // this reveals nothing that isn't already known.
   function opponentCardCount(opponentId: string) {
     if (!activeGame) return 0;
+    if (isPlaying) {
+      // Derived from the public play log -- how many of their four they've
+      // laid down. Reveals nothing: which cards they've played is already
+      // public, and hand sizes are visible in a real game anyway.
+      const played = plays.filter((p) => p.kind === "play" && p.user_id === opponentId).length;
+      return Math.max(CARDS_AFTER_DISCARD - played, 0);
+    }
+    if (isCounting) return CARDS_AFTER_DISCARD;
     return discardedBy.includes(opponentId) ? CARDS_AFTER_DISCARD : CARDS_DEALT;
   }
 
@@ -849,35 +988,56 @@ export default function TablePage() {
         {activeGame ? (
           <>
             {cribComplete ? (
-              // items-end so the two labels sit on a shared baseline even
-              // though the starter is rendered larger than a crib card.
-              <div className="flex items-end justify-center gap-6">
-                <div className="flex flex-col items-center gap-2">
-                  {/* Face-down for EVERYONE, dealer included -- game_cribs has no
-                      read policy at all until the counting-phase reveal slice. */}
-                  <div className="flex w-32 gap-1">
-                    {Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
-                      <FaceDownCard key={i} />
-                    ))}
+              <>
+                {/* items-end so the two labels sit on a shared baseline even
+                    though the starter is rendered larger than a crib card.
+                    Both shrink once play starts, to leave room for the run. */}
+                <div className="flex items-end justify-center gap-6">
+                  <div className="flex flex-col items-center gap-1">
+                    {/* Face-down for EVERYONE, dealer included -- game_cribs has no
+                        read policy at all until the counting-phase reveal slice. */}
+                    <div className={`flex gap-1 ${isPlaying || isCounting ? "w-20" : "w-32"}`}>
+                      {Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
+                        <FaceDownCard key={i} />
+                      ))}
+                    </div>
+                    <p className="text-xs font-medium">
+                      {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
+                    </p>
                   </div>
-                  <p className="text-sm font-medium">
-                    {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
-                  </p>
+
+                  {/* The one card everybody is meant to be looking at. Absent
+                      for the brief moment between the crib completing and the
+                      starter UPDATE arriving. */}
+                  {activeGame.starter_card && (
+                    <div className="flex flex-col items-center gap-1">
+                      <div className={`flex gap-1 ${isPlaying || isCounting ? "w-12" : "w-16"}`}>
+                        <PlayingCard card={activeGame.starter_card} />
+                      </div>
+                      <p className="text-xs font-medium">Starter</p>
+                    </div>
+                  )}
                 </div>
 
-                {/* Deliberately larger than the crib backs: this is the one
-                    card everybody is meant to be looking at. Absent for the
-                    brief moment between the crib completing and the starter
-                    UPDATE arriving. */}
-                {activeGame.starter_card && (
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex w-16 gap-1">
-                      <PlayingCard card={activeGame.starter_card} />
-                    </div>
-                    <p className="text-sm font-medium">Starter</p>
-                  </div>
+                {isPlaying && (
+                  <PlayArea
+                    plays={plays}
+                    playCount={playCount}
+                    playSegment={activeGame.play_segment}
+                    currentPlayer={activeGame.current_player}
+                    myUserId={session.user.id}
+                    nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+                  />
                 )}
-              </div>
+
+                {isCounting && (
+                  <p className="rounded border border-zinc-400 px-4 py-2 text-center text-sm dark:border-zinc-600">
+                    All eight cards played — pegging is over.
+                    <br />
+                    <span className="text-zinc-500">Counting is the next slice.</span>
+                  </p>
+                )}
+              </>
             ) : iHaveDiscarded ? (
               <p className="text-sm text-zinc-500">
                 Waiting for {waitingOn.map(displayName).join(", ")} to discard...
@@ -938,11 +1098,23 @@ export default function TablePage() {
           <p className="text-center text-sm text-red-600">{discardMessage}</p>
         )}
 
-        {/* max-w scales with hand size so 4 remaining cards don't stretch to
-            fill the width left by 6. */}
+        {playStatus === "error" && playMessage && (
+          <p className="text-center text-sm text-red-600">{playMessage}</p>
+        )}
+
+        {/* During play, a prompt that names the constraint rather than leaving
+            the player to work out why cards are greyed. */}
+        {isPlaying && isMyTurn && (
+          <p className="text-sm text-zinc-500">
+            Tap a card to play — up to {31 - playCount} more
+          </p>
+        )}
+
+        {/* max-w scales with hand size so a shrinking hand doesn't stretch to
+            fill the width six cards needed. */}
         <div
           className={`flex w-full gap-1 ${
-            myHand.length > CARDS_AFTER_DISCARD ? "max-w-md" : "max-w-xs"
+            displayedHand.length > CARDS_AFTER_DISCARD ? "max-w-md" : "max-w-xs"
           }`}
         >
           {displayedHand.map((card) => (
@@ -950,9 +1122,21 @@ export default function TablePage() {
               key={card}
               card={card}
               selected={selectedCards.includes(card)}
-              // No handler once you've discarded -- the card renders as a plain
-              // div, so there's nothing to click or tab to.
-              onSelect={canDiscard ? () => toggleCardSelection(card) : undefined}
+              // Dimmed when it exists but can't be used right now: not your
+              // turn, or it would take the count past 31. Visible-but-inert
+              // beats hiding it, since "why can't I play my king?" has an
+              // answer the player should be able to see.
+              dimmed={isPlaying && !canPlayCard(card)}
+              // One handler, two phases. Omitted entirely when no action is
+              // available, which also renders the card as a plain div with
+              // nothing to click or tab to.
+              onSelect={
+                canDiscard
+                  ? () => toggleCardSelection(card)
+                  : isPlaying && canPlayCard(card) && playStatus !== "sending"
+                    ? () => handlePlayCard(card)
+                    : undefined
+              }
             />
           ))}
         </div>
