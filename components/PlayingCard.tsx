@@ -30,6 +30,7 @@ export function PlayingCard({
   selected = false,
   onSelect,
   sizing = DEFAULT_SIZING,
+  dimmed = false,
 }: {
   card: string;
   selected?: boolean;
@@ -38,6 +39,10 @@ export function PlayingCard({
   // to tab to or click when selection isn't allowed.
   onSelect?: () => void;
   sizing?: string;
+  // Still readable, but visibly not actionable. Used during play for cards
+  // that would take the count past 31, so a player can see WHY a card isn't
+  // available rather than tapping it and being rejected.
+  dimmed?: boolean;
 }) {
   const red = isRedSuit(card);
   const textColor = red ? "text-red-600" : "text-zinc-900";
@@ -50,6 +55,7 @@ export function PlayingCard({
     CARD_LOOK,
     "flex flex-col justify-between border-zinc-300 bg-white p-1 dark:border-zinc-600",
     selected ? "-translate-y-4 ring-2 ring-blue-500" : "",
+    dimmed ? "opacity-40 saturate-50" : "",
   ]
     .filter(Boolean)
     .join(" ");

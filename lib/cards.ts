@@ -36,6 +36,20 @@ export function rankLabel(card: string) {
   return rank === "T" ? "10" : rank;
 }
 
+// Counting value for the run to 31 during play: A=1, 2-9 face value, and
+// T/J/Q/K all worth 10.
+//
+// Deliberately separate from the RANKS ordering used by sortHand, which is an
+// ORDINAL (A=1 .. K=13) for comparing cuts. Mirrors the same split in SQL
+// between card_play_value() and card_rank_value() -- the two must never be
+// conflated, and a king is the clearest case: ordinal 13, counting value 10.
+export function cardPlayValue(card: string) {
+  const rank = rankOf(card);
+  if (rank === "A") return 1;
+  if (rank === "T" || rank === "J" || rank === "Q" || rank === "K") return 10;
+  return Number(rank);
+}
+
 // Ascending by rank, then by suit so the order is stable and predictable.
 export function sortHand(cards: string[]) {
   return [...cards].sort((a, b) => {
