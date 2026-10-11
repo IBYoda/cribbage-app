@@ -47,7 +47,6 @@ export function PlayArea({
 
   const orderedSegments = [...segments.entries()].sort((a, b) => a[0] - b[0]);
 
-  const lastEvent = plays.length > 0 ? plays[plays.length - 1] : null;
   const isMyTurn = currentPlayer === myUserId;
 
   return (
@@ -84,8 +83,10 @@ export function PlayArea({
                   />
                 ) : (
                   // A go is part of the history, not just a transient message:
-                  // it explains a gap in the alternation, and it is what the
-                  // scoring slice will read to award the point.
+                  // it explains a gap in the alternation. DISPLAY ONLY -- the
+                  // go point is awarded inside play_card, from control flow,
+                  // and never by reading this event's user_id. In a deadlock
+                  // the point belongs to the OTHER player.
                   <span
                     key={event.seq}
                     className="rounded border border-amber-500 px-2 py-1 text-xs font-semibold text-amber-600 dark:text-amber-500"
@@ -99,14 +100,6 @@ export function PlayArea({
           );
         })}
       </div>
-
-      {lastEvent?.kind === "go" && (
-        <p className="text-sm font-medium text-amber-600 dark:text-amber-500">
-          {lastEvent.user_id === myUserId
-            ? "You said go"
-            : `${nameFor(lastEvent.user_id)} said go`}
-        </p>
-      )}
 
       <p
         className={`rounded px-4 py-1.5 text-base font-semibold ${

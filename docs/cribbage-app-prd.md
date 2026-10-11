@@ -3,7 +3,7 @@
 
 **Owner:** Yoda
 **Status:** Draft — not yet started (Hello Fresh Helper app comes first, for practice)
-**Last updated:** August 2, 2026
+**Last updated:** September 26, 2026
 **Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8.
 
 ---
@@ -136,7 +136,13 @@ This is here so the dealing/discard logic has one clear source of truth to build
 
 **Deliberately excluded:** the official rules' step where the non-dealer makes a mandatory cut of the deck before dealing is intentionally NOT implemented — it's a house-rule casualty of remote play (their group's tradition is a shot penalty for asking someone else to cut your deck, which the app makes physically impossible anyway). Not a gap to fill later.
 
-**Known gap as of this note:** the first built version of cut-for-deal computed the dealer AND dealt all cards atomically in one step, then revealed the cut result as a ceremony layered on top afterward (chosen deliberately at the time, then found to feel wrong once actually played — a real "nothing is dealt until the cut resolves" two-phase flow is required instead). This needs correcting before Phase 2 is considered done. After the first game at a table, the deal alternates each hand as usual — no re-cut needed.
+**Pegging resolution notes (decided during Phase 2 Slice 7 / scoring Batch 1):**
+- When neither player can play under 31 (a deadlock), exactly ONE `go` event is logged in `game_plays`: the player who couldn't answer. The player who played the last card has no go event. This is by design and matches the physical game, where only one "go" is ever spoken per segment.
+- The go point belongs to whoever played the last card of the segment, which is NOT necessarily the player with the go event. Attribution comes from control flow ("I just played and the segment is closing"), never from looking up the go event's user.
+- Hitting exactly 31 scores 2 and closes the segment with no go point. The final card of the hand scores 1 as "last card" (same point as go), unless that card makes exactly 31.
+- His heels (starter is a jack, dealer scores 2) is scored at cut time, not in hand counting, so it is never double-counted at showtime.
+
+**Resolved:** the first built version of cut-for-deal computed the dealer AND dealt all cards atomically in one step, then revealed the cut result as a ceremony layered on top afterward. This was corrected in Phase 2 Slice 5 (the "cut-before-deal" rework) — nothing is dealt until the cut genuinely resolves, drawn one card at a time on demand from a face-down spread, with ties handled via mandatory dual-redraw (Slice 4b). After the first game at a table, the deal alternates each hand as usual — no re-cut needed.
 
 ---
 
@@ -170,7 +176,20 @@ This is here so the dealing/discard logic has one clear source of truth to build
 
 *(Numbering note: git/PR history for this phase started counting from "Slice 9" — a continuation of Phase 1's 1-8 — before switching to per-phase numbering to match this document. "Slice 9" in commit history = "Phase 2, Slice 1" here. All Phase 2 work going forward uses Phase 2's own numbering, starting at Slice 1.
 
-Actual Phase 2 slice order, since it's drifted from the original plan once already: 1) Shuffle and deal, 2) Discard to crib, 3) Leave-table bug fix (inserted out of the original plan once discovered — not originally numbered as its own slice, but claimed "Slice 3" once built), 4) Cut for starter card + real cut-for-lowest-card dealer selection [next]. Update this list as slices land rather than trusting memory of the original plan — it's already been wrong once.)*
+Actual Phase 2 slice order, since it's drifted from the original plan once already:
+1. Shuffle and deal
+2. Discard to crib
+3. Leave-table bug fix (inserted out of the original plan once discovered — not originally numbered as its own slice, but claimed "Slice 3" once built)
+4. Cut for starter card + real cut-for-lowest-card dealer selection (first version — dealt cards before the cut fully resolved, see the resolved note in Section 7)
+4b. Tie-visibility + mandatory dual-redraw for cut-for-deal ties
+5. Cut-before-deal rework — the major correction making cut-for-deal a genuine two-phase, on-demand, draw-one-card-at-a-time flow before any cards are dealt (see Section 7)
+6. Live score tracker
+6b. Function-grant security fix (three internal functions were reachable by any authenticated client due to a Supabase default-privileges bootstrap behavior — closed, plus a project-wide default-privileges fix so newly created functions default to no client access)
+7. Pegging/play phase — turn order, legal-play enforcement, running count to 31, automatic go/deadlock resolution (no scoring yet — that's next)
+
+**Next up:** the actual pegging scoring engine (fifteens, pairs, runs, go, 31), feeding the score tracker built in Slice 6. Then the counting-phase flow (Show Hand / Confirm Count / Show Crib, Section 6 item 8), followed by the multi-round/match loop (currently one `games` row represents a single hand, not a match to 121 — a known, deliberate limitation until that slice is built).
+
+Update this list as slices land rather than trusting memory of the original plan — it's already been wrong once.)*
 - Shared deck + dealing logic
 - Private hand display for each player
 - Real-time reveal of played cards during the pegging phase
@@ -217,6 +236,8 @@ Small UI/UX adjustments observed while actually playing, logged here so they are
 
 - **Crib pile positioning:** currently rendered dead-center of the table. Preference is to move it off to the side — near/offset from the dealer's hand, not centered. Purely a layout change, no data/logic impact.
 - **"Start a Table" should skip the extra step:** currently, creating a table requires then separately joining it, even though you're the creator. Preference: creating a table should immediately drop the creator into the table's waiting screen (same as if they'd joined), rather than requiring a manual join step for a table they just made. The table code is already visible in the corner for sharing with the other player — no need to make the creator copy/paste/re-enter it themselves.
+- **Remove the "[Name] said go" message during pegging:** noticed during Slice 7 testing that this message caused confusion around the deadlock/double-go case (only one player's go gets an explicit event logged — see Section 7's pegging notes — so the message reads as if the second stuck player's go was "missed" when the turn/count outcome is actually correct). The underlying `game_plays` go events stay recorded and functional either way; this is purely about removing a UI message that misleads more than it helps.
+- **Played cards should render in front of each player, not in a shared centered stack:** currently, pegging play renders all played cards together in one shared row/area in the middle of the table. Preference: each player's own played cards should appear in front of their own position instead, matching how a physical table actually looks. Noticed during Slice 7 testing; also contributing to a graphical layout glitch when a new segment starts a new row.
 
 ---
 
