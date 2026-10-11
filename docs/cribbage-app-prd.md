@@ -148,9 +148,10 @@ This is here so the dealing/discard logic has one clear source of truth to build
 - **Counting order in a 2-player hand:** the pone's hand, then the dealer's hand, then the crib (dealer). The server tracks which count is up, and the hand and crib are always scored from the four kept cards (plus the starter), never from what is left in a player's hand after pegging.
 - **The 121 cap:** a stored score never exceeds 121, so the tracker matches a physical board. The score flash still shows the full award (a 2-point play from 120 flashes "+2" and stores 121).
 - **Winning is checked in the one place every point passes through,** so it is caught mid-pegging, on his heels, and mid-count alike. A game that ends on his heels is left with its phase as it was; the screen checks the game's status before its phase.
-- **Next match (Batch 2b):** the loser deals first, New Game resets both scores, and either player can tap Next Hand to deal the following hand.
+- **Next hand (Batch 2b):** when every count is in (the `done` state), **both players must tap Next Hand** before the next hand is dealt: the first tap only marks that player ready (the other player sees "X is ready", the first sees "Waiting for X…"), and the tap that completes the set deals. The deal rotates to the other player every hand, scores and the tracker carry over, and the 5-hour session clock keeps measuring from the start of the match.
+- **Next match (Batch 2b):** New Game resets both scores and the tracker. After a **won** match between the same two players, the **loser deals first** and play starts at once with no cut. Any other ending (a player leaving, an admin ending the game, the 5-hour timeout, or a changed roster) means a **fresh cut for deal**.
 
-**Resolved:** the first built version of cut-for-deal computed the dealer AND dealt all cards atomically in one step, then revealed the cut result as a ceremony layered on top afterward. This was corrected in Phase 2 Slice 5 (the "cut-before-deal" rework) — nothing is dealt until the cut genuinely resolves, drawn one card at a time on demand from a face-down spread, with ties handled via mandatory dual-redraw (Slice 4b). After the first game at a table, the deal alternates each hand as usual — no re-cut needed.
+**Resolved:** the first built version of cut-for-deal computed the dealer AND dealt all cards atomically in one step, then revealed the cut result as a ceremony layered on top afterward. This was corrected in Phase 2 Slice 5 (the "cut-before-deal" rework) — nothing is dealt until the cut genuinely resolves, drawn one card at a time on demand from a face-down spread, with ties handled via mandatory dual-redraw (Slice 4b). After a won match between the same two players, the loser deals the next match with no re-cut; every other ending cuts for deal again (see the next-hand and next-match notes above).
 
 ---
 
@@ -195,9 +196,11 @@ Actual Phase 2 slice order, since it's drifted from the original plan once alrea
 6b. Function-grant security fix (three internal functions were reachable by any authenticated client due to a Supabase default-privileges bootstrap behavior — closed, plus a project-wide default-privileges fix so newly created functions default to no client access)
 7. Pegging/play phase — turn order, legal-play enforcement, running count to 31, automatic go/deadlock resolution
 8. **Batch 1 (merged, PR #16):** the scoring engines — pegging scoring (fifteens, pairs, runs, go, last card, 31), his heels, and the pure hand/crib scorer, with an exhaustively verified TypeScript mirror
-9. **Batch 2a (built and tested, pending merge):** the counting flow (Show Hand / Confirm Count / Show Crib, Section 6 item 8), crib scoring, the 121 cap, and winning the game at 121 — ending at a `done` state
+9. **Batch 2a (merged, PR #17):** the counting flow (Show Hand / Confirm Count / Show Crib, Section 6 item 8), crib scoring, the 121 cap, and winning the game at 121 — ending at a `done` state
 
-**Next up — Batch 2b:** Next Hand (deal rotation and the per-hand reset), the match loop, the score reset at New Game, and the loser dealing the next match (Section 7). Until that lands, `done` is a dead end and a rematch needs scores reset by hand. After that, the UI-polish pass (Section 11.5).
+10. **Batch 2b (built and tested, pending merge):** Next Hand with the two-player ready gate (dealer rotation and the full per-hand reset), the match loop, New Game as a new match (scores and tracker reset, loser deals after a won match, cut for deal otherwise), and a hardened client that always re-reads the game after any realtime event. This completes Phase 2's server and game loop: two people can now play whole matches back to back.
+
+**Next up:** the UI-polish pass (Section 11.5), then Phase 3 (3 and 4 players).
 
 Update this list as slices land rather than trusting memory of the original plan — it's already been wrong once.)*
 - Shared deck + dealing logic
@@ -250,6 +253,8 @@ Small UI/UX adjustments observed while actually playing, logged here so they are
 - **An opponent's shown hand appears in a different card order than its owner sees:** cosmetic, noticed during Batch 2a testing. Shown hands should use one consistent order on both screens.
 - **Possible repeated GO chips (unverified):** from reading the code, a player who is stuck while the other keeps playing may collect a GO chip on every play. Not yet seen in testing; log it here if it shows up, and correct the "exactly one go event" wording in Section 7 if so.
 - **Remove the "[Name] said go" message during pegging (done in Batch 1):** noticed during Slice 7 testing that this message caused confusion around the deadlock/double-go case (only one player's go gets an explicit event logged — see Section 7's pegging notes — so the message reads as if the second stuck player's go was "missed" when the turn/count outcome is actually correct). The underlying `game_plays` go events stay recorded and functional either way; this is purely about removing a UI message that misleads more than it helps.
+- **Sort button intermittently stuck (seen once, not reproduced):** after Next Hand in Batch 2b testing, one screen's Sort button did not work until a manual refresh. It did not recur in later runs. The same root cause as a separate bug (a screen sitting on an out-of-date snapshot of the game, after the page missed a realtime update) was fixed in Batch 2b by re-reading the game after every event, so this may already be fixed. Re-log here if it comes back.
+- **Show which hand of the match it is (deferred from Batch 2b):** `games.hand_no` exists, but the UI does not yet display "Hand N".
 - **Played cards should render in front of each player, not in a shared centered stack:** currently, pegging play renders all played cards together in one shared row/area in the middle of the table. Preference: each player's own played cards should appear in front of their own position instead, matching how a physical table actually looks. Noticed during Slice 7 testing; also contributing to a graphical layout glitch when a new segment starts a new row.
 
 ---

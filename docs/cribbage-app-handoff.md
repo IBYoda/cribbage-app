@@ -30,11 +30,12 @@ A real-time multiplayer cribbage companion app for 2-4 players, playing remotely
 
 - **Phase 1:** complete.
 - **Phase 2, Batch 1** (the scoring engines): merged to `main` as PR #16.
-- **Phase 2, Batch 2a** (counting, crib scoring, win at 121): built on branch `feature/counting-and-rounds`, **not yet merged**.
-  - **SQL:** `phase2-batch2a-counting.sql` is applied, and `phase2-batch2a-verification.sql` queries 1–7 pass.
-  - **UI:** the counting UI in `app/tables/[code]/page.tsx` passes typecheck, lint and build, but has **not been browser-tested**. `docs/batch2a-manual-test-plan.md` is the plan.
+- **Phase 2, Batch 2a** (counting, crib scoring, win at 121): merged to `main` as PR #17.
+- **Phase 2, Batch 2b** (next hand, match loop, New Game as a new match): built on branch `feature/next-hand-and-match-loop`, **not yet merged**.
+  - **SQL:** `phase2-batch2b-next-hand.sql` and then `phase2-batch2b-ready-gate.sql` (both players must tap Next Hand) are applied. `phase2-batch2b-verification.sql` queries 1, 2, 4 (29 checks, with the ready gate) and 5 pass.
+  - **UI:** the Next Hand button, the new-hand reset and the New Game handling pass typecheck, lint and build, but have **not been browser-tested**. `docs/batch2b-manual-test-plan.md` is the plan.
 
-A hand now plays from New Game through pegging and counting to `phase = 'done'`, and the first player to 121 wins on the spot. From `done` there is no way forward yet except Leave.
+A full 2-player match now plays end to end: New Game → hands (deal, discard, pegging, counting, Next Hand) until someone reaches 121 → win banner → New Game, where the loser deals.
 
 ### In the database
 
@@ -53,7 +54,7 @@ Functions, with the file holding the current definition:
 | `award_points` | `phase2-batch2a-counting.sql` | no — capped at 121; reaching 121 ends the game as `won` |
 | `score_pegging` | `phase2-batch1-scoring-engines.sql` | **no — deliberate** |
 | `score_hand` | `phase2-batch1-scoring-engines.sql` | **no — deliberate** |
-| `start_game_with_deal` | `phase2-slice-5-cut-before-deal.sql` | yes |
+| `start_game_with_deal` | `phase2-batch2b-next-hand.sql` | yes — resets every score and the tracker; after a won match between the same two players the loser deals with no cut, otherwise cut for deal |
 | `draw_cut_card` | `phase2-slice-5-cut-before-deal.sql` | yes |
 | `acknowledge_deal_cut` | `phase2-slice-5-cut-before-deal.sql` | yes |
 | `deal_cards_for_game` | `phase2-slice-5-cut-before-deal.sql` | no — internal, called by the cut functions |
@@ -62,21 +63,24 @@ Functions, with the file holding the current definition:
 | `show_hand` | `phase2-batch2a-counting.sql` | yes — `counting`/`done` only |
 | `show_crib` | `phase2-batch2a-counting.sql` | yes — dealer, step 2 only |
 | `confirm_count` | `phase2-batch2a-counting.sql` | yes — `(game, p_step)`; scores with `score_hand` server-side |
+| `next_hand` | `phase2-batch2b-ready-gate.sql` | yes — `(game, p_hand_no)`; from `done`, adds the caller to `games.ready_by`. Only the tap that makes **every** player ready clears the hand's rows, rotates the dealer, deals, and empties `ready_by` in the same update that bumps `hand_no`. A repeat tap or a stale `p_hand_no` returns quietly |
 | `leave_table` | `phase2-slice-5-cut-before-deal.sql` | yes |
 | `end_timed_out_sessions` | `phase2-slice-5-cut-before-deal.sql` | no (pg_cron, every 15 min) |
 
 **Live grants that disagree with this table.** 2a's grants check found `card_rank_value` and `shuffled_deck` granted to the client in the real database, although they are listed above as not client-callable, plus `rls_auto_enable`, which this project's SQL never defines and appears to come from the Supabase platform (not verified). `phase2-batch2a-verification.sql` query 3 tolerates all three so it can judge 2a on its own. Nothing secret is exposed: `card_rank_value` is a pure lookup, and `shuffled_deck` returns a fresh random deck, not the game's. They should still be revoked deliberately in a later slice. See Known loose ends.
 
-`games` columns: `id`, `table_id`, `status`, `created_by`, `created_at`, `players`, `dealer_id`, `discarded_by`, `deal_cut`, `deal_cut_ack_by`, `starter_card`, `phase`, `current_player`, `play_count`, `play_segment`, `ended_reason`, `count_step`, `revealed_by`, `crib_revealed`, `winner_id`.
+`games` columns: `id`, `table_id`, `status`, `created_by`, `created_at`, `players`, `dealer_id`, `discarded_by`, `deal_cut`, `deal_cut_ack_by`, `starter_card`, `phase`, `current_player`, `play_count`, `play_segment`, `ended_reason`, `count_step`, `revealed_by`, `crib_revealed`, `winner_id`, `hand_no`, `ready_by`.
+
+- **One `games` row is one match to 121**, not one hand. `hand_no` counts the hands (Batch 2b). The 5-hour timeout measures from `created_at`, which is the start of the match.
 
 - `status`: `open` → `cutting` → `active` → `ended`. A partial unique index allows only one live game per table. `ended_reason` is `admin`, `timeout`, `player_left` or `won` (Batch 2a).
-- `phase`: `discard` → `play` → `counting` → `done` (Batch 2a). In `counting`, `count_step` 0 is the pone's hand, 1 the dealer's hand, 2 the crib, and `current_player` names who acts. Nothing consumes `done` yet; `next_hand` is Batch 2b.
+- `phase`: `discard` → `play` → `counting` → `done` (Batch 2a). In `counting`, `count_step` 0 is the pone's hand, 1 the dealer's hand, 2 the crib, and `current_player` names who acts. From `done`, `next_hand` (Batch 2b) goes back to `discard` with `hand_no + 1`.
 - **Check status before phase.** An ended game keeps whatever phase it had: a win on his heels leaves `play`, a win mid-count leaves `counting`.
 - `revealed_by` / `crib_revealed` are the only record of what's shown. The `game_hands` and `game_cribs` read policies check them, and neither table is in the Realtime publication.
 
 `table_members` carries the score: `score`, `last_points`, `last_reason`, `last_awarded_at`.
 
-Exactly **nine** functions are meant to be granted to `authenticated`: `start_game_with_deal`, `draw_cut_card`, `acknowledge_deal_cut`, `discard_to_crib`, `play_card`, `leave_table`, `show_hand`, `show_crib`, `confirm_count`. Everything else is meant to be internal, reachable only from inside another function. The check is `docs/sql/phase2-batch2a-verification.sql` query 3, which lists every grant rather than naming a few. The three live exceptions are described under the table above.
+Exactly **ten** functions are meant to be granted to `authenticated`: `start_game_with_deal`, `draw_cut_card`, `acknowledge_deal_cut`, `discard_to_crib`, `play_card`, `leave_table`, `show_hand`, `show_crib`, `confirm_count`, `next_hand`. Everything else is meant to be internal, reachable only from inside another function. The check is `docs/sql/phase2-batch2b-verification.sql` query 2, which lists every grant rather than naming a few. The three live exceptions are described under the table above.
 
 ### What Batch 1 added
 
@@ -91,24 +95,17 @@ Exactly **nine** functions are meant to be granted to `authenticated`: `start_ga
 - `components/` — `PlayingCard.tsx`, `PlayerScore.tsx`, `PlayArea.tsx`, `CutForDealView.tsx`
 - `lib/` — `supabase.ts`, `cards.ts` (`cardPlayValue`, `cardRankValue`, `sortHand`, rank/suit parsing), `scoring.ts`
 - `scripts/` — `test-scoring.ts`, `ts-resolve.mjs`
-- `docs/` — this file, `cribbage-app-prd.md`, `batch1-manual-test-plan.md`, `CribbageBasics.pdf`, `images/`, `sql/`
+- `docs/` — this file, `cribbage-app-prd.md`, `batch1-manual-test-plan.md`, `batch2a-manual-test-plan.md`, `batch2b-manual-test-plan.md`, `CribbageBasics.pdf`, `images/`, `sql/`
 
 **`lib/scoring.ts`** mirrors both SQL scorers in TypeScript. It is **display-only**: the authoritative scorers stay in the database, so the client can never supply or influence a point value. Batch 2's Confirm Count must follow the same rule.
 
 ## What's next
 
-1. **Finish Batch 2a.** Browser-test it (`docs/batch2a-manual-test-plan.md`), then merge.
-2. **Batch 2b, designed but not built.** One `games` row is now one **match**, decided at the Batch 2 design checkpoint.
-   - **`next_hand(game, p_hand_no)`:**
-     - Either player can call it from `done`.
-     - It deletes the hand's `game_hands`, `game_cribs`, `game_decks` and `game_plays` rows.
-     - It resets the per-hand `games` columns, including `revealed_by` and `crib_revealed`, in the same transaction as the deal.
-     - It rotates the dealer and bumps `hand_no`.
-   - **Match loop:** scores persist across hands; the loser of a match deals first in the next one.
-   - **Score reset at New Game,** inside `start_game_with_deal`. Until this lands, run `testing-force-near-win.sql` query B before a new game.
-   - **The won → New Game flow.** The win banner itself already landed in 2a.
+1. **Finish Batch 2b.** Browser-test it (`docs/batch2b-manual-test-plan.md`, including Part 5, the 2a checks that still need two people), then merge.
+2. **UI polish pass** (PRD Section 11.5): play-area layout, crib positioning, played cards in front of each player, auto-join on create, and showing the starter under the win banner.
+3. **Phase 3:** 3- and 4-player games. Note that `next_hand`'s "player after the dealer" uses `players`, which is in join order, not seating order.
 
-The double-award trap still applies: his heels is awarded only in `discard_to_crib` and never in `score_hand`, so a jack starter is worth 2 in total, not 4. `next_hand` must clear `starter_card` so each hand gets exactly one fresh cut.
+The double-award trap still applies: his heels is awarded only in `discard_to_crib` and never in `score_hand`, so a jack starter is worth 2 in total, not 4. `next_hand` clears `starter_card`, so each hand gets exactly one fresh cut.
 
 ## Hard-won technical lessons
 
@@ -122,6 +119,7 @@ Each of these cost real debugging time. The "why" is the part worth keeping.
 - **`award_points` overwrites `last_points`/`last_reason`, so make ONE aggregated call per action.** Two calls would leave the tracker flashing only the final component — a 6-point play reading `+2 — pair` is actively wrong. `last_*` is per-member, so it only ever shows the most recent award.
 - **`text[] || 'literal'` fails at runtime with `22P02 malformed array literal`.** A bare quoted literal is of type `unknown`; with `text[]` on the left, Postgres resolves `||` to array concatenation and tries to *parse* the literal as an array. Use `array_append(arr, 'x'::text)`. Typed operands (`p_cards || p_starter`) are fine — it is specifically untyped literals that break.
 - **PL/pgSQL expressions are not validated until first execution.** `create or replace function` succeeding proves nothing. The `22P02` above survived review and only surfaced on the first real call, which is why a cross-check must exercise *every* function it ships.
+- **`now()` is frozen inside a DO block, so any test that depends on `created_at` ordering must set it explicitly.** `now()` is the *transaction's* start time, and a DO block is one transaction, so every row it inserts gets the same `created_at`. A "most recent game" lookup then ties and can pick the wrong row. In 2b's query 5, Case C could have passed for the wrong reason, because the tied rival game also led to a cut. Bump `created_at` on the row that must be newest (e.g. `now() + interval '1 minute'`). `clock_timestamp()` would differ per call, but only for rows the test inserts itself.
 - **The go point is awarded from control flow, never by reading the go event's `user_id`.** In a deadlock exactly one go event is logged, and it belongs to the *other* player — the point goes to whoever played the last card of the segment. The `GO` chip in `PlayArea.tsx` is display-only.
 - **A 31 scores 2 and no go or last-card point, even on the final card of the hand.** The 31 replaces the last-card point rather than stacking with it. This is the standard rule and the two code paths collide, so it needs a specific eight-card sequence to test.
 - **Supabase Realtime is a live stream with no catch-up.** A client that was disconnected never learns what it missed, so reconnection needs an explicit resync. DELETE payloads carry only replica-identity (PK) columns.
@@ -169,8 +167,6 @@ Current status: **PASS, 124 assertions.** The exhaustive stage checks `lib/scori
   - Crib positioning — the crib has no visual home on the table yet.
   - Auto-join on create table — the creator currently has to join their own table.
 - **Client grants that shouldn't exist.** `card_rank_value` and `shuffled_deck` are executable by the client in the live database, contrary to the function table. Low exposure (see the note under the table), but worth a deliberate `revoke` in a later slice. `rls_auto_enable` is also granted; it isn't defined by this project and appears to be Supabase's own.
-- **No next-hand flow and no match concept yet.** Win detection landed in Batch 2a. A game now sits in `phase = 'done'` after the crib is counted, with no way forward except leaving. `next_hand`, the match loop and the score reset are Batch 2b.
-- **Scores cannot be reset** except by leaving and rejoining the table. A `matches` entity would make this one `update ... set score = 0`.
 
 ## Slice numbering
 

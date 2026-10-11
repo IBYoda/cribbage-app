@@ -259,29 +259,19 @@ While running tests 2 and 3, confirm on the screen of the player who did
 
 ---
 
-## Expected rough edges — not bugs
+## After the eighth card
 
-The moment the eighth card lands, `play_card` sets `phase = 'counting'` and
-`current_player` to the pone, who counts first. (Batch 1 set it to null.
-Batch 2a's region (H) changed it, because `confirm_count`'s turn check reads
-it.) Until the counting UI exists:
+When the eighth card lands, `play_card` sets `phase = 'counting'` and
+`current_player` to the pone, who counts first. (Batch 1 set it to null;
+Batch 2a's region (H) changed it.) The play area gives way to the counting
+banner (Batch 2a). After the crib is counted, **Next Hand** deals the
+following hand (Batch 2b). So for these tests, either count the hand out or
+tap Next Hand to get a fresh deal. You don't need to start a new game.
 
-- **The play area disappears.** It renders only while `phase === 'play'`.
-  The played cards, the running count and the turn indicator all vanish at
-  once. That is the gate working, not state being lost — `game_plays` still
-  holds the whole history, which is why the queries above still answer.
-- **Your four cards come back, face up.** During play the hand is reduced to
-  what you still hold; during counting it shows all four again, because those
-  are the cards about to be scored. There is nothing to click.
-- **No Confirm Count button, and no hand or crib points are awarded.** The
-  hand scorer exists and is tested, but nothing calls it yet. Scores after
-  these tests reflect pegging and his heels only.
-- **At 121 the game ends.** This changed in Batch 2a, which added win detection
-  and a 121 cap to `award_points`. If you re-run these tests, reset the scores
-  first (`testing-force-near-win.sql` query B), or a table that already
-  passed 121 will end the game on its first award.
-- **The hand does not advance.** There is no next-hand flow yet, so the game
-  sits in `counting`. Start a new game for the next test.
+- **At 121 the game ends** (Batch 2a's win detection and 121 cap). The forced
+  scenarios here assume low scores. If an earlier test left a player near
+  121, reset with `testing-force-near-win.sql` query B, or a single pegging
+  point will end the game.
 
 ---
 

@@ -1,0 +1,696 @@
+-- Phase 2, Batch 2b: VERIFICATION QUERIES.
+--
+-- Run in the Supabase Dashboard -> SQL Editor AFTER BOTH
+-- docs/sql/phase2-batch2b-next-hand.sql and
+-- docs/sql/phase2-batch2b-ready-gate.sql, in that order. The SQL Editor
+-- shows the result of the LAST statement only, so run each numbered query on
+-- its own.
+--
+-- Queries 1-3 are read-only SELECTs.
+--
+-- Queries 4 and 5 are DO blocks that WRITE -- they call next_hand and
+-- start_game_with_deal as the real players -- and then deliberately raise an
+-- exception at the very end, which rolls every write back. They always
+-- "fail": the message is the verdict. "ALL n CHECKS PASSED (rolled back)" is
+-- a pass; anything starting "FAIL" or "SETUP" is not. Re-runnable, because
+-- nothing they do survives -- and because only committed changes reach
+-- Realtime, neither browser sees anything while they run.
+--
+-- Same impersonation as 2a's queries 6 and 7 (which passed on this project):
+-- request.jwt.claims plus "set local role authenticated". New here: the
+-- blocks switch BACK to the owner with "reset role" to inspect tables a
+-- player cannot read (game_decks, game_plays, the other player's hand).
+
+
+-- ---------------------------------------------------------------------------
+-- 1. SCHEMA. Expect 2 rows:
+--      hand_no   integer  NOT NULL, default 1
+--      ready_by  ARRAY    NOT NULL, default '{}'   (phase2-batch2b-ready-gate.sql)
+-- ---------------------------------------------------------------------------
+
+select column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'games'
+  and column_name in ('hand_no', 'ready_by')
+order by column_name;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. GRANTS. EXPECT 10 rows with check 'ok', up to 3 rows with check
+-- 'known pre-existing', and verdict 'PASS' on every row.
+--
+-- 2a's query 3 plus next_hand. The tolerated three -- card_rank_value,
+-- shuffled_deck, rls_auto_enable -- predate 2a and are explained in 2a's
+-- query 3 and the handoff's loose ends; a FOURTH unexpected grant still
+-- fails the verdict.
+-- ---------------------------------------------------------------------------
+
+-- with expected(routine_name) as (
+--   values ('acknowledge_deal_cut'), ('confirm_count'), ('discard_to_crib'),
+--          ('draw_cut_card'), ('leave_table'), ('next_hand'), ('play_card'),
+--          ('show_crib'), ('show_hand'), ('start_game_with_deal')
+-- ),
+-- known_preexisting(routine_name) as (
+--   values ('card_rank_value'), ('shuffled_deck'), ('rls_auto_enable')
+-- ),
+-- actual as (
+--   select distinct rp.routine_name::text as routine_name, rp.grantee::text as grantee
+--   from information_schema.routine_privileges rp
+--   where rp.routine_schema = 'public'
+--     and rp.grantee in ('anon', 'authenticated')
+--     and rp.privilege_type = 'EXECUTE'
+-- ),
+-- graded as (
+--   select coalesce(a.routine_name, e.routine_name) as routine_name,
+--          a.grantee,
+--          case
+--            when e.routine_name is null
+--             and a.routine_name in (select routine_name from known_preexisting)
+--              then 'known pre-existing'
+--            when e.routine_name is null then 'UNEXPECTED GRANT'
+--            when a.routine_name is null then 'MISSING GRANT'
+--            when a.grantee <> 'authenticated' then 'WRONG GRANTEE'
+--            else 'ok'
+--          end as check_result
+--   from actual a
+--   full join expected e on e.routine_name = a.routine_name
+-- )
+-- select routine_name, grantee, check_result,
+--        case
+--          when bool_and(check_result in ('ok', 'known pre-existing')) over ()
+--           and count(*) filter (where check_result = 'ok') over () = 10
+--            then 'PASS'
+--          else 'FAIL'
+--        end as verdict
+-- from graded
+-- order by (check_result not in ('ok', 'known pre-existing')) desc,
+--          (check_result = 'known pre-existing') desc,
+--          routine_name;
+
+
+-- ---------------------------------------------------------------------------
+-- 3. THE 52-CARD INVARIANT, for every live game.
+--
+-- At EVERY moment of a dealt hand, the two hands + the crib + the deck + the
+-- starter hold exactly 52 cards, all different:
+--   before any discard   6 + 6 + 0 + 40 + 0
+--   one discard in       4 + 6 + 2 + 40 + 0
+--   after the cut        4 + 4 + 4 + 39 + 1
+-- (game_hands.cards is immutable after the discard; played cards stay in it.)
+--
+-- So it catches exactly the failures next_hand could cause: a stale hand
+-- kept by "on conflict do nothing", a leftover crib grown to 6 or 8, an old
+-- deck, an old starter. Run it after a real next_hand, and at any point in
+-- the new hand.
+--
+-- EXPECT every row: total 52, distinct 52, crib_size 0/2/4, check 'ok'.
+-- No rows means no live dealt game.
+-- ---------------------------------------------------------------------------
+
+-- with cards as (
+--   select g.id as game_id, c as card
+--   from public.games g
+--   join public.game_hands gh on gh.game_id = g.id
+--   cross join unnest(gh.cards) as c
+--   where g.status = 'active'
+--   union all
+--   select g.id, c
+--   from public.games g
+--   join public.game_cribs cr on cr.game_id = g.id
+--   cross join unnest(cr.cards) as c
+--   where g.status = 'active'
+--   union all
+--   select g.id, c
+--   from public.games g
+--   join public.game_decks d on d.game_id = g.id
+--   cross join unnest(d.cards) as c
+--   where g.status = 'active'
+--   union all
+--   select g.id, g.starter_card
+--   from public.games g
+--   where g.status = 'active'
+--     and g.starter_card is not null
+-- )
+-- select t.code, g.hand_no, g.phase,
+--        count(*) as total,
+--        count(distinct c.card) as distinct_cards,
+--        (select coalesce(array_length(cr.cards, 1), 0)
+--           from public.game_cribs cr where cr.game_id = g.id) as crib_size,
+--        case
+--          when count(*) = 52 and count(distinct c.card) = 52
+--               and coalesce((select array_length(cr.cards, 1)
+--                               from public.game_cribs cr where cr.game_id = g.id), 0) in (0, 2, 4)
+--            then 'ok'
+--          else 'FAIL'
+--        end as check_result
+-- from cards c
+-- join public.games g on g.id = c.game_id
+-- join public.tables t on t.id = g.table_id
+-- group by t.code, g.id, g.hand_no, g.phase
+-- order by t.code;
+
+
+-- ---------------------------------------------------------------------------
+-- 4. THE NEXT-HAND WALK-THROUGH (rolled back).
+--
+-- SETUP: play a real hand at the test table all the way to phase 'done'
+-- (every count confirmed, crib included) and DON'T tap Next Hand -- the
+-- walk-through needs ready_by empty. Scores must be below 121 -- they will
+-- be, or the game would have ended. Then set v_code and run.
+--
+-- Updated for phase2-batch2b-ready-gate.sql: the pone taps first and is only
+-- marked ready (nothing dealt, hand_no unchanged), repeats quietly, and the
+-- DEALER's tap completes the set and deals.
+--
+-- Expected message:
+--   ALL 29 CHECKS PASSED (rolled back) ...
+-- (23 before the ready gate.)
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_game record;
+--   v_g record;
+--   v_pone uuid;
+--   v_dealer uuid;
+--   v_stranger uuid := gen_random_uuid();
+--   v_scores_before jsonb;
+--   v_scores_after jsonb;
+--   v_hands_after_deal jsonb;
+--   v_hands_after_stale jsonb;
+--   v_n int;
+--   v_msg text;
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select g.* into v_game
+--   from public.games g
+--   join public.tables t on t.id = g.table_id
+--   where t.code = v_code
+--     and g.status = 'active';
+--
+--   if not found then
+--     raise exception 'SETUP: no active game at table %.', v_code;
+--   end if;
+--   if v_game.phase <> 'done' then
+--     raise exception 'SETUP: the hand must be finished (phase done); found phase %.', v_game.phase;
+--   end if;
+--   if v_game.ready_by <> '{}' then
+--     raise exception 'SETUP: someone already tapped Next Hand (ready_by %). Use a fresh hand at done.', v_game.ready_by;
+--   end if;
+--
+--   v_dealer := v_game.dealer_id;
+--   v_pone := (select u from unnest(v_game.players) as u where u <> v_dealer limit 1);
+--
+--   -- Scores AND the whole tracker, both players, as one comparable value.
+--   select jsonb_agg(jsonb_build_array(tm.user_id, tm.score, tm.last_points, tm.last_reason, tm.last_awarded_at)
+--                    order by tm.user_id)
+--   into v_scores_before
+--   from public.table_members tm
+--   where tm.table_id = v_game.table_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--
+--   -- [N1] A stranger cannot deal.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%not a member%' then
+--     raise exception 'FAIL [N1] stranger next_hand: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== As the PONE -- the FIRST player to tap ===============================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--
+--   -- [N2] A hand number AHEAD of the game is an error.
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no + 1);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%has not been dealt yet%' then
+--     raise exception 'FAIL [N2] p_hand_no ahead: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N3] A null hand number is rejected.
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, null);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%p_hand_no is required%' then
+--     raise exception 'FAIL [N3] null p_hand_no: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- THE FIRST TAP (the pone). Must succeed, and must NOT deal.
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is not null then
+--     raise exception 'FAIL [G1] the first tap raised: %', v_msg;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   select * into v_g from public.games where id = v_game.id;
+--
+--   -- [G2] Nothing moved: same hand, still 'done', same dealer.
+--   if v_g.hand_no <> v_game.hand_no or v_g.phase <> 'done' or v_g.dealer_id is distinct from v_dealer then
+--     raise exception 'FAIL [G2] one tap changed the hand: hand_no %, phase %, dealer %.', v_g.hand_no, v_g.phase, v_g.dealer_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [G3] The pone -- and only the pone -- is ready.
+--   if v_g.ready_by is distinct from array[v_pone] then
+--     raise exception 'FAIL [G3] ready_by after the first tap is %, expected {%}.', v_g.ready_by, v_pone;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [G4] Nothing was dealt: the pone still reads their OLD four-card hand.
+--   select coalesce(max(array_length(cards, 1)), 0) into v_n
+--   from public.game_hands where game_id = v_game.id and user_id = v_pone;
+--   if v_n <> 4 then
+--     raise exception 'FAIL [G4] after one tap the pone holds % cards, expected the old 4.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [G5] The same player again: quiet...
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is not null then
+--     raise exception 'FAIL [G5] a repeat tap by the same player raised: %', v_msg;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [G6] ...and changes nothing: no duplicate in ready_by, no deal.
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.ready_by is distinct from array[v_pone] or v_g.hand_no <> v_game.hand_no or v_g.phase <> 'done' then
+--     raise exception 'FAIL [G6] a repeat tap changed state: ready_by %, hand_no %, phase %.', v_g.ready_by, v_g.hand_no, v_g.phase;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== THE SECOND TAP (the dealer) completes the set and DEALS ===============
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   perform public.next_hand(v_game.id, v_game.hand_no);
+--
+--   -- Back to the pone for the checks below, which read as the pone.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--
+--   select * into v_g from public.games where id = v_game.id;
+--
+--   -- [N4] hand_no moved on by exactly one.
+--   if v_g.hand_no <> v_game.hand_no + 1 then
+--     raise exception 'FAIL [N4] hand_no is %, expected %.', v_g.hand_no, v_game.hand_no + 1;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N5] The deal passed: the old pone deals.
+--   if v_g.dealer_id is distinct from v_pone then
+--     raise exception 'FAIL [N5] dealer is %, expected the old pone %.', v_g.dealer_id, v_pone;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N6] Every per-hand column is back at its start-of-hand value --
+--   -- ready_by included, so the next hand's gate starts empty.
+--   if v_g.phase <> 'discard' or v_g.discarded_by <> '{}' or v_g.starter_card is not null
+--      or v_g.current_player is not null or v_g.play_count <> 0 or v_g.play_segment <> 0
+--      or v_g.count_step <> 0 or v_g.revealed_by <> '{}' or v_g.crib_revealed
+--      or v_g.ready_by <> '{}' then
+--     raise exception 'FAIL [N6] not reset: phase %, discarded_by %, starter %, current_player %, count %, segment %, step %, revealed_by %, crib_revealed %, ready_by %.',
+--       v_g.phase, v_g.discarded_by, v_g.starter_card, v_g.current_player, v_g.play_count,
+--       v_g.play_segment, v_g.count_step, v_g.revealed_by, v_g.crib_revealed, v_g.ready_by;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N7] What persists: status, players, created_at (the match clock).
+--   if v_g.status <> 'active' or v_g.players is distinct from v_game.players
+--      or v_g.created_at is distinct from v_game.created_at or v_g.winner_id is not null then
+--     raise exception 'FAIL [N7] match-level columns changed: status %, players %, created_at %, winner %.',
+--       v_g.status, v_g.players, v_g.created_at, v_g.winner_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N8] Scores and the tracker are untouched -- next_hand awards nothing.
+--   select jsonb_agg(jsonb_build_array(tm.user_id, tm.score, tm.last_points, tm.last_reason, tm.last_awarded_at)
+--                    order by tm.user_id)
+--   into v_scores_after
+--   from public.table_members tm
+--   where tm.table_id = v_game.table_id;
+--   if v_scores_after is distinct from v_scores_before then
+--     raise exception 'FAIL [N8] scores/tracker changed: before %, after %.', v_scores_before, v_scores_after;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N9] PRIVACY: the pone reads exactly one hand -- their own -- of 6 cards.
+--   -- revealed_by was cleared in the same transaction as the deal.
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id;
+--   if v_n <> 1 then
+--     raise exception 'FAIL [N9a] the pone can read % hands in the new deal, expected only their own.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--   select coalesce(max(array_length(cards, 1)), 0) into v_n
+--   from public.game_hands where game_id = v_game.id and user_id = v_pone;
+--   if v_n <> 6 then
+--     raise exception 'FAIL [N9b] the pone''s new hand has % cards.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N10] No crib is readable (none exists yet).
+--   select count(*) into v_n from public.game_cribs where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [N10] a crib is readable in the new hand.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N11] Same for the dealer: own hand only.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id;
+--   if v_n <> 1 then
+--     raise exception 'FAIL [N11] the old dealer can read % hands in the new deal.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ---- As the owner: what no player can read --------------------------------
+--   execute 'reset role';
+--
+--   -- [N12] The old hand is gone: no plays, no crib.
+--   select count(*) into v_n from public.game_plays where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [N12a] % play rows survived next_hand.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select count(*) into v_n from public.game_cribs where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [N12b] a crib row survived next_hand.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N13] Two 6-card hands and a 40-card deck...
+--   select count(*) into v_n from public.game_hands
+--   where game_id = v_game.id and array_length(cards, 1) = 6;
+--   if v_n <> 2 then raise exception 'FAIL [N13a] % six-card hands, expected 2.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select coalesce(max(array_length(cards, 1)), 0) into v_n from public.game_decks where game_id = v_game.id;
+--   if v_n <> 40 then raise exception 'FAIL [N13b] the deck has % cards, expected 40.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N14] ...holding 52 DIFFERENT cards.
+--   select count(distinct c) into v_n
+--   from (
+--     select unnest(cards) as c from public.game_hands where game_id = v_game.id
+--     union all
+--     select unnest(cards) from public.game_decks where game_id = v_game.id
+--   ) x;
+--   if v_n <> 52 then raise exception 'FAIL [N14] % distinct cards across hands and deck, expected 52.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- Snapshot the new deal, to prove a stale tap does not redeal it.
+--   select jsonb_agg(jsonb_build_array(user_id, cards) order by user_id)
+--   into v_hands_after_deal
+--   from public.game_hands where game_id = v_game.id;
+--
+--   -- ---- Back to a player: the stale second tap -------------------------------
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--
+--   -- [N15] The OLD hand number again -- the other player's "simultaneous" tap,
+--   -- arriving after the first committed. Must be quiet.
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is not null then
+--     raise exception 'FAIL [N15] a stale next_hand raised: %', v_msg;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N16] ...and changed nothing: same hand_no, same dealer.
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.hand_no <> v_game.hand_no + 1 or v_g.dealer_id is distinct from v_pone then
+--     raise exception 'FAIL [N16] after a stale tap: hand_no %, dealer %.', v_g.hand_no, v_g.dealer_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N17] The current hand number in the wrong phase is refused.
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no + 1);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%not finished yet%' then
+--     raise exception 'FAIL [N17] next_hand during discard: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N18] The stale tap did not redeal: identical cards.
+--   execute 'reset role';
+--   select jsonb_agg(jsonb_build_array(user_id, cards) order by user_id)
+--   into v_hands_after_stale
+--   from public.game_hands where game_id = v_game.id;
+--   if v_hands_after_stale is distinct from v_hands_after_deal then
+--     raise exception 'FAIL [N18] the hands changed after a stale next_hand -- it dealt twice.';
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N19] His heels cannot carry over: no starter, and the dealer's score
+--   -- is exactly what it was (N8 covered every score; this names the case).
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.starter_card is not null then
+--     raise exception 'FAIL [N19] the new hand already has a starter, %.', v_g.starter_card;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N20] An ended game cannot be dealt on.
+--   update public.games set status = 'ended', ended_reason = 'player_left' where id = v_game.id;
+--   execute 'set local role authenticated';
+--   v_msg := null;
+--   begin perform public.next_hand(v_game.id, v_game.hand_no + 1);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%no longer active%' then
+--     raise exception 'FAIL [N20] next_hand on an ended game: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Hand % -> %, dealer -> %.',
+--     v_checks, v_game.hand_no, v_game.hand_no + 1, v_pone;
+-- end $$;
+
+
+-- ---------------------------------------------------------------------------
+-- 5. THE NEW-GAME WALK-THROUGH (rolled back).
+--
+-- SETUP: any table with EXACTLY 2 members that has had at least one game,
+-- live or ended, in any state. The block first ends whatever is live, as the
+-- owner, and rewrites the latest game's ending for each case -- all rolled
+-- back afterwards.
+--
+-- Three cases, in order:
+--   A. previous game WON by the first-joined player, same roster
+--        -> 'active', the LOSER deals, dealt at once, scores and tracker reset
+--      ...then a second, "simultaneous" New Game must return the same game
+--        and must NOT reset a score scored in the meantime
+--   B. previous game ended by TIMEOUT
+--        -> 'cutting', no dealer, nothing dealt, scores reset
+--   C. previous game WON, but by a roster that differs from the current one
+--        -> 'cutting'
+--
+-- Expected message:
+--   ALL 15 CHECKS PASSED (rolled back) ...
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_table_id uuid;
+--   v_p1 uuid;
+--   v_p2 uuid;
+--   v_last uuid;
+--   v_game_id uuid;
+--   v_again uuid;
+--   v_g record;
+--   v_n int;
+--   v_score int;
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select t.id into v_table_id from public.tables t where t.code = v_code and t.status = 'open';
+--   if v_table_id is null then
+--     raise exception 'SETUP: no open table %.', v_code;
+--   end if;
+--
+--   select count(*) into v_n from public.table_members where table_id = v_table_id;
+--   if v_n <> 2 then
+--     raise exception 'SETUP: the table needs exactly 2 members (has %).', v_n;
+--   end if;
+--
+--   select user_id into v_p1 from public.table_members where table_id = v_table_id order by joined_at limit 1;
+--   select user_id into v_p2 from public.table_members where table_id = v_table_id order by joined_at offset 1 limit 1;
+--
+--   select g.id into v_last from public.games g where g.table_id = v_table_id order by g.created_at desc limit 1;
+--   if v_last is null then
+--     raise exception 'SETUP: the table has never had a game. Start one first.';
+--   end if;
+--
+--   -- ==== CASE A: a won match, same roster ======================================
+--   -- p1 won. Mark the latest game so, whatever state it was in.
+--   update public.games
+--   set status = 'ended', ended_reason = 'won', winner_id = v_p1,
+--       players = array[v_p1, v_p2]
+--   where id = v_last;
+--
+--   update public.table_members
+--   set score = case when user_id = v_p1 then 121 else 87 end,
+--       last_points = 2, last_reason = 'his heels', last_awarded_at = now()
+--   where table_id = v_table_id;
+--
+--   -- The WINNER taps New Game (either player can; the loser still deals).
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   v_game_id := public.start_game_with_deal(v_table_id);
+--
+--   select * into v_g from public.games where id = v_game_id;
+--
+--   -- [GA1] Straight to 'active' -- no cut.
+--   if v_g.status <> 'active' then
+--     raise exception 'FAIL [GA1] after a won match, status is %, expected active.', v_g.status;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA2] The LOSER deals.
+--   if v_g.dealer_id is distinct from v_p2 then
+--     raise exception 'FAIL [GA2] dealer is %, expected the loser %.', v_g.dealer_id, v_p2;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA3] Exactly the post-cut state: hand 1, discard, nothing played, no
+--   -- starter, nothing shown, no cut history.
+--   if v_g.hand_no <> 1 or v_g.phase <> 'discard' or v_g.discarded_by <> '{}'
+--      or v_g.starter_card is not null or v_g.current_player is not null
+--      or v_g.play_count <> 0 or v_g.play_segment <> 0 or v_g.count_step <> 0
+--      or v_g.revealed_by <> '{}' or v_g.crib_revealed or v_g.winner_id is not null
+--      or v_g.deal_cut is not null or v_g.deal_cut_ack_by <> '{}' then
+--     raise exception 'FAIL [GA3] the new game is not in the post-cut state: %', row_to_json(v_g);
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA4] Both scores 0, the tracker cleared.
+--   select count(*) into v_n from public.table_members
+--   where table_id = v_table_id
+--     and score = 0 and last_points is null and last_reason is null and last_awarded_at is null;
+--   if v_n <> 2 then
+--     raise exception 'FAIL [GA4] % of 2 members were reset.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA5] Dealt at once: the caller holds 6 cards.
+--   select coalesce(max(array_length(cards, 1)), 0) into v_n
+--   from public.game_hands where game_id = v_game_id and user_id = v_p1;
+--   if v_n <> 6 then
+--     raise exception 'FAIL [GA5] the caller holds % cards in the new game, expected 6.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA6] As the owner: two hands and a 40-card deck.
+--   execute 'reset role';
+--   select count(*) into v_n from public.game_hands where game_id = v_game_id and array_length(cards, 1) = 6;
+--   if v_n <> 2 then raise exception 'FAIL [GA6a] % six-card hands, expected 2.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select coalesce(max(array_length(cards, 1)), 0) into v_n from public.game_decks where game_id = v_game_id;
+--   if v_n <> 40 then raise exception 'FAIL [GA6b] the deck has % cards, expected 40.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- THE RACING SECOND CLICK. A point gets scored in the new game, then the
+--   -- other player's New Game -- which lost the race -- lands.
+--   update public.table_members set score = 5 where table_id = v_table_id and user_id = v_p1;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_again := public.start_game_with_deal(v_table_id);
+--
+--   -- [GA7] It is handed the SAME game...
+--   if v_again is distinct from v_game_id then
+--     raise exception 'FAIL [GA7] the second New Game returned %, expected the live game %.', v_again, v_game_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA8] ...and does NOT reset the score scored meanwhile.
+--   select score into v_score from public.table_members where table_id = v_table_id and user_id = v_p1;
+--   if v_score <> 5 then
+--     raise exception 'FAIL [GA8] the losing New Game reset a live score: 5 became %.', v_score;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GA9] ...and did not deal again: still exactly the two hands.
+--   execute 'reset role';
+--   select count(*) into v_n from public.game_hands where game_id = v_game_id;
+--   if v_n <> 2 then
+--     raise exception 'FAIL [GA9] % hand rows after the second New Game, expected 2.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== CASE B: the previous game ended by TIMEOUT ============================
+--   update public.games set status = 'ended', ended_reason = 'timeout' where id = v_game_id;
+--   update public.table_members
+--   set score = 40, last_points = 1, last_reason = 'go', last_awarded_at = now()
+--   where table_id = v_table_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--   v_game_id := public.start_game_with_deal(v_table_id);
+--   select * into v_g from public.games where id = v_game_id;
+--
+--   -- [GB1] No decisive result -> cut for deal: 'cutting', no dealer, one
+--   -- empty cut round.
+--   if v_g.status <> 'cutting' or v_g.dealer_id is not null
+--      or v_g.deal_cut is distinct from '[[]]'::jsonb then
+--     raise exception 'FAIL [GB1] after a timeout: status %, dealer %, deal_cut %.', v_g.status, v_g.dealer_id, v_g.deal_cut;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GB2] The cut path resets scores too.
+--   select count(*) into v_n from public.table_members
+--   where table_id = v_table_id
+--     and score = 0 and last_points is null and last_reason is null and last_awarded_at is null;
+--   if v_n <> 2 then
+--     raise exception 'FAIL [GB2] % of 2 members were reset on the cut path.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [GB3] Nothing is dealt until the cut resolves.
+--   execute 'reset role';
+--   select count(*) into v_n from public.game_hands where game_id = v_game_id;
+--   if v_n <> 0 then raise exception 'FAIL [GB3a] % hands dealt before the cut.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select count(*) into v_n from public.game_decks where game_id = v_game_id;
+--   if v_n <> 0 then raise exception 'FAIL [GB3b] a deck exists before the cut.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== CASE C: a WON match, but not between these two players ================
+--   -- A random uuid stands in for a player who has since been replaced.
+--   -- players is a plain uuid[] (no foreign key), so this needs no real user.
+--   -- now() is frozen inside a DO block, so without the created_at bump the "most recent game" lookup ties.
+--   update public.games
+--   set status = 'ended', ended_reason = 'won', winner_id = v_p1,
+--       players = array[v_p1, gen_random_uuid()],
+--       created_at = now() + interval '1 minute'
+--   where id = v_game_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_game_id := public.start_game_with_deal(v_table_id);
+--   select * into v_g from public.games where id = v_game_id;
+--
+--   -- [GC1] Changed roster -> cut, even though the last match was won.
+--   if v_g.status <> 'cutting' or v_g.dealer_id is not null then
+--     raise exception 'FAIL [GC1] after a won match with a different roster: status %, dealer %.', v_g.status, v_g.dealer_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Loser % dealt case A.', v_checks, v_p2;
+-- end $$;
