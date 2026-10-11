@@ -34,19 +34,9 @@ awarded, or the order of steps. It is not in `score_hand`.
 1. Two browsers (or one plus an incognito window), signed in as two
    different accounts.
 2. Both at the test table. Keep the SQL Editor open in a third tab.
-3. **Run `testing-force-near-win.sql` query B on the test table** before each
-   round of testing, and again after every win (see the known gaps below).
-
-### Known gaps in 2a — not bugs
-
-- **`done` is a dead end.** After the crib is confirmed, the hand stays on
-  screen with nothing to tap. There is no Next Hand until 2b, and New Game is
-  blocked because the game is still live. To move on, a player taps **Leave**
-  (which ends the game for both) and rejoins the table.
-- **New Game after a win does not reset scores.** That is 2b's change to
-  `start_game_with_deal`. Until then the winner is still on 121, so the very
-  first award of the next game ends it again. Run query B before starting a
-  new game.
+3. Since Batch 2b, New Game resets both scores itself, and **Next Hand**
+   moves on from `done`. `testing-force-near-win.sql` query B is only needed
+   to undo a forced score between scenarios within one game.
 
 ---
 
