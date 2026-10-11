@@ -6,6 +6,7 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { cardPlayValue, sortHand } from "@/lib/cards";
+import { scoreHand, type HandScore } from "@/lib/scoring";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
 import { PlayerScore } from "@/components/PlayerScore";
@@ -70,13 +71,49 @@ type Game = {
   current_player: string | null;
   play_count: number;
   play_segment: number;
+  // Which count is up: 0 = the pone's hand, 1 = the dealer's hand, 2 = the
+  // crib. Stays at 2 once phase reaches 'done'. current_player always names
+  // who acts at this step, so the UI never derives turn order itself.
+  count_step: number;
+  // Whose hands are shown. The ONLY record of visibility: the game_hands read
+  // policy checks it, and it arrives on this broadcast, so a change here is
+  // the signal to refetch whatever hands we're now allowed to read.
+  revealed_by: string[];
+  crib_revealed: boolean;
+  // Set in the same statement that ends the game with ended_reason 'won'.
+  winner_id: string | null;
 };
 
 // Must stay a single string LITERAL, not a concatenation: supabase-js infers
 // the returned row shape from this exact literal type, and "a" + "b" widens to
 // plain `string`, which silently collapses the result type to an error type.
 const GAME_COLUMNS =
-  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment";
+  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id";
+
+// The last game to end in a win, kept after the live game is gone so the
+// result stays on screen (and survives a reload) until the next game starts.
+type FinishedGame = { id: string; winner_id: string | null };
+
+// Mirrors the reason confirm_count writes ("15s 4 · pairs 2 · runs 3"), so the
+// breakdown next to a counted hand reads the same as the score-tracker flash.
+// Display only -- the points that count are awarded by the server.
+function formatBreakdown(score: HandScore) {
+  const parts = [
+    score.fifteens > 0 && `15s ${score.fifteens}`,
+    score.pairs > 0 && `pairs ${score.pairs}`,
+    score.runs > 0 && `runs ${score.runs}`,
+    score.flush > 0 && `flush ${score.flush}`,
+    score.nobs > 0 && `nobs ${score.nobs}`,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "nothing";
+}
+
+// The key for "has visibility changed?" -- compared on every games UPDATE so
+// hands and the crib are refetched only when a reveal actually happened, not
+// on every unrelated broadcast.
+function revealKey(revealedBy: string[] | null | undefined, cribRevealed: boolean | null | undefined) {
+  return `${(revealedBy ?? []).join(",")}|${cribRevealed ? 1 : 0}`;
+}
 
 // A game is "live" while it is either cutting for deal or actually being
 // played. Both block a second game at the table, and both must be found by the
@@ -136,6 +173,18 @@ export default function TablePage() {
   // game silently evaporating is exactly the kind of mystery the PRD's UX
   // section objects to.
   const [gameEndedNotice, setGameEndedNotice] = useState<string | null>(null);
+  // Every hand this player may currently read, keyed by owner: always their
+  // own, plus any shown at the table. RLS does the filtering; whatever comes
+  // back is by definition allowed.
+  const [revealedHands, setRevealedHands] = useState<Record<string, string[]>>({});
+  // Null until the dealer shows it -- before that, RLS returns no row at all.
+  const [cribCards, setCribCards] = useState<string[] | null>(null);
+  const [countStatus, setCountStatus] = useState<"idle" | "sending" | "error">("idle");
+  const [countMessage, setCountMessage] = useState<string | null>(null);
+  const [finishedGame, setFinishedGame] = useState<FinishedGame | null>(null);
+  // The revealKey last fetched for. A ref for the same reason as
+  // lastGameStatusRef: it's read inside the realtime handler.
+  const revealKeyRef = useRef<string | null>(null);
   // The last game status this client processed. Used to spot the exact
   // cutting -> active moment (when cards come into existence) from inside the
   // realtime handler. A ref rather than state because reading it from a state
@@ -154,14 +203,22 @@ export default function TablePage() {
     });
   }, []);
 
-  // Fetches this player's own hand. RLS on game_hands means this can only ever
-  // return our own row -- asking for someone else's returns zero rows, so there
-  // is no filtering to do here on the client.
+  // Fetches this player's own hand.
+  //
+  // Filtered by user_id as well as game_id. Until Batch 2a, RLS meant a
+  // game_id filter alone could only ever return our own row. Now a SHOWN hand
+  // is readable too, so without the user_id filter this would get two rows
+  // during counting and maybeSingle() would fail.
   const fetchMyHand = useCallback(async (gameId: string) => {
+    const { data: auth } = await supabase.auth.getSession();
+    const myId = auth.session?.user.id;
+    if (!myId) return;
+
     const { data } = await supabase
       .from("game_hands")
       .select("cards")
       .eq("game_id", gameId)
+      .eq("user_id", myId)
       .maybeSingle();
 
     // NOTE: from the discard onwards this array is IMMUTABLE -- it is the four
@@ -184,6 +241,27 @@ export default function TablePage() {
       .order("seq", { ascending: true });
 
     setPlays((data as PlayEvent[]) ?? []);
+  }, []);
+
+  // Fetches every hand and the crib this player is allowed to see. No
+  // filtering by owner here: the read policies return our own hand plus any
+  // shown at this table, and the crib only once it's been shown. Neither
+  // table is in the Realtime publication -- the games broadcast (revealed_by,
+  // crib_revealed) is what says when to call this.
+  const fetchRevealed = useCallback(async (gameId: string) => {
+    const [{ data: handRows }, { data: cribRow }] = await Promise.all([
+      supabase.from("game_hands").select("user_id, cards").eq("game_id", gameId),
+      supabase.from("game_cribs").select("cards").eq("game_id", gameId).maybeSingle(),
+    ]);
+
+    setRevealedHands(Object.fromEntries((handRows ?? []).map((r) => [r.user_id, r.cards])));
+    setCribCards(cribRow?.cards ?? null);
+  }, []);
+
+  const clearRevealed = useCallback(() => {
+    setRevealedHands({});
+    setCribCards(null);
+    revealKeyRef.current = null;
   }, []);
 
   // Fetches the current active game + full roster for a table. Used both for
@@ -210,6 +288,39 @@ export default function TablePage() {
     } else {
       setMyHand([]);
       setPlays([]);
+    }
+
+    // Shown hands and the crib only exist from counting on.
+    if (
+      existingGame &&
+      existingGame.status === "active" &&
+      (existingGame.phase === "counting" || existingGame.phase === "done")
+    ) {
+      revealKeyRef.current = revealKey(existingGame.revealed_by, existingGame.crib_revealed);
+      await fetchRevealed(existingGame.id);
+    } else {
+      clearRevealed();
+    }
+
+    // The result of the last game, if it was won -- so a reload, or a player
+    // who reconnects after the winning point, still sees who won. Only while
+    // no game is live: once the next one starts, the old result is history.
+    if (existingGame) {
+      setFinishedGame(null);
+    } else {
+      const { data: lastGame } = await supabase
+        .from("games")
+        .select("id, ended_reason, winner_id")
+        .eq("table_id", tableId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      setFinishedGame(
+        lastGame && lastGame.ended_reason === "won"
+          ? { id: lastGame.id, winner_id: lastGame.winner_id }
+          : null
+      );
     }
 
     const { data: memberRows, error: membersError } = await supabase
@@ -242,7 +353,7 @@ export default function TablePage() {
         last_awarded_at: m.last_awarded_at,
       }))
     );
-  }, [fetchMyHand, fetchPlays]);
+  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed]);
 
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
@@ -309,6 +420,7 @@ export default function TablePage() {
     setGameStatus("creating");
     setGameMessage(null);
     setGameEndedNotice(null);
+    setFinishedGame(null);
 
     const { error: rpcError } = await supabase.rpc("start_game_with_deal", {
       p_table_id: table.id,
@@ -413,6 +525,48 @@ export default function TablePage() {
 
     if (table) await refreshTableState(table.id);
     setPlayStatus("idle");
+  }
+
+  // The three counting actions share one status line. Each is one locked RPC;
+  // the server decides everything, including the points -- the client only
+  // ever says which game, and for Confirm Count, which step it is looking at.
+  async function runCountAction(rpc: () => PromiseLike<{ error: { message: string } | null }>) {
+    setCountStatus("sending");
+    setCountMessage(null);
+
+    const { error: rpcError } = await rpc();
+
+    if (rpcError) {
+      setCountStatus("error");
+      setCountMessage(rpcError.message);
+      return;
+    }
+
+    if (table) await refreshTableState(table.id);
+    setCountStatus("idle");
+  }
+
+  function handleShowHand() {
+    if (!activeGame) return;
+    const gameId = activeGame.id;
+    return runCountAction(() => supabase.rpc("show_hand", { p_game_id: gameId }));
+  }
+
+  function handleShowCrib() {
+    if (!activeGame) return;
+    const gameId = activeGame.id;
+    return runCountAction(() => supabase.rpc("show_crib", { p_game_id: gameId }));
+  }
+
+  // p_step is the step THIS screen is showing. If the server has already moved
+  // past it (a double tap, a second tab) the call returns quietly instead of
+  // scoring twice; a step ahead of the server is rejected.
+  function handleConfirmCount(step: number) {
+    if (!activeGame) return;
+    const gameId = activeGame.id;
+    return runCountAction(() =>
+      supabase.rpc("confirm_count", { p_game_id: gameId, p_step: step })
+    );
   }
 
   function toggleCardSelection(card: string) {
@@ -626,6 +780,10 @@ export default function TablePage() {
             current_player: string | null;
             play_count: number | null;
             play_segment: number | null;
+            count_step: number | null;
+            revealed_by: string[] | null;
+            crib_revealed: boolean | null;
+            winner_id: string | null;
           };
           // A new game now arrives as EITHER 'cutting' (first game at the
           // table -- no cards yet) or 'active' (deal alternated, dealt at once).
@@ -644,11 +802,17 @@ export default function TablePage() {
               current_player: newGame.current_player,
               play_count: newGame.play_count ?? 0,
               play_segment: newGame.play_segment ?? 0,
+              count_step: newGame.count_step ?? 0,
+              revealed_by: newGame.revealed_by ?? [],
+              crib_revealed: newGame.crib_revealed ?? false,
+              winner_id: newGame.winner_id,
             });
             lastGameStatusRef.current = newGame.status;
             setHandSorted(false); // genuinely new hand -- show it as dealt
             setGameEndedNotice(null); // stale once a fresh game is under way
+            setFinishedGame(null); // likewise the last game's result
             setPlays([]); // a fresh game has no play history
+            clearRevealed(); // nothing is shown in a fresh game
             // Only fetch a hand if one can exist. During 'cutting' there are no
             // cards at all, which is the whole point of the phase.
             if (newGame.status === "active") fetchMyHand(newGame.id);
@@ -678,18 +842,35 @@ export default function TablePage() {
             current_player: string | null;
             play_count: number | null;
             play_segment: number | null;
+            count_step: number | null;
+            revealed_by: string[] | null;
+            crib_revealed: boolean | null;
+            winner_id: string | null;
           };
           const previousStatus = lastGameStatusRef.current;
           lastGameStatusRef.current = updatedGame.status;
 
-          // Ended, by an admin force-end, a departing player, or the timeout.
-          // 'cutting' is now a LIVE status, so this check can no longer be
-          // "not active" -- that would treat every cut as an ended game.
+          // STATUS BEFORE PHASE. An ended game can carry any phase -- a win on
+          // his heels leaves phase 'play', a win mid-count leaves 'counting' --
+          // so nothing below may look at phase until status has said the game
+          // is still live.
+          //
+          // Ended, by a win, an admin force-end, a departing player, or the
+          // timeout. 'cutting' is a LIVE status, so this check can't be "not
+          // active" -- that would treat every cut as an ended game.
           if (!LIVE_GAME_STATUSES.includes(updatedGame.status)) {
             setActiveGame(null);
             setMyHand([]);
             setSelectedCards([]);
+            clearRevealed();
+            setCountStatus("idle");
+            setCountMessage(null);
             lastGameStatusRef.current = null;
+            if (updatedGame.ended_reason === "won") {
+              // The winner and final scores render from this plus the
+              // roster, whose 121 arrives on its own table_members UPDATE.
+              setFinishedGame({ id: updatedGame.id, winner_id: updatedGame.winner_id });
+            }
             // Deliberately doesn't name the leaver: the roster DELETE arrives
             // as a separate event with no ordering guarantee, so building the
             // name in here would race. The roster visibly updating alongside
@@ -726,9 +907,27 @@ export default function TablePage() {
                   current_player: updatedGame.current_player,
                   play_count: updatedGame.play_count ?? 0,
                   play_segment: updatedGame.play_segment ?? 0,
+                  count_step: updatedGame.count_step ?? 0,
+                  revealed_by: updatedGame.revealed_by ?? [],
+                  crib_revealed: updatedGame.crib_revealed ?? false,
+                  winner_id: updatedGame.winner_id,
                 }
               : current
           );
+
+          // A hand or the crib was just shown -- by us or by the other player.
+          // The cards themselves never ride this broadcast (game_hands and
+          // game_cribs aren't in the publication); this only says "look again",
+          // and the read policies decide what that fetch returns.
+          // Only from counting on, which is the only time anything can be shown.
+          const key = revealKey(updatedGame.revealed_by, updatedGame.crib_revealed);
+          if (
+            (updatedGame.phase === "counting" || updatedGame.phase === "done") &&
+            key !== revealKeyRef.current
+          ) {
+            revealKeyRef.current = key;
+            fetchRevealed(updatedGame.id);
+          }
 
           // The exact moment cards come into existence: the OTHER player's
           // acknowledgement dealt them, and this broadcast is how we find out.
@@ -776,7 +975,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, refreshTableState, fetchMyHand]);
+  }, [table, refreshTableState, fetchMyHand, fetchRevealed, clearRevealed]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
   // update, so this is a legitimate effect rather than a cascading render.
@@ -868,6 +1067,67 @@ export default function TablePage() {
   // the deal, are created straight into 'active', and never enter this.
   const isCutting = activeGame?.status === "cutting";
 
+  // COUNTING. activeGame only ever holds a LIVE game (the realtime handler
+  // drops it the moment status leaves cutting/active), so every phase check
+  // below already sits behind a status check.
+  const isDone = Boolean(activeGame) && phase === "done";
+  const isCountingOrDone = isCounting || isDone;
+  const countStep = activeGame?.count_step ?? 0;
+  const revealedBy = activeGame?.revealed_by ?? [];
+  const cribRevealed = activeGame?.crib_revealed ?? false;
+  const starterCard = activeGame?.starter_card ?? null;
+  const counter = members.find((m) => m.user_id === activeGame?.current_player);
+  const iAmCounter = isCounting && activeGame?.current_player === session.user.id;
+  const iHaveShown = revealedBy.includes(session.user.id);
+  // At the crib step Confirm Count stays disabled until the crib is shown --
+  // confirm_count refuses it anyway; this just makes the order visible.
+  const canConfirm = iAmCounter && (countStep < 2 || cribRevealed);
+  const countBusy = countStatus === "sending";
+
+  // Whether a hand has been confirmed: the pone's at step 0, the dealer's at
+  // step 1, so it's "counted" once count_step has moved past it. Used only to
+  // decide when to show the breakdown -- before the confirm, the player counts
+  // out loud themselves rather than reading the answer off the screen.
+  function handCounted(userId: string) {
+    if (isDone) return true;
+    if (!isCounting) return false;
+    return userId === activeGame?.dealer_id ? countStep >= 2 : countStep >= 1;
+  }
+
+  // Display-only, from lib/scoring.ts. The awarded points come from
+  // confirm_count on the server; this mirrors them so a player can see why.
+  function breakdownFor(cards: string[], isCrib: boolean) {
+    if (!starterCard || cards.length !== CARDS_AFTER_DISCARD) return null;
+    const score = scoreHand(cards, starterCard, isCrib);
+    return `${score.points} — ${formatBreakdown(score)}`;
+  }
+
+  let countingHeadline = "";
+  let countingHint = "";
+  if (isDone) {
+    countingHeadline = "Every hand and the crib are counted.";
+    countingHint = "Dealing the next hand arrives in the next update.";
+  } else if (isCounting && countStep < 2) {
+    countingHeadline = iAmCounter
+      ? "Your count"
+      : `${displayName(counter)} is counting their hand`;
+    countingHint = iAmCounter
+      ? "Count your hand out loud, then Confirm Count."
+      : "Waiting for them to count out loud and confirm.";
+  } else if (isCounting) {
+    if (!cribRevealed) {
+      countingHeadline = iAmDealer ? "Your crib" : `${displayName(dealer)} is about to show the crib`;
+      countingHint = iAmDealer
+        ? "Show the crib, count it out loud, then Confirm Count."
+        : "The crib is shown after both hands are counted.";
+    } else {
+      countingHeadline = iAmDealer ? "Your crib" : `${displayName(dealer)} is counting the crib`;
+      countingHint = iAmDealer ? "Count the crib out loud, then Confirm Count." : "";
+    }
+  }
+
+  const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
+
   // Derived from discarded_by rather than mirroring our own hand length: once
   // you discard and your opponent hasn't, mirroring would show 4 cards for a
   // player still holding 6. Hand sizes are public knowledge from the rules, so
@@ -881,7 +1141,7 @@ export default function TablePage() {
       const played = plays.filter((p) => p.kind === "play" && p.user_id === opponentId).length;
       return Math.max(CARDS_AFTER_DISCARD - played, 0);
     }
-    if (isCounting) return CARDS_AFTER_DISCARD;
+    if (isCountingOrDone) return CARDS_AFTER_DISCARD;
     return discardedBy.includes(opponentId) ? CARDS_AFTER_DISCARD : CARDS_DEALT;
   }
 
@@ -957,13 +1217,26 @@ export default function TablePage() {
         {opponents.length === 0 ? (
           <p className="text-sm text-zinc-500">Waiting for another player to join...</p>
         ) : (
-          opponents.map((opponent) => (
+          opponents.map((opponent) => {
+            // Face-up once they've shown it -- by Show Hand, or by confirming
+            // their count, which reveals it automatically. Gated on revealed_by
+            // as well as the fetch, so a hand from a stale fetch can't linger.
+            const shownCards = revealedBy.includes(opponent.user_id)
+              ? revealedHands[opponent.user_id]
+              : undefined;
+            const breakdown =
+              shownCards && handCounted(opponent.user_id) ? breakdownFor(shownCards, false) : null;
+
+            return (
             <div key={opponent.user_id} className="flex w-full max-w-xs flex-col items-center gap-2">
               <div className="flex w-full gap-1">
-                {Array.from({ length: opponentCardCount(opponent.user_id) }).map((_, i) => (
-                  <FaceDownCard key={i} />
-                ))}
+                {shownCards
+                  ? shownCards.map((card) => <PlayingCard key={card} card={card} />)
+                  : Array.from({ length: opponentCardCount(opponent.user_id) }).map((_, i) => (
+                      <FaceDownCard key={i} />
+                    ))}
               </div>
+              {breakdown && <p className="text-xs text-zinc-500">Hand: {breakdown}</p>}
               <p className="flex items-baseline gap-2 text-sm font-medium">
                 <span>
                   {displayName(opponent)}
@@ -979,7 +1252,8 @@ export default function TablePage() {
                 />
               </p>
             </div>
-          ))
+            );
+          })
         )}
       </section>
 
@@ -994,16 +1268,27 @@ export default function TablePage() {
                     Both shrink once play starts, to leave room for the run. */}
                 <div className="flex items-end justify-center gap-6">
                   <div className="flex flex-col items-center gap-1">
-                    {/* Face-down for EVERYONE, dealer included -- game_cribs has no
-                        read policy at all until the counting-phase reveal slice. */}
-                    <div className={`flex gap-1 ${isPlaying || isCounting ? "w-20" : "w-32"}`}>
-                      {Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
-                        <FaceDownCard key={i} />
-                      ))}
+                    {/* Face-down for EVERYONE, dealer included, until the dealer
+                        taps Show Crib -- before that the read policy returns no
+                        row at all, so there is nothing to show even if we tried.
+                        Wider once face-up so the cards are readable. */}
+                    <div
+                      className={`flex gap-1 ${
+                        cribCards ? "w-40" : isPlaying || isCountingOrDone ? "w-20" : "w-32"
+                      }`}
+                    >
+                      {cribCards
+                        ? cribCards.map((card) => <PlayingCard key={card} card={card} />)
+                        : Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
+                            <FaceDownCard key={i} />
+                          ))}
                     </div>
                     <p className="text-xs font-medium">
                       {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
                     </p>
+                    {cribCards && isDone && (
+                      <p className="text-xs text-zinc-500">{breakdownFor(cribCards, true)}</p>
+                    )}
                   </div>
 
                   {/* The one card everybody is meant to be looking at. Absent
@@ -1011,7 +1296,7 @@ export default function TablePage() {
                       starter UPDATE arriving. */}
                   {activeGame.starter_card && (
                     <div className="flex flex-col items-center gap-1">
-                      <div className={`flex gap-1 ${isPlaying || isCounting ? "w-12" : "w-16"}`}>
+                      <div className={`flex gap-1 ${isPlaying || isCountingOrDone ? "w-12" : "w-16"}`}>
                         <PlayingCard card={activeGame.starter_card} />
                       </div>
                       <p className="text-xs font-medium">Starter</p>
@@ -1030,12 +1315,38 @@ export default function TablePage() {
                   />
                 )}
 
-                {isCounting && (
-                  <p className="rounded border border-zinc-400 px-4 py-2 text-center text-sm dark:border-zinc-600">
-                    All eight cards played — pegging is over.
-                    <br />
-                    <span className="text-zinc-500">Counting is the next slice.</span>
-                  </p>
+                {/* THE COUNTING BANNER. Order is fixed by the server: the pone's
+                    hand, the dealer's hand, then the crib. Confirm Count is
+                    shown to everyone but only enabled for whoever's count is up
+                    (PRD Section 8), so it's obvious whose turn it is. */}
+                {isCountingOrDone && (
+                  <div className="flex flex-col items-center gap-2 rounded border border-zinc-400 px-4 py-3 text-center dark:border-zinc-600">
+                    <p className="text-sm font-medium">{countingHeadline}</p>
+                    {countingHint && <p className="text-xs text-zinc-500">{countingHint}</p>}
+                    {isCounting && (
+                      <div className="flex gap-2">
+                        {countStep === 2 && iAmDealer && !cribRevealed && (
+                          <button
+                            onClick={handleShowCrib}
+                            disabled={countBusy}
+                            className="rounded border border-zinc-400 px-4 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+                          >
+                            Show Crib
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleConfirmCount(countStep)}
+                          disabled={!canConfirm || countBusy}
+                          className="rounded bg-foreground px-4 py-1.5 text-sm font-medium text-background disabled:opacity-40"
+                        >
+                          {countBusy && canConfirm ? "Confirming..." : "Confirm Count"}
+                        </button>
+                      </div>
+                    )}
+                    {countStatus === "error" && countMessage && (
+                      <p className="text-sm text-red-600">{countMessage}</p>
+                    )}
+                  </div>
                 )}
               </>
             ) : iHaveDiscarded ? (
@@ -1050,6 +1361,35 @@ export default function TablePage() {
           </>
         ) : (
           <>
+            {/* THE RESULT. Shown once a game has ended by a win and nothing
+                has replaced it -- a reload or a late reconnect finds it via
+                refreshTableState. Scores are read live from the roster, so
+                the winner's 121 shows even if its UPDATE lands after this. */}
+            {finishedGame && (
+              <div className="mb-2 flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
+                <p className="text-lg font-semibold">
+                  {finishedGame.winner_id === session.user.id
+                    ? "You win!"
+                    : `${winner ? displayName(winner) : "A player who has left"} wins!`}
+                  {/* How it ended: the winner's last award IS the winning one,
+                      since nothing can score after the game ends. Read live from
+                      the roster, so if the games UPDATE beats the table_members
+                      UPDATE here, this briefly shows the previous award and then
+                      corrects itself. */}
+                  {winner && (
+                    <>
+                      {" "}
+                      {winner.score}
+                      {winner.last_reason &&
+                        ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
+                    </>
+                  )}
+                </p>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  {members.map((m) => `${displayName(m)} ${m.score}`).join(" — ")}
+                </p>
+              </div>
+            )}
             <button
               onClick={handleStartNewGame}
               disabled={gameStatus === "creating" || !canStartGame}
@@ -1091,7 +1431,27 @@ export default function TablePage() {
                 {discardStatus === "sending" ? "Sending..." : "Send to Crib"}
               </button>
             )}
+            {/* Show Hand: counting and done only (design decision 7), one-way
+                for the rest of the hand. Confirm Count reveals it anyway, so
+                this is for showing early -- or before the dealer's turn. */}
+            {isCountingOrDone &&
+              (iHaveShown ? (
+                <span className="text-xs text-zinc-500">Shown to the table</span>
+              ) : (
+                <button
+                  onClick={handleShowHand}
+                  disabled={countBusy}
+                  className="rounded border border-zinc-400 px-6 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+                >
+                  Show Hand
+                </button>
+              ))}
           </div>
+        )}
+
+        {/* Your own breakdown, once your count is confirmed. */}
+        {isCountingOrDone && handCounted(session.user.id) && breakdownFor(myHand, false) && (
+          <p className="text-xs text-zinc-500">Hand: {breakdownFor(myHand, false)}</p>
         )}
 
         {discardStatus === "error" && discardMessage && (

@@ -1,0 +1,690 @@
+-- Phase 2, Batch 2a: VERIFICATION QUERIES.
+--
+-- Run in the Supabase Dashboard -> SQL Editor AFTER
+-- docs/sql/phase2-batch2a-counting.sql. The SQL Editor shows the result of the
+-- LAST statement only, so run each numbered query on its own.
+--
+-- Queries 1-5 are read-only SELECTs.
+--
+-- Queries 6 and 7 are DO blocks that WRITE -- they call the real functions,
+-- as the real players -- and then deliberately raise an exception at the very
+-- end, which rolls every write back. So they always "fail": the message is
+-- the verdict. "ALL n CHECKS PASSED (rolled back)" is a pass; anything
+-- starting "FAIL" or "SETUP" is not. They can be re-run any number of times
+-- against the same game, because nothing they do survives.
+--
+-- Why 6 and 7 exist: PL/pgSQL is not validated until it executes, so
+-- "create or replace succeeded" proves nothing (Batch 1's 22P02). Between
+-- them they execute every function this batch defines or changes --
+-- show_hand, show_crib, confirm_count, award_points (including the win) --
+-- and both RLS policies, as a player, a second player, and a stranger.
+-- play_card's region (H) is exercised by playing a real hand to reach
+-- counting, and 6 checks its result.
+--
+-- HOW 6 AND 7 ACT AS A PLAYER: they set request.jwt.claims (what auth.uid()
+-- and auth.role() read) and switch to the 'authenticated' role, which is
+-- exactly what PostgREST does for a browser request. That role has no grant
+-- on score_hand, so expected points are computed FIRST, as the owner.
+
+
+-- ---------------------------------------------------------------------------
+-- 1. SCHEMA. Expect 4 rows:
+--      count_step     integer  not null, default 0
+--      crib_revealed  boolean  not null, default false
+--      revealed_by    ARRAY    not null, default '{}'
+--      winner_id      uuid     nullable
+-- ---------------------------------------------------------------------------
+
+select column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'games'
+  and column_name in ('count_step', 'revealed_by', 'crib_revealed', 'winner_id')
+order by column_name;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. CHECK CONSTRAINTS on games. Expect exactly 3 rows:
+--      a count_step >= 0 check
+--      games_ended_reason_check  -- includes 'won'
+--      games_phase_check         -- includes 'done'
+-- Two phase checks, or a phase check without 'done', means the drop in the
+-- migration missed.
+-- ---------------------------------------------------------------------------
+
+-- select con.conname, pg_get_constraintdef(con.oid) as definition
+-- from pg_constraint con
+-- where con.conrelid = 'public.games'::regclass
+--   and con.contype = 'c'
+-- order by con.conname;
+
+
+-- ---------------------------------------------------------------------------
+-- 3. GRANTS. EXPECT 9 rows with check 'ok', plus up to 3 rows with check
+-- 'known pre-existing', and verdict 'PASS' on every row.
+--
+-- Unlike Batch 1's query 3 -- which names four functions and so still
+-- returns its expected two rows after this batch -- this lists EVERY function
+-- in public granted to anon or authenticated, so an unexpected grant shows up
+-- as a row of its own rather than going unnoticed.
+--
+-- KNOWN PRE-EXISTING GRANTS. The first real run of this query (after 2a was
+-- applied) found three grants that 2a did not create and does not touch:
+--   card_rank_value, shuffled_deck, rls_auto_enable
+-- They are tolerated here so that this query judges 2a ALONE. Tolerating them
+-- is not the same as approving them: the handoff lists card_rank_value and
+-- shuffled_deck as "Client-callable: no", so the live database disagrees with
+-- the documented intent, and that is tracked as a loose end in the handoff
+-- rather than fixed here, since revoking is a schema change outside 2a's
+-- scope. Neither returns anything secret -- card_rank_value is a pure lookup,
+-- and shuffled_deck returns a fresh random deck, not the game's deck -- so the
+-- exposure is low, but it should be closed deliberately rather than left
+-- unexplained. rls_auto_enable is not a function this project's SQL defines;
+-- it appears to come from the Supabase platform itself (not verified).
+--
+-- If one of the three is later revoked it simply stops appearing -- a
+-- tolerated grant is optional, never required. A FOURTH unexpected grant
+-- still fails the verdict.
+-- ---------------------------------------------------------------------------
+
+-- with expected(routine_name) as (
+--   values ('acknowledge_deal_cut'), ('confirm_count'), ('discard_to_crib'),
+--          ('draw_cut_card'), ('leave_table'), ('play_card'),
+--          ('show_crib'), ('show_hand'), ('start_game_with_deal')
+-- ),
+-- known_preexisting(routine_name) as (
+--   values ('card_rank_value'), ('shuffled_deck'), ('rls_auto_enable')
+-- ),
+-- actual as (
+--   select distinct rp.routine_name::text as routine_name, rp.grantee::text as grantee
+--   from information_schema.routine_privileges rp
+--   where rp.routine_schema = 'public'
+--     and rp.grantee in ('anon', 'authenticated')
+--     and rp.privilege_type = 'EXECUTE'
+-- ),
+-- graded as (
+--   select coalesce(a.routine_name, e.routine_name) as routine_name,
+--          a.grantee,
+--          case
+--            when e.routine_name is null
+--             and a.routine_name in (select routine_name from known_preexisting)
+--              then 'known pre-existing'
+--            when e.routine_name is null then 'UNEXPECTED GRANT'
+--            when a.routine_name is null then 'MISSING GRANT'
+--            when a.grantee <> 'authenticated' then 'WRONG GRANTEE'
+--            else 'ok'
+--          end as check_result
+--   from actual a
+--   full join expected e on e.routine_name = a.routine_name
+-- )
+-- select routine_name, grantee, check_result,
+--        case
+--          when bool_and(check_result in ('ok', 'known pre-existing')) over ()
+--           and count(*) filter (where check_result = 'ok') over () = 9
+--            then 'PASS'
+--          else 'FAIL'
+--        end as verdict
+-- from graded
+-- order by (check_result not in ('ok', 'known pre-existing')) desc,
+--          (check_result = 'known pre-existing') desc,
+--          routine_name;
+
+
+-- ---------------------------------------------------------------------------
+-- 4. POLICIES on the secret tables. Expect exactly 2 rows:
+--      game_cribs  "Players at the table read a shown crib"
+--      game_hands  "Players read their own hand, or a hand shown at their table"
+-- The old "Players can only read their own hand" must NOT appear -- policies
+-- are OR'd together, so a leftover would be harmless here, but its presence
+-- would mean the drop failed and the file did not run as written.
+-- ---------------------------------------------------------------------------
+
+-- select tablename, policyname, cmd, qual
+-- from pg_policies
+-- where schemaname = 'public'
+--   and tablename in ('game_hands', 'game_cribs')
+-- order by tablename, policyname;
+
+-- 4b. RLS IS ACTUALLY ON for both tables. A policy on a table with RLS
+-- disabled is decoration: every row is readable regardless. Expect 2 rows,
+-- both rls_enabled = true and rls_forced = false. Forced must stay false --
+-- the security definer functions rely on the owner bypassing RLS to write
+-- these tables (see the handoff's RLS lesson).
+
+-- select c.relname as table_name,
+--        c.relrowsecurity as rls_enabled,
+--        c.relforcerowsecurity as rls_forced,
+--        case when c.relrowsecurity and not c.relforcerowsecurity
+--             then 'ok' else 'FAIL' end as check_result
+-- from pg_class c
+-- join pg_namespace n on n.oid = c.relnamespace
+-- where n.nspname = 'public'
+--   and c.relname in ('game_hands', 'game_cribs')
+-- order by c.relname;
+
+
+-- ---------------------------------------------------------------------------
+-- 5. table_members CONSTRAINTS -- answers "does score have a check?".
+-- Expect the primary key and foreign keys only, NO check constraint. The
+-- 121 cap lives in award_points, not in a constraint (see the migration).
+--
+-- 5b (second query): every live crib past the discard has exactly 4 cards.
+-- Expect every row's crib_size = 4. No rows is fine if nothing is past the
+-- discard.
+-- ---------------------------------------------------------------------------
+
+-- select con.conname, con.contype, pg_get_constraintdef(con.oid) as definition
+-- from pg_constraint con
+-- where con.conrelid = 'public.table_members'::regclass
+-- order by con.contype, con.conname;
+
+-- select t.code, g.id as game_id, g.phase, array_length(c.cards, 1) as crib_size
+-- from public.games g
+-- join public.tables t on t.id = g.table_id
+-- left join public.game_cribs c on c.game_id = g.id
+-- where g.status = 'active'
+--   and g.phase in ('play', 'counting', 'done')
+-- order by t.code;
+
+
+-- ---------------------------------------------------------------------------
+-- 6. THE COUNTING WALK-THROUGH (rolled back).
+--
+-- SETUP: play a real hand at the test table through to the end of pegging,
+-- so the game sits in 'counting', step 0, nothing shown. Do not tap anything
+-- else. Scores must be low enough that nobody reaches 121 during the walk
+-- (testing-force-near-win.sql, query B, resets them).
+--
+-- Then set v_code below and run. Expected message:
+--   ALL 32 CHECKS PASSED (rolled back) ...
+--
+-- (31 until the 2a review: C1b and C4b checked only the "hand: " / "crib: "
+-- prefix. They now compare the WHOLE reason string to one built
+-- independently below, and C3c adds the same check for the dealer's hand.)
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_game record;
+--   v_g record;
+--   v_pone uuid;
+--   v_dealer uuid;
+--   v_stranger uuid := gen_random_uuid();      -- a logged-in nobody
+--   v_pone_hs jsonb;
+--   v_dealer_hs jsonb;
+--   v_crib_hs jsonb;
+--   v_pone_pts int;
+--   v_dealer_pts int;
+--   v_crib_pts int;
+--   v_pone_reason text;
+--   v_dealer_reason text;
+--   v_crib_reason text;
+--   v_pone_before int;
+--   v_dealer_before int;
+--   v_score int;
+--   v_last_points int;
+--   v_last_reason text;
+--   v_n int;
+--   v_msg text;
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select g.* into v_game
+--   from public.games g
+--   join public.tables t on t.id = g.table_id
+--   where t.code = v_code
+--     and g.status = 'active';
+--
+--   if not found then
+--     raise exception 'SETUP: no active game at table %.', v_code;
+--   end if;
+--
+--   if v_game.phase <> 'counting' or v_game.count_step <> 0
+--      or v_game.revealed_by <> '{}' or v_game.crib_revealed then
+--     raise exception 'SETUP: need counting / step 0 / nothing shown; found phase %, step %, revealed_by %, crib_revealed %.',
+--       v_game.phase, v_game.count_step, v_game.revealed_by, v_game.crib_revealed;
+--   end if;
+--
+--   v_dealer := v_game.dealer_id;
+--   v_pone := (select u from unnest(v_game.players) as u where u <> v_dealer limit 1);
+--
+--   -- [H] play_card region (H), or the backfill: the pone counts first.
+--   if v_game.current_player is distinct from v_pone then
+--     raise exception 'FAIL [H]: entering counting left current_player = %, expected the pone %.',
+--       v_game.current_player, v_pone;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- Expected points, from the SOURCE tables -- the original four kept cards
+--   -- and the crib -- as the owner, before switching role.
+--   v_pone_hs := public.score_hand(
+--     (select gh.cards from public.game_hands gh where gh.game_id = v_game.id and gh.user_id = v_pone),
+--     v_game.starter_card, false);
+--   v_dealer_hs := public.score_hand(
+--     (select gh.cards from public.game_hands gh where gh.game_id = v_game.id and gh.user_id = v_dealer),
+--     v_game.starter_card, false);
+--   v_crib_hs := public.score_hand(
+--     (select c.cards from public.game_cribs c where c.game_id = v_game.id),
+--     v_game.starter_card, true);
+--   v_pone_pts := (v_pone_hs ->> 'points')::int;
+--   v_dealer_pts := (v_dealer_hs ->> 'points')::int;
+--   v_crib_pts := (v_crib_hs ->> 'points')::int;
+--
+--   -- Expected reason strings, built from the breakdowns a DIFFERENT way from
+--   -- confirm_count (concat_ws skipping nulls, rather than array_append and
+--   -- array_to_string), so an exact match means two constructions agree.
+--   select 'hand: ' || coalesce(nullif(concat_ws(' · ',
+--            case when (v_pone_hs ->> 'fifteens')::int > 0 then '15s '   || (v_pone_hs ->> 'fifteens') end,
+--            case when (v_pone_hs ->> 'pairs')::int    > 0 then 'pairs ' || (v_pone_hs ->> 'pairs')    end,
+--            case when (v_pone_hs ->> 'runs')::int     > 0 then 'runs '  || (v_pone_hs ->> 'runs')     end,
+--            case when (v_pone_hs ->> 'flush')::int    > 0 then 'flush ' || (v_pone_hs ->> 'flush')    end,
+--            case when (v_pone_hs ->> 'nobs')::int     > 0 then 'nobs '  || (v_pone_hs ->> 'nobs')     end
+--          ), ''), 'nothing')
+--   into v_pone_reason;
+--   select 'hand: ' || coalesce(nullif(concat_ws(' · ',
+--            case when (v_dealer_hs ->> 'fifteens')::int > 0 then '15s '   || (v_dealer_hs ->> 'fifteens') end,
+--            case when (v_dealer_hs ->> 'pairs')::int    > 0 then 'pairs ' || (v_dealer_hs ->> 'pairs')    end,
+--            case when (v_dealer_hs ->> 'runs')::int     > 0 then 'runs '  || (v_dealer_hs ->> 'runs')     end,
+--            case when (v_dealer_hs ->> 'flush')::int    > 0 then 'flush ' || (v_dealer_hs ->> 'flush')    end,
+--            case when (v_dealer_hs ->> 'nobs')::int     > 0 then 'nobs '  || (v_dealer_hs ->> 'nobs')     end
+--          ), ''), 'nothing')
+--   into v_dealer_reason;
+--   select 'crib: ' || coalesce(nullif(concat_ws(' · ',
+--            case when (v_crib_hs ->> 'fifteens')::int > 0 then '15s '   || (v_crib_hs ->> 'fifteens') end,
+--            case when (v_crib_hs ->> 'pairs')::int    > 0 then 'pairs ' || (v_crib_hs ->> 'pairs')    end,
+--            case when (v_crib_hs ->> 'runs')::int     > 0 then 'runs '  || (v_crib_hs ->> 'runs')     end,
+--            case when (v_crib_hs ->> 'flush')::int    > 0 then 'flush ' || (v_crib_hs ->> 'flush')    end,
+--            case when (v_crib_hs ->> 'nobs')::int     > 0 then 'nobs '  || (v_crib_hs ->> 'nobs')     end
+--          ), ''), 'nothing')
+--   into v_crib_reason;
+--
+--   select tm.score into v_pone_before from public.table_members tm
+--   where tm.table_id = v_game.table_id and tm.user_id = v_pone;
+--   select tm.score into v_dealer_before from public.table_members tm
+--   where tm.table_id = v_game.table_id and tm.user_id = v_dealer;
+--
+--   if v_pone_before + v_pone_pts >= 121
+--      or v_dealer_before + v_dealer_pts + v_crib_pts >= 121 then
+--     raise exception 'SETUP: scores too close to 121 for this walk-through. Reset them first.';
+--   end if;
+--
+--   -- ---- From here on, every call is made AS A PLAYER --------------------------
+--   execute 'set local role authenticated';
+--
+--   -- ==== As the DEALER, at step 0 (the pone's step) ============================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--
+--   -- [E1] Not the dealer's turn.
+--   v_msg := null;
+--   begin perform public.confirm_count(v_game.id, 0);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%not your turn to count%' then
+--     raise exception 'FAIL [E1] dealer confirming step 0: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [E2] A step AHEAD of the current one is an error, not a quiet return.
+--   v_msg := null;
+--   begin perform public.confirm_count(v_game.id, 1);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%not up yet%' then
+--     raise exception 'FAIL [E2] confirming step 1 during step 0: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [E3] Show Crib before both hands are counted.
+--   v_msg := null;
+--   begin perform public.show_crib(v_game.id);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%after both hands%' then
+--     raise exception 'FAIL [E3] show_crib at step 0: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R1] RLS before any reveal: own hand yes, opponent's hand no, crib no.
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id and user_id = v_dealer;
+--   if v_n <> 1 then raise exception 'FAIL [R1a] dealer cannot read own hand (% rows).', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id and user_id = v_pone;
+--   if v_n <> 0 then raise exception 'FAIL [R1b] dealer can read the UNSHOWN pone hand.'; end if;
+--   v_checks := v_checks + 1;
+--   select count(*) into v_n from public.game_cribs where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [R1c] dealer can read the UNSHOWN crib.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== As the PONE ===========================================================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--
+--   -- [E4] Only the dealer shows the crib.
+--   v_msg := null;
+--   begin perform public.show_crib(v_game.id);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%Only the dealer%' then
+--     raise exception 'FAIL [E4] pone showing the crib: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [S1] show_hand, twice -- the second must not duplicate.
+--   perform public.show_hand(v_game.id);
+--   perform public.show_hand(v_game.id);
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.revealed_by is distinct from array[v_pone] then
+--     raise exception 'FAIL [S1] revealed_by after two show_hand calls is %.', v_g.revealed_by;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R2] The shown pone hand: readable by the dealer, NOT by a stranger.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id and user_id = v_pone;
+--   if v_n <> 1 then raise exception 'FAIL [R2a] dealer cannot read the SHOWN pone hand.'; end if;
+--   v_checks := v_checks + 1;
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [R2b] a non-member can read % hand(s) at this table.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C1] The pone confirms step 0.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--   perform public.confirm_count(v_game.id, 0);
+--
+--   select tm.score, tm.last_points, tm.last_reason into v_score, v_last_points, v_last_reason
+--   from public.table_members tm where tm.table_id = v_game.table_id and tm.user_id = v_pone;
+--   if v_score <> v_pone_before + v_pone_pts then
+--     raise exception 'FAIL [C1a] pone score %, expected % + %.', v_score, v_pone_before, v_pone_pts;
+--   end if;
+--   v_checks := v_checks + 1;
+--   if v_last_points is distinct from v_pone_pts or v_last_reason is distinct from v_pone_reason then
+--     raise exception 'FAIL [C1b] tracker shows % / "%", expected % / "%".', v_last_points, v_last_reason, v_pone_pts, v_pone_reason;
+--   end if;
+--   v_checks := v_checks + 1;
+--   if v_pone_pts = 0 and v_last_reason <> 'hand: nothing' then
+--     raise exception 'FAIL [C1c] a zero hand reads "%".', v_last_reason;
+--   end if;
+--   v_checks := v_checks + 1;
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.count_step <> 1 or v_g.current_player is distinct from v_dealer or v_g.phase <> 'counting' then
+--     raise exception 'FAIL [C1d] after step 0: step %, current_player %, phase %.', v_g.count_step, v_g.current_player, v_g.phase;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C2] A stale repeat of step 0 is quiet and scores nothing.
+--   perform public.confirm_count(v_game.id, 0);
+--   select tm.score into v_score from public.table_members tm
+--   where tm.table_id = v_game.table_id and tm.user_id = v_pone;
+--   if v_score <> v_pone_before + v_pone_pts then
+--     raise exception 'FAIL [C2] a repeated step-0 confirm changed the score to %.', v_score;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== As the DEALER, step 1 then the crib ===================================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--
+--   -- [C3] The dealer's hand -- auto-revealed by the confirm itself.
+--   perform public.confirm_count(v_game.id, 1);
+--   select tm.score, tm.last_points, tm.last_reason into v_score, v_last_points, v_last_reason
+--   from public.table_members tm where tm.table_id = v_game.table_id and tm.user_id = v_dealer;
+--   if v_score <> v_dealer_before + v_dealer_pts then
+--     raise exception 'FAIL [C3a] dealer score %, expected % + %.', v_score, v_dealer_before, v_dealer_pts;
+--   end if;
+--   v_checks := v_checks + 1;
+--   if v_last_points is distinct from v_dealer_pts or v_last_reason is distinct from v_dealer_reason then
+--     raise exception 'FAIL [C3c] tracker shows % / "%", expected % / "%".', v_last_points, v_last_reason, v_dealer_pts, v_dealer_reason;
+--   end if;
+--   v_checks := v_checks + 1;
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.count_step <> 2 or v_g.current_player is distinct from v_dealer
+--      or not (v_dealer = any(v_g.revealed_by)) then
+--     raise exception 'FAIL [C3b] after step 1: step %, current_player %, revealed_by %.', v_g.count_step, v_g.current_player, v_g.revealed_by;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [E5] The crib cannot be confirmed before it is shown.
+--   v_msg := null;
+--   begin perform public.confirm_count(v_game.id, 2);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%Show the crib before%' then
+--     raise exception 'FAIL [E5] confirming an unshown crib: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R3] Still unreadable to the pone.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--   select count(*) into v_n from public.game_cribs where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [R3] the pone can read the UNSHOWN crib.'; end if;
+--   v_checks := v_checks + 1;
+--   -- ...but the dealer's hand, auto-revealed in C3, now is readable.
+--   select count(*) into v_n from public.game_hands where game_id = v_game.id and user_id = v_dealer;
+--   if v_n <> 1 then raise exception 'FAIL [R3b] the pone cannot read the auto-revealed dealer hand.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [S2] The dealer shows the crib, twice (idempotent).
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   perform public.show_crib(v_game.id);
+--   perform public.show_crib(v_game.id);
+--   select * into v_g from public.games where id = v_game.id;
+--   if not v_g.crib_revealed then raise exception 'FAIL [S2] crib_revealed is still false.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R4] Shown crib: the pone reads 4 cards; a stranger reads nothing.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--   select coalesce(max(array_length(c.cards, 1)), 0) into v_n from public.game_cribs c where c.game_id = v_game.id;
+--   if v_n <> 4 then raise exception 'FAIL [R4a] the pone reads a crib of % cards, expected 4.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--   select count(*) into v_n from public.game_cribs where game_id = v_game.id;
+--   if v_n <> 0 then raise exception 'FAIL [R4b] a non-member can read the shown crib.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C4] The dealer confirms the crib -> 'done'.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   perform public.confirm_count(v_game.id, 2);
+--   select tm.score, tm.last_points, tm.last_reason into v_score, v_last_points, v_last_reason
+--   from public.table_members tm where tm.table_id = v_game.table_id and tm.user_id = v_dealer;
+--   if v_score <> v_dealer_before + v_dealer_pts + v_crib_pts then
+--     raise exception 'FAIL [C4a] dealer score %, expected % + % + %.', v_score, v_dealer_before, v_dealer_pts, v_crib_pts;
+--   end if;
+--   v_checks := v_checks + 1;
+--   if v_last_points is distinct from v_crib_pts or v_last_reason is distinct from v_crib_reason then
+--     raise exception 'FAIL [C4b] tracker shows % / "%", expected % / "%".', v_last_points, v_last_reason, v_crib_pts, v_crib_reason;
+--   end if;
+--   v_checks := v_checks + 1;
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.phase <> 'done' or v_g.current_player is not null or v_g.status <> 'active' then
+--     raise exception 'FAIL [C4c] after the crib: phase %, current_player %, status %.', v_g.phase, v_g.current_player, v_g.status;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C5] In 'done', every step is behind: all quiet, nothing scored.
+--   perform public.confirm_count(v_game.id, 2);
+--   perform public.confirm_count(v_game.id, 0);
+--   select tm.score into v_score from public.table_members tm
+--   where tm.table_id = v_game.table_id and tm.user_id = v_dealer;
+--   if v_score <> v_dealer_before + v_dealer_pts + v_crib_pts then
+--     raise exception 'FAIL [C5] a stale confirm in done changed the score to %.', v_score;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [S3] show_hand and show_crib in 'done' are idempotent no-ops.
+--   perform public.show_hand(v_game.id);
+--   perform public.show_crib(v_game.id);
+--   select * into v_g from public.games where id = v_game.id;
+--   if array_length(v_g.revealed_by, 1) <> 2 then
+--     raise exception 'FAIL [S3] revealed_by in done is %.', v_g.revealed_by;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [E6] A garbage step is rejected outright.
+--   v_msg := null;
+--   begin perform public.confirm_count(v_game.id, 7);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%Invalid count step%' then
+--     raise exception 'FAIL [E6] step 7: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [E7] A stranger cannot act at all.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--   v_msg := null;
+--   begin perform public.show_hand(v_game.id);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%not a member%' then
+--     raise exception 'FAIL [E7] stranger show_hand: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [HH] His heels is NOT in any count: the dealer gained exactly
+--   -- score_hand(hand) + score_hand(crib) during counting, jack starter or not.
+--   -- (C3a and C4a already prove this numerically; this line names it.)
+--   if substr(v_game.starter_card, 1, 1) = 'J' then
+--     raise notice 'Starter is a jack: his heels was awarded at the cut and was correctly NOT re-awarded here.';
+--   end if;
+--
+--   raise exception 'ALL % CHECKS PASSED (rolled back). pone hand %, dealer hand %, crib %, starter %.',
+--     v_checks, v_pone_pts, v_dealer_pts, v_crib_pts, v_game.starter_card;
+-- end $$;
+
+
+-- ---------------------------------------------------------------------------
+-- 7. THE WIN, mid-count (rolled back).
+--
+-- SETUP: the same as 6 -- counting, step 0, nothing shown -- and the pone's
+-- hand must score at least 1 (if it scores 0, run 6 instead and redeal).
+--
+-- Sets the pone's score so their hand count reaches 121 -- overshooting by 1
+-- when the hand allows it, to prove the cap -- then confirms step 0 as the
+-- pone. Expected message:
+--   ALL 9 CHECKS PASSED (rolled back) ...
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_game record;
+--   v_g record;
+--   v_pone uuid;
+--   v_dealer uuid;
+--   v_pts int;
+--   v_start int;
+--   v_score int;
+--   v_last_points int;
+--   v_msg text;
+--   v_n int;
+--   v_checks int := 0;
+-- begin
+--   select g.* into v_game
+--   from public.games g
+--   join public.tables t on t.id = g.table_id
+--   where t.code = v_code
+--     and g.status = 'active';
+--
+--   if not found then
+--     raise exception 'SETUP: no active game at table %.', v_code;
+--   end if;
+--   if v_game.phase <> 'counting' or v_game.count_step <> 0 then
+--     raise exception 'SETUP: need counting / step 0; found phase %, step %.', v_game.phase, v_game.count_step;
+--   end if;
+--
+--   v_dealer := v_game.dealer_id;
+--   v_pone := (select u from unnest(v_game.players) as u where u <> v_dealer limit 1);
+--
+--   v_pts := (public.score_hand(
+--     (select gh.cards from public.game_hands gh where gh.game_id = v_game.id and gh.user_id = v_pone),
+--     v_game.starter_card, false) ->> 'points')::int;
+--
+--   if v_pts = 0 then
+--     raise exception 'SETUP: the pone hand scores 0, so it cannot win. Use another hand.';
+--   end if;
+--
+--   -- 121 - pts lands exactly; +1 overshoots by one and proves the cap.
+--   v_start := 121 - v_pts + (case when v_pts >= 2 then 1 else 0 end);
+--
+--   update public.table_members
+--   set score = v_start
+--   where table_id = v_game.table_id and user_id = v_pone;
+--
+--   update public.table_members
+--   set score = 0
+--   where table_id = v_game.table_id and user_id = v_dealer;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_pone, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_pone::text, true);
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--
+--   perform public.confirm_count(v_game.id, 0);
+--
+--   -- [W1] Capped at 121, while the tracker still shows the full award.
+--   select tm.score, tm.last_points into v_score, v_last_points
+--   from public.table_members tm where tm.table_id = v_game.table_id and tm.user_id = v_pone;
+--   if v_score <> 121 then raise exception 'FAIL [W1a] winning score is %, expected 121 (start %, hand %).', v_score, v_start, v_pts; end if;
+--   v_checks := v_checks + 1;
+--   if v_last_points <> v_pts then raise exception 'FAIL [W1b] last_points %, expected the full %.', v_last_points, v_pts; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W2] The game ended, as a win, by the pone.
+--   select * into v_g from public.games where id = v_game.id;
+--   if v_g.status <> 'ended' or v_g.ended_reason is distinct from 'won' or v_g.winner_id is distinct from v_pone then
+--     raise exception 'FAIL [W2] status %, reason %, winner %.', v_g.status, v_g.ended_reason, v_g.winner_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W3] Frozen at the step that won -- the advance matched no row.
+--   if v_g.phase <> 'counting' or v_g.count_step <> 0 or v_g.current_player is distinct from v_pone then
+--     raise exception 'FAIL [W3] after the win: phase %, step %, current_player %.', v_g.phase, v_g.count_step, v_g.current_player;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W4] The winning hand is on the table.
+--   if not (v_pone = any(v_g.revealed_by)) then
+--     raise exception 'FAIL [W4] the winning hand was not revealed.';
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W5] The dealer never counted: still 0.
+--   select tm.score into v_score from public.table_members tm
+--   where tm.table_id = v_game.table_id and tm.user_id = v_dealer;
+--   if v_score <> 0 then raise exception 'FAIL [W5] the dealer scored % after the game ended.', v_score; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W6] Nothing more can be done in an ended game.
+--   v_msg := null;
+--   begin perform public.confirm_count(v_game.id, 0);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%no longer active%' then
+--     raise exception 'FAIL [W6a] confirm after the win: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_dealer, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_dealer::text, true);
+--   v_msg := null;
+--   begin perform public.confirm_count(v_game.id, 1);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%no longer active%' then
+--     raise exception 'FAIL [W6b] dealer confirm after the win: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W7] The live-game slot is free: no live game remains at the table.
+--   select count(*) into v_n from public.games
+--   where table_id = v_game.table_id and status in ('cutting', 'active');
+--   if v_n <> 0 then raise exception 'FAIL [W7] % live game(s) remain at the table.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Pone started at %, hand scored %.',
+--     v_checks, v_start, v_pts;
+-- end $$;

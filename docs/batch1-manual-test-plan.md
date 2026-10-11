@@ -262,7 +262,9 @@ While running tests 2 and 3, confirm on the screen of the player who did
 ## Expected rough edges — not bugs
 
 The moment the eighth card lands, `play_card` sets `phase = 'counting'` and
-`current_player = null`. There is no counting UI yet, so:
+`current_player` to the pone, who counts first. (Batch 1 set it to null.
+Batch 2a's region (H) changed it, because `confirm_count`'s turn check reads
+it.) Until the counting UI exists:
 
 - **The play area disappears.** It renders only while `phase === 'play'`.
   The played cards, the running count and the turn indicator all vanish at
@@ -274,8 +276,10 @@ The moment the eighth card lands, `play_card` sets `phase = 'counting'` and
 - **No Confirm Count button, and no hand or crib points are awarded.** The
   hand scorer exists and is tested, but nothing calls it yet. Scores after
   these tests reflect pegging and his heels only.
-- **Nothing happens at 121.** Win detection is deliberately absent; it belongs
-  in `award_points` in Batch 2. A score can run past 121 without comment.
+- **At 121 the game ends.** This changed in Batch 2a, which added win detection
+  and a 121 cap to `award_points`. If you re-run these tests, reset the scores
+  first (`testing-force-near-win.sql` query B), or a table that already
+  passed 121 will end the game on its first award.
 - **The hand does not advance.** There is no next-hand flow yet, so the game
   sits in `counting`. Start a new game for the next test.
 
