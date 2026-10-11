@@ -50,6 +50,19 @@ export function cardPlayValue(card: string) {
   return Number(rank);
 }
 
+// ORDINAL rank: A=1, 2-9 face value, T=10, J=11, Q=12, K=13. Mirrors
+// card_rank_value() in SQL. This is the one for RUNS and for comparing cut
+// cards, because a run is about SEQUENCE, not about what a card counts for.
+//
+// Never interchangeable with cardPlayValue above. Conflating them breaks
+// cribbage in both directions at once: J-Q-K stops being a run (all 10s), and
+// three tens start looking like one.
+export function cardRankValue(card: string) {
+  const index = RANKS.indexOf(rankOf(card) as Rank);
+  if (index < 0) throw new Error(`Unknown rank in card: ${card}`);
+  return index + 1;
+}
+
 // Ascending by rank, then by suit so the order is stable and predictable.
 export function sortHand(cards: string[]) {
   return [...cards].sort((a, b) => {
