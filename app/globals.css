@@ -62,3 +62,405 @@ body {
     opacity: 0;
   }
 }
+
+/* ===========================================================================
+   THE TABLE SHELL -- the game table always fits exactly one screen.
+
+   The table page is a fixed-height grid the size of the visible viewport,
+   never taller: every region has a fixed or computed height, and only the
+   middle region takes up what's left. Nothing that appears mid-game (a second
+   run of played cards, a banner, an error) is allowed to grow the page.
+
+   dvh / dvw follow a phone browser's collapsing address bar. Browsers without
+   them get vh / vw first; the @supports block upgrades the ones that can.
+
+   Card sizes are variables derived from the viewport, so a card stays the
+   same size for the whole hand instead of shrinking as a row fills up. The
+   hand gets the largest card that fits six across (portrait), capped by a
+   share of the height and by 96px on big screens; every smaller card on the
+   table -- played, piles, opponents' backs -- is 0.7 of that.
+
+   PORTRAIT ONLY in this stage. Landscape gets its own rules in a later stage;
+   until then these portrait rules still apply to it and stay on one screen,
+   just with small cards.
+   =========================================================================== */
+.table-shell {
+  --gutter: 8px;
+  --card-gap: 4px;
+  --hand-w: min(calc((100vw - 2 * var(--gutter) - 5 * var(--card-gap)) / 6), calc(13vh * 5 / 7), 96px);
+  --small-w: calc(var(--hand-w) * 0.7);
+
+  height: 100vh;
+  overflow: hidden;
+  display: grid;
+  /* header | opponents | middle (takes the rest) | piles + buttons | my hand | scores */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  /* Notched phones: never draw under the notch or the home indicator.
+     Needs viewport-fit=cover, set in app/layout.tsx. */
+  padding:
+    max(env(safe-area-inset-top), 4px)
+    max(env(safe-area-inset-right), var(--gutter))
+    max(env(safe-area-inset-bottom), 4px)
+    max(env(safe-area-inset-left), var(--gutter));
+}
+
+@supports (height: 100dvh) {
+  .table-shell {
+    --hand-w: min(calc((100dvw - 2 * var(--gutter) - 5 * var(--card-gap)) / 6), calc(13dvh * 5 / 7), 96px);
+    height: 100dvh;
+  }
+}
+
+/* The same for a filled button drawn shorter than 40px: an invisible layer
+   that extends the hit area above and below, leaving the drawn button and
+   the layout exactly as they are. */
+.tap-40-overlay {
+  position: relative;
+}
+.tap-40-overlay::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 40px;
+  transform: translateY(-50%);
+}
+
+/* A tap target at least 40px tall around a control that is drawn smaller --
+   the header's Leave link, chips. The padding grows the hit area and the
+   equal negative margin hands the space straight back, so layout is
+   unchanged. */
+.tap-40 {
+  padding-block: max(0px, calc((40px - 1lh) / 2));
+  margin-block: min(0px, calc((1lh - 40px) / 2));
+}
+
+/* ===========================================================================
+   THE PLAY AREA (UI polish, stage 2) -- one overlapping row, in play order.
+
+   The run reads left to right in play order, and the big running count sits
+   immediately after the newest card. Cards ALWAYS overlap, like a fanned
+   hand: each card shows about half of itself (its rank-and-suit corner and
+   some of the face), and the newest card, on top, shows in full. A short run
+   is therefore compact rather than a row of side-by-side cards.
+
+   Cards are full hand-card size (--hand-w). As the run grows the overlap
+   deepens, but never past the corner: at least 18px, or 36% of a card,
+   whichever is more. Only once that limit is reached do cards shrink, and
+   never below 32px wide, where the corner text is still 11px. 13 cards (the
+   4-player worst case) fit at 375px wide.
+
+   Sizes come from the room the middle region really has (container units on
+   .table-middle), so the count, the turn pill and the status line are never
+   pushed out of view.
+
+   Two layouts:
+     tall (the middle is 150px or more):  status line  /  [run + count]
+     flat (less than 150px, e.g. 1280x300): status column | [run + count]
+   =========================================================================== */
+
+/* Registered so they're computed where they're DECLARED, against the right
+   container, rather than re-resolved wherever they're used. */
+@property --play-hlimit {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 80px;
+}
+@property --pw {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 40px;
+}
+
+.table-middle {
+  container: middle / size;
+}
+
+.play-area {
+  /* Tall: the status line (28) + gap (6) + a little slack sit above the run. */
+  --play-hlimit: calc((100cqh - 40px) / 1.4);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.play-area__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+/* Room beside the turn pill for a future Go button. Holds the plain "Go"
+   label for now; a button can replace it later without moving anything. */
+.play-area__go-slot {
+  display: flex;
+  align-items: center;
+  min-width: 64px;
+  height: 28px;
+}
+
+/* The run AND the count, left-aligned, in one row. Its own inline-size
+   container, so each card sizes and spaces itself from the row's real width
+   (100cqw below), minus room kept for the count. */
+.play-area__run {
+  --count-space: 64px;
+  container-type: inline-size;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.play-area__card {
+  /* As big as a hand card, unless the height or the row's width says less:
+       - the middle's height (--play-hlimit)
+       - every other card keeping 18px of corner:  W - (n-1) x 18px
+       - every other card keeping 36% of a card:   W / (1 + 0.36 (n-1))
+     where W is the row minus the count's space; never under 32px. --n is the
+     number of cards in the run. */
+  --pw: max(
+    32px,
+    min(
+      var(--hand-w),
+      var(--play-hlimit),
+      calc(100cqw - var(--count-space) - (var(--n) - 1) * 18px),
+      calc((100cqw - var(--count-space)) / (1 + 0.36 * (var(--n) - 1)))
+    )
+  );
+  position: relative;
+  width: var(--pw);
+  flex-shrink: 0;
+}
+
+/* Each later card covers half of the one before (DOM order puts the newest
+   on top) -- but never more than leaves 18px showing, which matters on small
+   cards -- or more once the row is full, down to the corner minimum. */
+.play-area__card + .play-area__card {
+  margin-left: min(
+    calc(max(var(--pw) * 0.5, 18px) - var(--pw)),
+    calc((100cqw - var(--count-space) - var(--pw)) / (var(--n) - 1) - var(--pw))
+  );
+}
+
+.play-area__count {
+  margin-left: 12px;
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+@container middle (max-height: 149px) {
+  .play-area {
+    --play-hlimit: calc((100cqh - 8px) / 1.4);
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+  .play-area__status {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    height: auto;
+    gap: 2px;
+  }
+  .play-area__go-slot {
+    height: 20px;
+  }
+  .play-area__run {
+    flex: 1;
+  }
+  .play-area__count {
+    font-size: min(40px, 50cqh);
+  }
+}
+
+/* ===========================================================================
+   COUNTING, DONE, WIN AND THE CUT (UI polish, stage 3)
+
+   Everything that appears in the middle region is sized from the room the
+   middle actually has, so none of it ever scrolls or clips. Same two layouts
+   as the play area: stacked when the middle is 150px or taller, one row when
+   it's flatter (e.g. a 1280x300 window).
+   =========================================================================== */
+
+/* -- The counting stage: status, the hand being counted (when it isn't mine),
+      my buttons (only on my turn), and a recap of counts already confirmed. */
+.count-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: center;
+}
+
+.count-stage__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.count-stage__subject {
+  display: flex;
+  gap: var(--card-gap);
+}
+
+/* The opponent's hand or crib, at hand-card size: readable, using the
+   middle's room rather than the thin strip along the top. Shrinks only if
+   the middle is too short to hold it with the text, buttons and recap
+   (about 140px of them), and never under 32px. */
+.count-stage__card {
+  width: max(32px, min(var(--hand-w), calc((100cqh - 140px) / 1.4)));
+  flex-shrink: 0;
+}
+
+.count-stage__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.count-stage__recap {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* -- The result: the win banner and New Game. */
+.result-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* -- The cut for deal. The cut fills the whole middle (no hands, no piles),
+      and its cards are sized from that room. */
+.cut-view {
+  /* Stacked: two cut cards (1.4 each) plus names, the deck, the status
+     area and padding -- about 300px of those. */
+  --cut-w: clamp(40px, calc((100cqh - 300px) / 2.8), 96px);
+  --cut-fan-h: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+}
+
+.cut-view__middle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.cut-view__status {
+  display: flex;
+  min-height: 96px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+@container middle (max-height: 149px) {
+  .count-stage {
+    flex-direction: row;
+    justify-content: center;
+    gap: 16px;
+    text-align: left;
+  }
+  .count-stage__text {
+    align-items: flex-start;
+  }
+  .count-stage__card {
+    width: max(32px, min(var(--hand-w), calc((100cqh - 8px) / 1.4)));
+  }
+  .count-stage__actions {
+    flex-wrap: nowrap;
+  }
+  .result-stage {
+    flex-direction: row;
+  }
+}
+
+/* The cut gets the whole middle, so its flat threshold is higher: below
+   360px of middle, the two seats move to the sides of the deck. */
+@container middle (max-height: 359px) {
+  .cut-view {
+    --cut-w: clamp(32px, calc((100cqh - 56px) / 1.4), 96px);
+    --cut-fan-h: 48px;
+    flex-direction: row;
+    justify-content: center;
+    gap: 24px;
+  }
+  .cut-view__status {
+    min-height: 0;
+  }
+}
+
+/* ===========================================================================
+   THE PILE ROW'S MIDDLE: buttons, and the score flash above them.
+
+   The middle of the pile row -- between the crib and the starter -- is a size
+   container (its height is the row's, set by the hand-size piles), so the
+   flash can be placed by how much room there is:
+     - normally: floating just ABOVE the pile row -- its bottom edge 4px
+       above the row's top, which is the top of the crib and starter piles
+       (the row is exactly as tall as those hand-size piles) -- centred over
+       Sort, in the empty bottom edge of the middle region. It adds no height,
+       sits above both piles so neither can cover it, and is drawn after the
+       middle region so it stays on top of it.
+     - in a flat window (the row is barely taller than a button): beside the
+       buttons instead, since there is no room above them.
+   =========================================================================== */
+.pile-center {
+  container: pilecenter / size;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.pile-flash {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: calc(100% + 4px);
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Nothing to flash: take no room (matters beside the buttons). */
+.pile-flash:empty {
+  display: none;
+}
+
+@container pilecenter (max-height: 59px) {
+  .pile-flash {
+    position: static;
+    min-width: 0;
+    max-width: 50%;
+  }
+}

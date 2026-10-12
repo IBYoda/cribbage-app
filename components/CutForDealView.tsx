@@ -21,9 +21,13 @@ function withArticle(rank: string) {
 // something, when in fact nothing has been drawn.
 function EmptySlot() {
   return (
-    <div className="aspect-[5/7] w-24 rounded-lg border-2 border-dashed border-white/25" />
+    <div className="aspect-[5/7] w-[var(--cut-w)] rounded-lg border-2 border-dashed border-white/25" />
   );
 }
+
+// Cut cards are sized from the room the view has (--cut-w, .cut-view in
+// app/globals.css), so the whole cut fits any window without scrolling.
+const CUT_CARD = "aspect-[5/7] w-[var(--cut-w)]";
 
 export function CutForDealView({
   rounds,
@@ -106,16 +110,18 @@ export function CutForDealView({
     // Page content, not an overlay -- during the cut there is genuinely nothing
     // underneath it. No dismissal anywhere: closing it would strand the player
     // on an empty table with no way back into the cut.
-    <div className="flex flex-1 flex-col items-center justify-between gap-4 rounded-lg bg-zinc-900 p-4 text-white">
+    // Stacked (opponent / deck / you) when there's height; in a flat window
+    // the two seats move to the sides of the deck -- see .cut-view.
+    <div className="cut-view rounded-lg bg-zinc-900 p-3 text-white">
       {/* OPPONENT(S) -- top, matching the table's seating convention. */}
       <div className="flex justify-center gap-6">
         {opponentIds.map((id) => {
           const card = cardFor(id);
           return (
-            <div key={id} className="flex flex-col items-center gap-2">
+            <div key={id} className="flex flex-col items-center gap-1">
               <p className="text-sm text-zinc-300">{nameFor(id)}</p>
               {card ? (
-                <FlipCard card={card} revealed label={`${nameFor(id)}'s cut card`} />
+                <FlipCard card={card} revealed label={`${nameFor(id)}'s cut card`} sizing={CUT_CARD} />
               ) : (
                 <EmptySlot />
               )}
@@ -128,7 +134,7 @@ export function CutForDealView({
           until the server answers this tap. Tapping a position is not fake
           choice: cutting a deck IS choosing a position, and the card is
           whatever happens to be there. */}
-      <div className="flex flex-col items-center gap-3">
+      <div className="cut-view__middle">
         {roundNumber > 1 && (
           <p className="text-xs uppercase tracking-wide text-zinc-400">Cut {roundNumber}</p>
         )}
@@ -144,7 +150,7 @@ export function CutForDealView({
                 aria-label={`Cut the deck at position ${i + 1}`}
                 style={{ marginLeft: i === 0 ? 0 : "-1.15rem" }}
                 className={[
-                  "h-16 w-8 shrink-0 rounded border border-red-900/60 bg-red-900 transition-transform",
+                  "h-[var(--cut-fan-h)] w-[calc(var(--cut-fan-h)/2)] shrink-0 rounded border border-red-900/60 bg-red-900 transition-transform",
                   interactive ? "cursor-pointer hover:-translate-y-2" : "cursor-default",
                   tappedIndex === i ? "-translate-y-3 ring-2 ring-white" : "",
                 ].join(" ")}
@@ -161,8 +167,9 @@ export function CutForDealView({
           })}
         </div>
 
-        {/* min-h keeps the deck and seats from jumping as the message changes. */}
-        <div className="flex min-h-28 flex-col items-center justify-center gap-2 text-center">
+        {/* A minimum height keeps the deck and seats from jumping as the
+            message changes (dropped in a flat window -- see .cut-view). */}
+        <div className="cut-view__status">
           {!iHaveDrawn && (
             <p className="text-lg font-medium">
               {drawPending ? "Cutting..." : "Tap the deck to cut for deal"}
@@ -221,9 +228,9 @@ export function CutForDealView({
       </div>
 
       {/* YOU -- bottom, same convention. */}
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-col items-center gap-1">
         {myEntry ? (
-          <FlipCard card={myEntry.card} revealed label="your cut card" />
+          <FlipCard card={myEntry.card} revealed label="your cut card" sizing={CUT_CARD} />
         ) : (
           <EmptySlot />
         )}
