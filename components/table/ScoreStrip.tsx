@@ -97,6 +97,11 @@ function Avatar({ member }: { member: PlateMember }) {
 // Same pattern as PlayerScore: flash on CHANGE of the newest award, not on
 // freshness, so a page loaded with an hour-old award doesn't replay it. Keyed
 // on the award time so a new award restarts the CSS animation.
+//
+// MOUNT IT ONLY ONCE THE SCORES ARE LOADED. What it saw at mount counts as
+// "already seen"; mounted over an empty roster, the roster's arrival would
+// look like a new award and replay the last one (the table page waits for
+// its first roster read).
 export function ScoreFlash({ plates }: { plates: ScorePlate[] }) {
   // Compared as times, not strings: the same timestamp can arrive formatted
   // differently from a REST read and from a realtime payload.
