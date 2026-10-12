@@ -61,6 +61,10 @@ export function goSayers(events: PlayEvent[]): Set<string> {
 // run stays up, dimmed, with a quiet "New count" hint, until the first card
 // of the new run replaces it. Purely client-side: derived from the plays
 // already loaded, nothing stored.
+//
+// ENDED: the final board after a win. The hand's last run stays on the table
+// as it stood -- NOT dimmed, with its final count -- but no turn pill, no Go
+// slot and no buttons: nothing is left to do in it.
 export function PlayArea({
   plays,
   playCount,
@@ -69,6 +73,7 @@ export function PlayArea({
   myUserId,
   nameFor,
   handOver,
+  ended = false,
 }: {
   plays: PlayEvent[];
   playCount: number;
@@ -83,10 +88,16 @@ export function PlayArea({
   // server is already in counting, but this screen still shows the final run
   // until the player taps Count hands.
   handOver?: { onCountHands: () => void };
+  // The final board after a win: show the last run only (see ENDED above).
+  ended?: boolean;
 }) {
   // Between runs, or the hand is over: either way the row shows the run
   // that just FINISHED, dimmed, with its own final total.
-  const { events: shown, finished: betweenRuns } = displayedRun(plays, playSegment, Boolean(handOver));
+  const { events: shown, finished: betweenRuns } = displayedRun(
+    plays,
+    playSegment,
+    Boolean(handOver) || ended
+  );
   const cards = shown.filter((p) => p.kind === "play");
   // The finished run keeps its own final total (31, or wherever the go
   // stopped it); the live run shows the live count.
@@ -95,49 +106,59 @@ export function PlayArea({
   const isMyTurn = currentPlayer === myUserId;
 
   return (
-    <div className="play-area">
-      <div className="play-area__status">
-        <p
-          className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-            isMyTurn
-              ? "bg-green-600 text-white"
-              : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
-          }`}
-        >
-          {/* During the hold current_player is already the first COUNTER,
-              so "X's turn" would be wrong here -- pegging is simply over. */}
-          {handOver
-            ? "Pegging over"
-            : isMyTurn
-              ? "Your turn"
-              : currentPlayer
-                ? `${nameFor(currentPlayer)}'s turn`
-                : "Waiting..."}
-        </p>
-        {/* Reserved for a future Go button -- empty for now (it holds Count
-            hands during the hold). The "Go" label itself sits by the player
-            who said it: above my hand, or under the opponent's name. */}
-        <div className="play-area__go-slot gap-2">
-          {handOver && (
-            // Drawn 28px tall to fit the status line; .tap-40-overlay gives it
-            // a 40px tap target without growing the line.
-            <button
-              onClick={handOver.onCountHands}
-              className="tap-40-overlay h-7 whitespace-nowrap rounded-full bg-foreground px-3 text-sm font-semibold text-background"
-            >
-              Count hands
-            </button>
+    <div className={`play-area ${ended ? "play-area--ended" : ""}`}>
+      {!ended && (
+        <div className="play-area__status">
+          <p
+            className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+              isMyTurn
+                ? "bg-green-600 text-white"
+                : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+            }`}
+          >
+            {/* During the hold current_player is already the first COUNTER,
+                so "X's turn" would be wrong here -- pegging is simply over. */}
+            {handOver
+              ? "Pegging over"
+              : isMyTurn
+                ? "Your turn"
+                : currentPlayer
+                  ? `${nameFor(currentPlayer)}'s turn`
+                  : "Waiting..."}
+          </p>
+          {/* Reserved for a future Go button -- empty for now (it holds Count
+              hands during the hold). The "Go" label itself sits by the player
+              who said it: above my hand, or under the opponent's name. */}
+          <div className="play-area__go-slot gap-2">
+            {handOver && (
+              // Drawn 28px tall to fit the status line; .tap-40-overlay gives it
+              // a 40px tap target without growing the line.
+              <button
+                onClick={handOver.onCountHands}
+                className="tap-40-overlay h-7 whitespace-nowrap rounded-full bg-foreground px-3 text-sm font-semibold text-background"
+              >
+                Count hands
+              </button>
+            )}
+          </div>
+          {betweenRuns && !handOver && (
+            <span className="whitespace-nowrap text-xs text-zinc-500">New count</span>
           )}
         </div>
-        {betweenRuns && !handOver && (
-          <span className="whitespace-nowrap text-xs text-zinc-500">New count</span>
-        )}
-      </div>
+      )}
 
       <div
-        className={`play-area__run ${betweenRuns ? "opacity-50" : ""}`}
+        className={`play-area__run ${betweenRuns && !ended ? "opacity-50" : ""}`}
         style={{ "--n": Math.max(cards.length, 1) } as CSSProperties}
-        aria-label={handOver ? "Last run of the hand" : betweenRuns ? "Last run (finished)" : "Cards played this run"}
+        aria-label={
+          ended
+            ? "The last run of the game"
+            : handOver
+              ? "Last run of the hand"
+              : betweenRuns
+                ? "Last run (finished)"
+                : "Cards played this run"
+        }
       >
         {cards.map((event) => (
           <div key={event.seq} className="play-area__card">

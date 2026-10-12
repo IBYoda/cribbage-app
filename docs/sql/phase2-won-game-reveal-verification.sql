@@ -1,0 +1,367 @@
+-- Won-game reveal: VERIFICATION QUERIES.
+--
+-- Run in the Supabase Dashboard -> SQL Editor AFTER
+-- docs/sql/phase2-won-game-reveal.sql. The SQL Editor shows the result of the
+-- LAST statement only, so run each numbered query on its own.
+--
+-- Query 1 is read-only. Query 2 is a DO block that WRITES -- it rewrites one
+-- game's state and its hands, crib and deck as the owner, then reads them
+-- back as each player -- and then deliberately raises an exception at the
+-- very end, which rolls every write back. It always "fails": the message is
+-- the verdict. "ALL n CHECKS PASSED (rolled back)" is a pass; anything
+-- starting "FAIL" or "SETUP" is not. Re-runnable, because nothing it does
+-- survives -- and since only committed changes reach Realtime, neither
+-- browser sees anything while it runs.
+--
+-- Same impersonation as phase2-new-game-ready-gate-verification.sql (which
+-- passed on this project): request.jwt.claims plus "set local role
+-- authenticated" to read as a player, and "reset role" to write as the owner.
+-- A read as a player is a plain SELECT, so RLS decides what comes back --
+-- exactly what the table page sees.
+--
+-- THE FROZEN now() LESSON (see the handoff): now() is the TRANSACTION's start
+-- time, and a DO block is one transaction. None of these read policies looks
+-- at created_at, but the game under test is still given an explicit, strictly
+-- later created_at (now() + 1 minute) so it is unambiguously the table's
+-- newest game -- the one the table page would show as "the last game".
+
+
+-- ---------------------------------------------------------------------------
+-- 1. READ-ONLY. The policies as the catalog has them.
+--
+-- EXPECT 4 rows:
+--   game_cribs  Players at the table read a shown crib
+--   game_cribs  Players of a won game read its crib
+--   game_hands  Players of a won game read its hands
+--   game_hands  Players read their own hand, or a hand shown at their table
+-- every one SELECT and PERMISSIVE. And NO row for game_decks (it has no
+-- policy at all, so it stays unreadable).
+-- ---------------------------------------------------------------------------
+
+-- select tablename, policyname, cmd, permissive
+-- from pg_policies
+-- where schemaname = 'public'
+--   and tablename in ('game_hands', 'game_cribs', 'game_decks')
+-- order by tablename, policyname;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. THE READ WALK-THROUGH (rolled back).
+--
+-- SETUP: any OPEN table with EXACTLY 2 members that has had at least one
+-- game, live or ended, in any state -- plus at least ONE OTHER account in
+-- the project (any user who is not one of the two), who is added to the
+-- table's roster for the roster case. As the owner, the block takes the
+-- table's latest game, makes it a game between the first-joined player (p1)
+-- and the second (p2), and gives it known hands, crib and deck. Then, as each
+-- user in turn:
+--
+--   W  WON during pegging (revealed_by empty, crib not shown):
+--        p1 reads p2's hand and the crib, p2 reads p1's hand and the crib --
+--        all ALLOWED (the new policies); p1 sees exactly p2's four cards
+--        and the crib's four;
+--        own hands still readable.
+--   N  NOT a player of that won game:
+--        p3 (on the table's roster now, not in games.players) and a stranger
+--        (not a member at all) read neither hand nor the crib.
+--   L  LIVE ('active', nothing shown):
+--        p1 cannot read p2's hand or the crib; each still reads their own.
+--   S  LIVE, SHOWN (counting: p2's hand shown, crib shown) -- unchanged:
+--        p1 reads p2's shown hand and the shown crib; p2 cannot read p1's
+--        unshown hand; p3, a table member, reads the shown hand (the
+--        existing "shown at their table" rule).
+--   E  ENDED, NOT WON (player_left, admin, timeout):
+--        p1 reads neither p2's hand nor the crib, for each reason -- but
+--        still reads their own hand.
+--   D  game_decks: unreadable to p1 (won and live) and to p3.
+--
+-- Expected message:
+--   ALL 30 CHECKS PASSED (rolled back) ...
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_table_id uuid;
+--   v_p1 uuid;
+--   v_p2 uuid;
+--   v_p3 uuid;
+--   v_stranger uuid := gen_random_uuid();
+--   v_last uuid;
+--   v_n int;
+--   v_cards text[];
+--   v_reason text;
+--   v_p1_hand text[] := array['5H', '5D', 'JS', 'QC'];
+--   v_p2_hand text[] := array['4S', '6C', '9D', 'KH'];
+--   v_crib text[] := array['2C', '7S', '8H', 'TC'];
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select t.id into v_table_id from public.tables t where t.code = v_code and t.status = 'open';
+--   if v_table_id is null then
+--     raise exception 'SETUP: no open table %.', v_code;
+--   end if;
+--
+--   select count(*) into v_n from public.table_members where table_id = v_table_id;
+--   if v_n <> 2 then
+--     raise exception 'SETUP: the table needs exactly 2 members (has %).', v_n;
+--   end if;
+--
+--   select user_id into v_p1 from public.table_members where table_id = v_table_id order by joined_at limit 1;
+--   select user_id into v_p2 from public.table_members where table_id = v_table_id order by joined_at offset 1 limit 1;
+--
+--   -- p3: any other real account (table_members.user_id references auth.users,
+--   -- so it can't be a made-up uuid).
+--   select u.id into v_p3 from auth.users u where u.id not in (v_p1, v_p2) order by u.created_at limit 1;
+--   if v_p3 is null then
+--     raise exception 'SETUP: the project needs a third account (any user other than the two players).';
+--   end if;
+--
+--   select g.id into v_last from public.games g where g.table_id = v_table_id order by g.created_at desc limit 1;
+--   if v_last is null then
+--     raise exception 'SETUP: the table has never had a game. Start one first.';
+--   end if;
+--
+--   -- No other live game at this table, so v_last can be made live below
+--   -- (one live game per table).
+--   update public.games
+--   set status = 'ended', ended_reason = 'admin'
+--   where table_id = v_table_id and id <> v_last and status in ('cutting', 'active');
+--
+--   -- The game under test: p1 v p2, the table's newest game.
+--   update public.games
+--   set players = array[v_p1, v_p2], dealer_id = v_p2,
+--       created_at = now() + interval '1 minute'
+--   where id = v_last;
+--
+--   -- Known hands, crib and deck (replacing whatever the game had).
+--   delete from public.game_hands where game_id = v_last;
+--   insert into public.game_hands (game_id, user_id, cards)
+--   values (v_last, v_p1, v_p1_hand), (v_last, v_p2, v_p2_hand);
+--
+--   delete from public.game_cribs where game_id = v_last;
+--   insert into public.game_cribs (game_id, cards) values (v_last, v_crib);
+--
+--   delete from public.game_decks where game_id = v_last;
+--   insert into public.game_decks (game_id, cards) values (v_last, array['AS', '3D', '8C']);
+--
+--   -- ==== W: WON during pegging -- nothing shown ==============================
+--   update public.games
+--   set status = 'ended', ended_reason = 'won', winner_id = v_p1,
+--       phase = 'play', revealed_by = '{}', crib_revealed = false
+--   where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [W1] p1 reads p2's unshown hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [W1] p1 read % rows of p2''s hand in a won game, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W2] ...and gets exactly p2's four cards.
+--   select cards into v_cards from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_cards is distinct from v_p2_hand then
+--     raise exception 'FAIL [W2] p1 read p2''s hand as %, expected %.', v_cards, v_p2_hand;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W3] p1 reads the unshown crib, all four cards.
+--   select cards into v_cards from public.game_cribs where game_id = v_last;
+--   if v_cards is distinct from v_crib then
+--     raise exception 'FAIL [W3] p1 read the crib of a won game as %, expected %.', v_cards, v_crib;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W4] p1 still reads their own hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--   if v_n <> 1 then raise exception 'FAIL [W4] p1 read % rows of their own hand, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [D1] game_decks: nothing (no policy -- or no privilege at all).
+--   v_n := 0;
+--   begin
+--     select count(*) into v_n from public.game_decks where game_id = v_last;
+--   exception when insufficient_privilege then v_n := 0;
+--   end;
+--   if v_n <> 0 then raise exception 'FAIL [D1] p1 read the deck of a won game.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--
+--   -- [W5] p2 (the loser) reads p1's unshown hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--   if v_n <> 1 then raise exception 'FAIL [W5] p2 read % rows of p1''s hand in a won game, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [W6] p2 reads the crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 1 then raise exception 'FAIL [W6] p2 read % crib rows in a won game, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== N: NOT a player of the won game =====================================
+--   -- p3 joins the table's roster now (as the owner).
+--   execute 'reset role';
+--   insert into public.table_members (table_id, user_id, joined_at)
+--   values (v_table_id, v_p3, now() + interval '2 minutes');
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p3, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p3::text, true);
+--
+--   -- [N1] p3, on the roster but not in players, reads no hand of the match.
+--   select count(*) into v_n from public.game_hands where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N1] a roster member who did not play read % hand rows.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N2] ...nor its crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N2] a roster member who did not play read the crib.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [D2] ...nor the deck.
+--   v_n := 0;
+--   begin
+--     select count(*) into v_n from public.game_decks where game_id = v_last;
+--   exception when insufficient_privilege then v_n := 0;
+--   end;
+--   if v_n <> 0 then raise exception 'FAIL [D2] p3 read the deck.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--
+--   -- [N3] A stranger (no membership at all) reads no hand...
+--   select count(*) into v_n from public.game_hands where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N3] a stranger read % hand rows of a won game.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N4] ...and no crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N4] a stranger read the crib of a won game.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== L: LIVE, nothing shown ==============================================
+--   execute 'reset role';
+--   update public.games
+--   set status = 'active', ended_reason = null, winner_id = null,
+--       phase = 'play', revealed_by = '{}', crib_revealed = false
+--   where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [L1] p1 cannot read p2's unshown hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 0 then raise exception 'FAIL [L1] p1 read the opponent''s unshown hand in a LIVE game.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [L2] ...nor the unshown crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [L2] p1 read the unshown crib in a LIVE game.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [L3] p1 reads their own hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--   if v_n <> 1 then raise exception 'FAIL [L3] p1 read % rows of their own hand in a live game.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [D3] ...and not the deck.
+--   v_n := 0;
+--   begin
+--     select count(*) into v_n from public.game_decks where game_id = v_last;
+--   exception when insufficient_privilege then v_n := 0;
+--   end;
+--   if v_n <> 0 then raise exception 'FAIL [D3] p1 read the deck of a live game.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--
+--   -- [L4] p2 reads their own hand, and only that.
+--   select count(*) into v_n from public.game_hands where game_id = v_last;
+--   if v_n <> 1 then raise exception 'FAIL [L4] p2 read % hand rows in a live game, expected 1 (their own).', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== S: LIVE, counting, p2's hand and the crib SHOWN -- unchanged rules ==
+--   execute 'reset role';
+--   update public.games
+--   set phase = 'counting', count_step = 2, revealed_by = array[v_p2], crib_revealed = true
+--   where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [S1] p1 reads p2's SHOWN hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [S1] p1 could not read p2''s shown hand.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [S2] p1 reads the SHOWN crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 1 then raise exception 'FAIL [S2] p1 could not read the shown crib.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--
+--   -- [S3] p2 still cannot read p1's UNSHOWN hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--   if v_n <> 0 then raise exception 'FAIL [S3] p2 read p1''s unshown hand in a live game.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p3, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p3::text, true);
+--
+--   -- [S4] p3, a member of the table, reads the shown hand -- the existing
+--   -- "shown at their table" rule, unchanged by this file.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [S4] a table member could not read a hand shown at the table.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- p3 leaves the roster again: the E cases are between the two players.
+--   execute 'reset role';
+--   delete from public.table_members where table_id = v_table_id and user_id = v_p3;
+--
+--   -- ==== E: ENDED, but NOT won -- nothing opens ==============================
+--   foreach v_reason in array array['player_left', 'admin', 'timeout'] loop
+--     execute 'reset role';
+--     update public.games
+--     set status = 'ended', ended_reason = v_reason, winner_id = null,
+--         phase = 'play', count_step = 0, revealed_by = '{}', crib_revealed = false
+--     where id = v_last;
+--
+--     execute 'set local role authenticated';
+--     perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--     perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--     -- [E-hand] p1 cannot read p2's hand of a game ended this way.
+--     select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--     if v_n <> 0 then
+--       raise exception 'FAIL [E-hand %] p1 read p2''s hand of a game ended by %.', v_reason, v_reason;
+--     end if;
+--     v_checks := v_checks + 1;
+--
+--     -- [E-crib] ...nor its crib.
+--     select count(*) into v_n from public.game_cribs where game_id = v_last;
+--     if v_n <> 0 then
+--       raise exception 'FAIL [E-crib %] p1 read the crib of a game ended by %.', v_reason, v_reason;
+--     end if;
+--     v_checks := v_checks + 1;
+--
+--     -- [E-own] ...but still reads their own hand.
+--     select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--     if v_n <> 1 then
+--       raise exception 'FAIL [E-own %] p1 could not read their own hand of a game ended by %.', v_reason, v_reason;
+--     end if;
+--     v_checks := v_checks + 1;
+--   end loop;
+--
+--   execute 'reset role';
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Players % and %, roster-only %.', v_checks, v_p1, v_p2, v_p3;
+-- end $$;
