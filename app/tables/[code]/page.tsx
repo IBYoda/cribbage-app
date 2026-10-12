@@ -6,7 +6,7 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { cardPlayValue, sortHand } from "@/lib/cards";
-import { PlayingCard } from "@/components/PlayingCard";
+import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
 import { TableHeader, TableShell } from "@/components/table/TableShell";
 import { OpponentBand, type OpponentSeat } from "@/components/table/OpponentBand";
@@ -112,12 +112,62 @@ const GAME_COLUMNS =
 // result stays on screen (and survives a reload) until the next game starts.
 // players and ready_by are the New Game ready gate's: who played the match,
 // and who has tapped New Game since (stored on the WON game's own row).
+// starter_card, dealer_id and board are THE FINAL BOARD: the table as the
+// match ended -- the starter, whose hand it was, and (board) the last run, both
+// hands and the crib.
 type FinishedGame = {
   id: string;
   winner_id: string | null;
   players: string[];
   ready_by: string[];
+  starter_card: string | null;
+  dealer_id: string | null;
+  board: WonBoard;
 };
+
+// The cards on the final board.
+//   finalRun: the hand's last run -- the newest run with any cards (the
+//     current one, or the one before it if the last card made 31). Empty
+//     only on his heels: next_hand deleted the previous hand's plays, and
+//     nothing has been played yet.
+//   hands: every hand this player may READ, by owner. game_hands.cards is the
+//     four kept cards for the whole hand -- play_card never removes a card
+//     from it (played cards only go to game_plays) -- so no rebuilding is
+//     needed. Until the won-game read policies are applied, an opponent's
+//     hand that was never shown isn't readable: it's simply missing here, and
+//     the board shows it face-down.
+//   crib: the four crib cards, or null while unreadable (face-down). Always
+//     complete by the time of any win: the starter is cut, and his heels
+//     scored, only once every player has discarded.
+type WonBoard = {
+  finalRun: PlayEvent[];
+  hands: Record<string, string[]>;
+  crib: string[] | null;
+};
+
+function finalRunOf(plays: PlayEvent[], playSegment: number) {
+  return displayedRun(plays, playSegment, true).events;
+}
+
+// Reads the final board of a won game. game_plays is readable by any logged-in
+// user; game_hands and game_cribs by RLS (see WonBoard above). Rows stay until
+// next_hand, which an ended game never reaches.
+async function readWonBoard(gameId: string, playSegment: number): Promise<WonBoard> {
+  const [{ data: playRows }, { data: handRows }, { data: cribRow }] = await Promise.all([
+    supabase
+      .from("game_plays")
+      .select("seq, segment, user_id, kind, card, count_after")
+      .eq("game_id", gameId)
+      .order("seq", { ascending: true }),
+    supabase.from("game_hands").select("user_id, cards").eq("game_id", gameId),
+    supabase.from("game_cribs").select("cards").eq("game_id", gameId).maybeSingle(),
+  ]);
+  return {
+    finalRun: finalRunOf((playRows as PlayEvent[]) ?? [], playSegment),
+    hands: Object.fromEntries((handRows ?? []).map((r) => [r.user_id, r.cards as string[]])),
+    crib: cribRow?.cards ?? null,
+  };
+}
 
 // Both lists, without repeats. The won game's ready_by only ever grows (the
 // gate appends to it; nothing else writes it once the game has ended), so the
@@ -181,6 +231,17 @@ export default function TablePage() {
   // The public play log for this game. Cards on the table are public the
   // instant they're played, so unlike hands this needs no per-user filtering.
   const [plays, setPlays] = useState<PlayEvent[]>([]);
+  // The plays and my hand as last rendered, for the realtime handler: when a
+  // match is won, the final run and my hand are shown from these at once
+  // (then confirmed by a re-read -- see the games UPDATE handler).
+  const playsRef = useRef<PlayEvent[]>([]);
+  useEffect(() => {
+    playsRef.current = plays;
+  }, [plays]);
+  const myHandRef = useRef<{ userId: string; cards: string[] } | null>(null);
+  useEffect(() => {
+    myHandRef.current = session ? { userId: session.user.id, cards: myHand } : null;
+  }, [session, myHand]);
   const [playStatus, setPlayStatus] = useState<"idle" | "sending" | "error">("idle");
   const [playMessage, setPlayMessage] = useState<string | null>(null);
   // Two-step confirm, but only when a game is live -- leaving then destroys a
@@ -237,7 +298,10 @@ export default function TablePage() {
     finishedGameIdRef.current = next?.id ?? null;
     setFinishedGame((current) =>
       next && current && current.id === next.id
-        ? { ...next, ready_by: unionIds(current.ready_by, next.ready_by) }
+        ? {
+            ...next,
+            ready_by: unionIds(current.ready_by, next.ready_by),
+          }
         : next
     );
   }, []);
@@ -518,22 +582,30 @@ export default function TablePage() {
       } else {
         const { data: lastGame } = await supabase
           .from("games")
-          .select("id, ended_reason, winner_id, players, ready_by")
+          .select(
+            "id, ended_reason, winner_id, players, ready_by, starter_card, dealer_id, play_segment"
+          )
           .eq("table_id", tableId)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        showFinishedGame(
+        const finished: FinishedGame | null =
           lastGame && lastGame.ended_reason === "won"
             ? {
                 id: lastGame.id,
                 winner_id: lastGame.winner_id,
                 players: lastGame.players ?? [],
                 ready_by: lastGame.ready_by ?? [],
+                starter_card: lastGame.starter_card,
+                dealer_id: lastGame.dealer_id,
+                board: await readWonBoard(lastGame.id, lastGame.play_segment ?? 0),
               }
-            : null
-        );
+            : null;
+
+        // Still the newest read? The board read above is one more wait, and a
+        // later read (a New Game starting, say) must not be undone by this.
+        if (gameAppliedSeqRef.current === ticket) showFinishedGame(finished);
       }
     }
 
@@ -1189,12 +1261,42 @@ export default function TablePage() {
             if (updatedGame.ended_reason === "won") {
               // The winner and final scores render from this plus the
               // roster, whose 121 arrives on its own table_members UPDATE.
+              // THE FINAL BOARD: the starter, the dealer, the last run and my
+              // hand, shown at once from what's already on screen; the
+              // opponent's hand and the crib aren't on screen yet (face-down
+              // until the read below brings them).
+              const segment = updatedGame.play_segment ?? 0;
+              const mine = myHandRef.current;
               showFinishedGame({
                 id: updatedGame.id,
                 winner_id: updatedGame.winner_id,
                 players: updatedGame.players ?? [],
                 ready_by: updatedGame.ready_by ?? [],
+                starter_card: updatedGame.starter_card,
+                dealer_id: updatedGame.dealer_id,
+                board: {
+                  finalRun: finalRunOf(playsRef.current, segment),
+                  // Only the kept four: a his-heels win can land before my
+                  // post-discard refetch, while the six dealt are still here.
+                  hands:
+                    mine && mine.cards.length === CARDS_AFTER_DISCARD
+                      ? { [mine.userId]: mine.cards }
+                      : {},
+                  crib: null,
+                },
               });
+              // Then the whole board from the server: the opponent's hand
+              // and the crib (never broadcast -- they can only be read), and
+              // the run again (the winning card's own INSERT is matched
+              // against the game on screen, which this branch has just
+              // cleared -- if it ever arrived after this UPDATE, it was
+              // dropped). Applied only if this won game is still on screen.
+              const wonId = updatedGame.id;
+              readWonBoard(wonId, segment).then((board) =>
+                setFinishedGame((current) =>
+                  current && current.id === wonId ? { ...current, board } : current
+                )
+              );
             }
             // Deliberately doesn't name the leaver: the roster DELETE arrives
             // as a separate event with no ordering guarantee, so building the
@@ -1469,6 +1571,10 @@ export default function TablePage() {
       : null;
 
   const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
+  // THE FINAL BOARD: the won game's result, while no game is live.
+  const finalBoard = activeGame ? null : finishedGame;
+  // Whose hand it was: the live game's dealer, or the won game's.
+  const handDealerId = activeGame ? activeGame.dealer_id : (finalBoard?.dealer_id ?? null);
 
   // THE NEW GAME READY GATE, as the server applies it: only after a won match
   // between exactly the players now at the table (anything else is a cut for
@@ -1531,12 +1637,25 @@ export default function TablePage() {
     return {
       userId: opponent.user_id,
       name: displayName(opponent),
-      isDealer: activeGame?.dealer_id === opponent.user_id,
+      isDealer: handDealerId === opponent.user_id,
       // In counting the strip keeps only a hand still WAITING to be counted
       // (face-down); a hand being counted is in the middle, and a counted
       // one has cleared.
-      cardCount: view ? view.oppBandCount : opponentCardCount(opponent.user_id),
-      shownCards: view ? undefined : shown ? sortHand(shown) : undefined,
+      // The final board: the hand face-up when readable, else face-down.
+      cardCount: finalBoard
+        ? CARDS_AFTER_DISCARD
+        : view
+          ? view.oppBandCount
+          : opponentCardCount(opponent.user_id),
+      shownCards: finalBoard
+        ? finalBoard.board.hands[opponent.user_id]
+          ? sortHand(finalBoard.board.hands[opponent.user_id])
+          : undefined
+        : view
+          ? undefined
+          : shown
+            ? sortHand(shown)
+            : undefined,
       saidGo: goBy.has(opponent.user_id),
     };
   });
@@ -1548,7 +1667,7 @@ export default function TablePage() {
     members: [{ userId: m.user_id, name: displayName(m), avatarUrl: m.avatar_url }],
     score: m.score,
     isMine: m.user_id === session.user.id,
-    hasDealer: activeGame?.dealer_id === m.user_id,
+    hasDealer: handDealerId === m.user_id,
     lastPoints: m.last_points,
     lastReason: m.last_reason,
     lastAwardedAt: m.last_awarded_at,
@@ -1737,71 +1856,103 @@ export default function TablePage() {
           </>
         )
       ) : (
-        <div className="result-stage">
-          {/* THE RESULT. Shown once a game has ended by a win and nothing
-              has replaced it -- a reload or a late reconnect finds it via
-              refreshTableState. Scores are read live from the roster, so
-              the winner's 121 shows even if its UPDATE lands after this. */}
-          {finishedGame && (
-            <div className="flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
-              <p className="text-lg font-semibold">
-                {finishedGame.winner_id === session.user.id
-                  ? "You win!"
-                  : `${winner ? displayName(winner) : "A player who has left"} wins!`}
-                {/* How it ended: the winner's last award IS the winning one,
-                    since nothing can score after the game ends. */}
-                {winner && (
-                  <>
-                    {" "}
-                    {winner.score}
-                    {winner.last_reason &&
-                      ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
-                  </>
-                )}
-              </p>
-            </div>
+        <div className="final-board">
+          {/* THE FINAL BOARD: the hand's last run as it stood, with its
+              count -- no turn pill, no Go labels, nothing to tap. None on
+              his heels (nothing played yet). */}
+          {finalBoard && finalBoard.board.finalRun.length > 0 && (
+            <PlayArea
+              ended
+              plays={finalBoard.board.finalRun}
+              playCount={0}
+              playSegment={0}
+              currentPlayer={null}
+              myUserId={session.user.id}
+              nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+            />
           )}
-          {/* NEW GAME, after a won match: the Next Hand pattern. The other
-              player's tap shows above the button; mine greys it out, with
-              who we're waiting for below. A repeat tap is quiet server-side
-              too. Leave stays available throughout. */}
-          <div className="result-stage__actions">
-            {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
-              <p className="text-sm font-medium">
-                {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
-                {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
-              </p>
+          <div className="result-stage">
+            {/* THE RESULT. Shown once a game has ended by a win and nothing
+                has replaced it -- a reload or a late reconnect finds it via
+                refreshTableState. Scores are read live from the roster, so
+                the winner's 121 shows even if its UPDATE lands after this. */}
+            {finishedGame && (
+              <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
+                <p className="text-lg font-semibold">
+                  {finishedGame.winner_id === session.user.id
+                    ? "You win!"
+                    : `${winner ? displayName(winner) : "A player who has left"} wins!`}
+                  {/* How it ended: the winner's last award IS the winning one,
+                      since nothing can score after the game ends. */}
+                  {winner && (
+                    <>
+                      {" "}
+                      {winner.score}
+                      {winner.last_reason &&
+                        ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
+                    </>
+                  )}
+                </p>
+              </div>
             )}
-            <button
-              onClick={handleStartNewGame}
-              disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
-              className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
-            >
-              {gameStatus === "creating"
-                ? newGameGated && othersNotReadyForNewGame.length > 0
-                  ? "Sending..."
-                  : "Dealing..."
-                : "New Game"}
-            </button>
-            {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
+            {/* NEW GAME, after a won match: the Next Hand pattern. The other
+                player's tap shows above the button; mine greys it out, with
+                who we're waiting for below. A repeat tap is quiet server-side
+                too. Leave stays available throughout. */}
+            <div className="result-stage__actions">
+              {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
+                <p className="text-sm font-medium">
+                  {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
+                  {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
+                </p>
+              )}
+              <button
+                onClick={handleStartNewGame}
+                disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
+                className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
+              >
+                {gameStatus === "creating"
+                  ? newGameGated && othersNotReadyForNewGame.length > 0
+                    ? "Sending..."
+                    : "Dealing..."
+                  : "New Game"}
+              </button>
+              {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
+                <p className="text-sm text-zinc-500">
+                  Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+                </p>
+              )}
+            </div>
+            {!canStartGame && (
               <p className="text-sm text-zinc-500">
-                Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+                Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
               </p>
             )}
           </div>
-          {!canStartGame && (
-            <p className="text-sm text-zinc-500">
-              Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
-            </p>
-          )}
         </div>
       )}
     </>
   );
 
+  // The score flash, between the piles, above Sort. Not mounted until the
+  // roster has loaded: see ScoreFlash. The same element in both pile rows
+  // below, so the winning point's flash carries over onto the final board.
+  const scoreFlash = membersLoaded ? <ScoreFlash plates={plates} /> : null;
+
   // The crib (left) and the starter or deck (right), with the hand's action
-  // buttons between them. Only while cards are out.
-  const piles = isActive ? (
+  // buttons between them. While cards are out -- and on the final board
+  // after a win: the crib and the starter, and no buttons.
+  const piles = finalBoard ? (
+    <PileRow
+      // The crib face-up (fanned) when readable, else a face-down pile.
+      crib={{
+        faceDownCount: CARDS_AFTER_DISCARD,
+        shownCards: finalBoard.board.crib ? sortHand(finalBoard.board.crib) : null,
+      }}
+      starter={finalBoard.starter_card ? { card: finalBoard.starter_card } : null}
+      flash={scoreFlash}
+    />
+  ) : isActive ? (
     <PileRow
       crib={
         view
@@ -1815,9 +1966,7 @@ export default function TablePage() {
             }
       }
       starter={{ card: starterCard }}
-      // The score flash, between the piles, above Sort.
-      // Not mounted until the roster has loaded: see ScoreFlash.
-      flash={membersLoaded ? <ScoreFlash plates={plates} /> : null}
+      flash={scoreFlash}
     >
       {/* Hidden, not just disabled, once sorting is locked (counting
           onward): the shown crib fans out in this row then, and needs the
@@ -1845,7 +1994,20 @@ export default function TablePage() {
     </PileRow>
   ) : null;
 
-  const hand = view ? (
+  // My hand: on the final board, my four cards face-up (sorted, nothing to
+  // tap), or face-down if they somehow couldn't be read.
+  const finalMyHand = finalBoard?.board.hands[session.user.id];
+  const hand = finalBoard ? (
+    <HandRow>
+      {finalMyHand
+        ? sortHand(finalMyHand).map((card) => (
+            <PlayingCard key={card} card={card} sizing={HAND_CARD} />
+          ))
+        : Array.from({ length: CARDS_AFTER_DISCARD }, (_, i) => (
+            <FaceDownCard key={i} sizing={HAND_CARD} />
+          ))}
+    </HandRow>
+  ) : view ? (
     // Counting: my hand at full size on my turn, small while it waits, gone
     // once counted -- or the crib, face-down then face-up, if I deal.
     <HandRow>

@@ -354,6 +354,68 @@ body {
   text-align: center;
 }
 
+/* -- The final board after a win: the hand's last run (none on his heels)
+      above the result. The run has no status line, and
+      its cards give up the height the result needs: the banner (~56px), the
+      New Game button with one ready line (~68px) and the gaps. */
+.final-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.play-area--ended {
+  --play-hlimit: calc((100cqh - 160px) / 1.4);
+}
+/* Flat: stacked needs ~195px (smallest cards + the result), so below 220px of
+   middle -- e.g. 1280x300, where it's ~73px -- one row instead: the run, a
+   tighter one-line banner, and the ready line beside the button. */
+@container middle (max-height: 219px) {
+  .final-board {
+    flex-direction: row;
+    justify-content: center;
+    gap: 16px;
+  }
+  /* The run keeps at least 25% of the row; with very long names it's the
+     banner and the ready line that give way, with an ellipsis. */
+  .final-board .play-area--ended {
+    --play-hlimit: calc((100cqh - 8px) / 1.4);
+    flex: 1 0 25%;
+    max-width: 50%;
+  }
+  .final-board .result-stage {
+    flex-direction: row;
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 12px;
+  }
+  .final-board .result-stage__actions {
+    flex-direction: row;
+    min-width: 0;
+    gap: 8px;
+  }
+  .final-board .result-stage__actions > p,
+  .final-board .result-banner,
+  .final-board .result-banner p {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .final-board .result-stage__actions > button {
+    flex-shrink: 0;
+  }
+  .final-board .result-banner {
+    padding: 4px 12px;
+  }
+  .final-board .result-banner p {
+    max-width: 100%;
+    font-size: 14px;
+    line-height: 18px;
+  }
+}
+
 /* -- The cut for deal. The cut fills the whole middle (no hands, no piles),
       and its cards are sized from that room. */
 .cut-view {
