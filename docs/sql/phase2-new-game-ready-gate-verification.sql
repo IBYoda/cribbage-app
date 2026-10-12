@@ -1,0 +1,420 @@
+-- New Game ready gate: VERIFICATION QUERIES.
+--
+-- Run in the Supabase Dashboard -> SQL Editor AFTER
+-- docs/sql/phase2-new-game-ready-gate.sql. The SQL Editor shows the result of
+-- the LAST statement only, so run each numbered query on its own.
+--
+-- Query 1 is read-only. Query 2 is a DO block that WRITES -- it calls
+-- start_game_with_deal as the real players -- and then deliberately raises an
+-- exception at the very end, which rolls every write back. It always "fails":
+-- the message is the verdict. "ALL n CHECKS PASSED (rolled back)" is a pass;
+-- anything starting "FAIL" or "SETUP" is not. Re-runnable, because nothing it
+-- does survives -- and since only committed changes reach Realtime, neither
+-- browser sees anything while it runs.
+--
+-- Same impersonation as phase2-batch2b-verification.sql (which passed on this
+-- project): request.jwt.claims plus "set local role authenticated", and
+-- "reset role" to act as the table owner between taps.
+--
+-- THE FROZEN now() LESSON (see the handoff): now() is the TRANSACTION's start
+-- time, and a DO block is one transaction, so every game this block creates
+-- gets the same created_at. start_game_with_deal finds "the previous match" by
+-- the newest created_at, so any game the block rewrites to be "the previous
+-- match" gets an explicit, strictly increasing created_at
+-- (now() + 1, 2, 3 minutes) -- otherwise the lookup ties and a case can pass
+-- for the wrong reason.
+
+
+-- ---------------------------------------------------------------------------
+-- 1. GRANTS. Unchanged by this file: EXPECT 10 rows with check 'ok', up to 3
+-- rows with check 'known pre-existing', and verdict 'PASS' on every row.
+-- (After phase2-revoke-stray-grants.sql, only rls_auto_enable can remain as
+-- 'known pre-existing'.)
+-- ---------------------------------------------------------------------------
+
+-- with expected(routine_name) as (
+--   values ('acknowledge_deal_cut'), ('confirm_count'), ('discard_to_crib'),
+--          ('draw_cut_card'), ('leave_table'), ('next_hand'), ('play_card'),
+--          ('show_crib'), ('show_hand'), ('start_game_with_deal')
+-- ),
+-- known_preexisting(routine_name) as (
+--   values ('card_rank_value'), ('shuffled_deck'), ('rls_auto_enable')
+-- ),
+-- actual as (
+--   select distinct rp.routine_name::text as routine_name, rp.grantee::text as grantee
+--   from information_schema.routine_privileges rp
+--   where rp.routine_schema = 'public'
+--     and rp.grantee in ('anon', 'authenticated')
+--     and rp.privilege_type = 'EXECUTE'
+-- ),
+-- graded as (
+--   select coalesce(a.routine_name, e.routine_name) as routine_name,
+--          a.grantee,
+--          case
+--            when e.routine_name is null
+--             and a.routine_name in (select routine_name from known_preexisting)
+--              then 'known pre-existing'
+--            when e.routine_name is null then 'UNEXPECTED GRANT'
+--            when a.routine_name is null then 'MISSING GRANT'
+--            when a.grantee <> 'authenticated' then 'WRONG GRANTEE'
+--            else 'ok'
+--          end as check_result
+--   from actual a
+--   full join expected e on e.routine_name = a.routine_name
+-- )
+-- select routine_name, grantee, check_result,
+--        case
+--          when bool_and(check_result in ('ok', 'known pre-existing')) over ()
+--           and count(*) filter (where check_result = 'ok') over () = 10
+--            then 'PASS'
+--          else 'FAIL'
+--        end as verdict
+-- from graded
+-- order by (check_result not in ('ok', 'known pre-existing')) desc,
+--          (check_result = 'known pre-existing') desc,
+--          routine_name;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. THE NEW GAME WALK-THROUGH (rolled back).
+--
+-- SETUP: any OPEN table with EXACTLY 2 members that has had at least one
+-- game, live or ended, in any state. As the owner, the block marks the
+-- latest game WON by the first-joined player (p1) -- whatever state it was
+-- in -- with both scores set, then:
+--
+--   R1  p1 taps New Game     -> NULL: recorded, waiting. No game started,
+--                               ready_by = {p1}, scores NOT reset.
+--   R2  p1 taps again        -> NULL, nothing changes (no duplicate).
+--   R3  a stranger taps      -> "not a member".
+--   R4  p2 taps              -> the match starts: active, the LOSER (p2)
+--                               deals, the post-cut state, dealt, scores
+--                               and tracker reset.
+--   R5  p1 taps late         -> the same game back; a score scored since is
+--                               NOT reset; still one live game, not redealt.
+--   R6  leave and rejoin     -> p1 taps after a fresh win; p2 leaves: p1's
+--                               tap is refused (needs 2 players); p2 rejoins
+--                               and taps: the match starts at once (p1's
+--                               earlier tap still counts).
+--   R7  previous game TIMED OUT        -> one tap: 'cutting', no gate.
+--   R8  previous game WON, other roster -> one tap: 'cutting', no gate.
+--
+-- Expected message:
+--   ALL 29 CHECKS PASSED (rolled back) ...
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_table_id uuid;
+--   v_p1 uuid;
+--   v_p2 uuid;
+--   v_p2_joined timestamptz;
+--   v_stranger uuid := gen_random_uuid();
+--   v_last uuid;
+--   v_ret uuid;
+--   v_game_id uuid;
+--   v_g record;
+--   v_n int;
+--   v_score int;
+--   v_ready uuid[];
+--   v_msg text;
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select t.id into v_table_id from public.tables t where t.code = v_code and t.status = 'open';
+--   if v_table_id is null then
+--     raise exception 'SETUP: no open table %.', v_code;
+--   end if;
+--
+--   select count(*) into v_n from public.table_members where table_id = v_table_id;
+--   if v_n <> 2 then
+--     raise exception 'SETUP: the table needs exactly 2 members (has %).', v_n;
+--   end if;
+--
+--   select user_id into v_p1 from public.table_members where table_id = v_table_id order by joined_at limit 1;
+--   select user_id, joined_at into v_p2, v_p2_joined
+--   from public.table_members where table_id = v_table_id order by joined_at offset 1 limit 1;
+--
+--   select g.id into v_last from public.games g where g.table_id = v_table_id order by g.created_at desc limit 1;
+--   if v_last is null then
+--     raise exception 'SETUP: the table has never had a game. Start one first.';
+--   end if;
+--
+--   -- p1 won the latest game (ending it if it was live), between p1 and p2.
+--   update public.games
+--   set status = 'ended', ended_reason = 'won', winner_id = v_p1,
+--       players = array[v_p1, v_p2], ready_by = '{}'
+--   where id = v_last;
+--
+--   update public.table_members
+--   set score = case when user_id = v_p1 then 121 else 87 end,
+--       last_points = 2, last_reason = 'his heels', last_awarded_at = now()
+--   where table_id = v_table_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--
+--   -- ==== R1: p1 taps New Game -- recorded, waiting ===========================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--   v_ret := public.start_game_with_deal(v_table_id);
+--
+--   -- [R1a] NULL means "recorded, waiting".
+--   if v_ret is not null then
+--     raise exception 'FAIL [R1a] the first tap returned a game (%), expected NULL.', v_ret;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R1b] No game was started.
+--   select count(*) into v_n from public.games
+--   where table_id = v_table_id and status in ('cutting', 'active');
+--   if v_n <> 0 then raise exception 'FAIL [R1b] % live game(s) after one tap.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R1c] p1 -- and only p1 -- is ready, on the WON game.
+--   select ready_by into v_ready from public.games where id = v_last;
+--   if v_ready is distinct from array[v_p1] then
+--     raise exception 'FAIL [R1c] ready_by after the first tap is %, expected {%}.', v_ready, v_p1;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R1d] Scores and tracker untouched: nothing has started.
+--   select count(*) into v_n from public.table_members
+--   where table_id = v_table_id and last_points = 2
+--     and score = case when user_id = v_p1 then 121 else 87 end;
+--   if v_n <> 2 then raise exception 'FAIL [R1d] a waiting tap changed the scores or tracker.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== R2: p1 taps again -- quiet ==========================================
+--   v_msg := null;
+--   begin v_ret := public.start_game_with_deal(v_table_id);
+--   exception when others then v_msg := sqlerrm; end;
+--   -- [R2a] No error, still NULL.
+--   if v_msg is not null or v_ret is not null then
+--     raise exception 'FAIL [R2a] a repeat tap gave error % / result %.', v_msg, v_ret;
+--   end if;
+--   v_checks := v_checks + 1;
+--   -- [R2b] No duplicate, still no game.
+--   select ready_by into v_ready from public.games where id = v_last;
+--   select count(*) into v_n from public.games
+--   where table_id = v_table_id and status in ('cutting', 'active');
+--   if v_ready is distinct from array[v_p1] or v_n <> 0 then
+--     raise exception 'FAIL [R2b] after a repeat tap: ready_by %, live games %.', v_ready, v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== R3: a stranger -- refused ===========================================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--   v_msg := null;
+--   begin perform public.start_game_with_deal(v_table_id);
+--   exception when others then v_msg := sqlerrm; end;
+--   -- [R3a]
+--   if v_msg is null or v_msg not like '%not a member%' then
+--     raise exception 'FAIL [R3a] stranger New Game: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== R4: p2 taps -- everyone is ready, the match starts ==================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_game_id := public.start_game_with_deal(v_table_id);
+--
+--   -- [R4a] A game id this time.
+--   if v_game_id is null then
+--     raise exception 'FAIL [R4a] the completing tap returned NULL.';
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   select * into v_g from public.games where id = v_game_id;
+--
+--   -- [R4b] Active at once, the LOSER (p2) dealing -- no cut.
+--   if v_g.status <> 'active' or v_g.dealer_id is distinct from v_p2 then
+--     raise exception 'FAIL [R4b] new match: status %, dealer % (expected active, the loser %).', v_g.status, v_g.dealer_id, v_p2;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R4c] Exactly the post-cut state.
+--   if v_g.hand_no <> 1 or v_g.phase <> 'discard' or v_g.discarded_by <> '{}'
+--      or v_g.starter_card is not null or v_g.current_player is not null
+--      or v_g.play_count <> 0 or v_g.play_segment <> 0 or v_g.count_step <> 0
+--      or v_g.revealed_by <> '{}' or v_g.crib_revealed or v_g.winner_id is not null
+--      or v_g.deal_cut is not null or v_g.deal_cut_ack_by <> '{}' or v_g.ready_by <> '{}' then
+--     raise exception 'FAIL [R4c] the new match is not in the post-cut state: %', row_to_json(v_g);
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R4d] Scores and tracker reset -- on the successful start only.
+--   select count(*) into v_n from public.table_members
+--   where table_id = v_table_id
+--     and score = 0 and last_points is null and last_reason is null and last_awarded_at is null;
+--   if v_n <> 2 then raise exception 'FAIL [R4d] % of 2 members were reset.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R4e] As the owner: dealt -- two 6-card hands and a 40-card deck.
+--   execute 'reset role';
+--   select count(*) into v_n from public.game_hands where game_id = v_game_id and array_length(cards, 1) = 6;
+--   if v_n <> 2 then raise exception 'FAIL [R4e] % six-card hands, expected 2.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select coalesce(max(array_length(cards, 1)), 0) into v_n from public.game_decks where game_id = v_game_id;
+--   if v_n <> 40 then raise exception 'FAIL [R4f] the deck has % cards, expected 40.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R4g] The won game keeps both taps, as history.
+--   select ready_by into v_ready from public.games where id = v_last;
+--   if not (array[v_p1, v_p2] <@ v_ready) or array_length(v_ready, 1) <> 2 then
+--     raise exception 'FAIL [R4g] the won game''s ready_by is %, expected both players.', v_ready;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== R5: p1's late tap, after the match started ==========================
+--   -- A point is scored in the new match first; the late tap must not undo it.
+--   update public.table_members set score = 5 where table_id = v_table_id and user_id = v_p1;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--   v_ret := public.start_game_with_deal(v_table_id);
+--
+--   -- [R5a] The same live game comes back.
+--   if v_ret is distinct from v_game_id then
+--     raise exception 'FAIL [R5a] a late tap returned %, expected the live game %.', v_ret, v_game_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R5b] Nothing reset.
+--   select score into v_score from public.table_members where table_id = v_table_id and user_id = v_p1;
+--   if v_score <> 5 then raise exception 'FAIL [R5b] a late tap reset a live score: 5 became %.', v_score; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R5c] Still one live game, still two hands (no second deal).
+--   execute 'reset role';
+--   select count(*) into v_n from public.games where table_id = v_table_id and status in ('cutting', 'active');
+--   if v_n <> 1 then raise exception 'FAIL [R5c] % live games after a late tap.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select count(*) into v_n from public.game_hands where game_id = v_game_id;
+--   if v_n <> 2 then raise exception 'FAIL [R5d] % hand rows after a late tap, expected 2.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== R6: a fresh win, p1 taps, p2 leaves and rejoins =====================
+--   -- p1 wins the R4 match. It must be the newest game at the table (frozen
+--   -- now(): it was created in this transaction), so its created_at moves on.
+--   update public.games
+--   set status = 'ended', ended_reason = 'won', winner_id = v_p1,
+--       players = array[v_p1, v_p2], ready_by = '{}',
+--       created_at = now() + interval '1 minute'
+--   where id = v_game_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--   v_ret := public.start_game_with_deal(v_table_id);
+--   -- [R6a] p1 is recorded and waiting.
+--   if v_ret is not null then raise exception 'FAIL [R6a] p1''s tap after the fresh win returned %.', v_ret; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- p2 leaves (as the owner: leave_table's effect here is exactly this --
+--   -- there is no live game for it to end).
+--   execute 'reset role';
+--   delete from public.table_members where table_id = v_table_id and user_id = v_p2;
+--
+--   -- [R6b] With one player at the table, a tap is refused.
+--   execute 'set local role authenticated';
+--   v_msg := null;
+--   begin perform public.start_game_with_deal(v_table_id);
+--   exception when others then v_msg := sqlerrm; end;
+--   if v_msg is null or v_msg not like '%exactly 2 players%' then
+--     raise exception 'FAIL [R6b] New Game with one player: got %', coalesce(v_msg, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [R6c] Leaving did not clear p1's readiness (leave_table is untouched).
+--   select ready_by into v_ready from public.games where id = v_game_id;
+--   if v_ready is distinct from array[v_p1] then
+--     raise exception 'FAIL [R6c] after p2 left, ready_by is %, expected {%}.', v_ready, v_p1;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- p2 rejoins, with the original join time (so join order is unchanged).
+--   execute 'reset role';
+--   insert into public.table_members (table_id, user_id, joined_at)
+--   values (v_table_id, v_p2, v_p2_joined);
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_ret := public.start_game_with_deal(v_table_id);
+--
+--   -- [R6d] The rejoined player's one tap completes the set: the match starts.
+--   if v_ret is null then raise exception 'FAIL [R6d] p2''s tap after rejoining returned NULL.'; end if;
+--   v_checks := v_checks + 1;
+--   select * into v_g from public.games where id = v_ret;
+--   -- [R6e] ...with the loser dealing, no cut.
+--   if v_g.status <> 'active' or v_g.dealer_id is distinct from v_p2 then
+--     raise exception 'FAIL [R6e] after the rejoin: status %, dealer %.', v_g.status, v_g.dealer_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--   v_game_id := v_ret;
+--
+--   -- ==== R7: the previous game TIMED OUT -- no gate ==========================
+--   execute 'reset role';
+--   update public.games
+--   set status = 'ended', ended_reason = 'timeout',
+--       created_at = now() + interval '2 minutes'
+--   where id = v_game_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--   v_ret := public.start_game_with_deal(v_table_id);
+--
+--   -- [R7a] One tap starts it.
+--   if v_ret is null then raise exception 'FAIL [R7a] after a timeout, one tap returned NULL (gated).'; end if;
+--   v_checks := v_checks + 1;
+--   select * into v_g from public.games where id = v_ret;
+--   -- [R7b] ...as a cut for deal: no dealer, one empty cut round.
+--   if v_g.status <> 'cutting' or v_g.dealer_id is not null
+--      or v_g.deal_cut is distinct from '[[]]'::jsonb then
+--     raise exception 'FAIL [R7b] after a timeout: status %, dealer %, deal_cut %.', v_g.status, v_g.dealer_id, v_g.deal_cut;
+--   end if;
+--   v_checks := v_checks + 1;
+--   -- [R7c] The cut path resets scores too.
+--   select count(*) into v_n from public.table_members
+--   where table_id = v_table_id and score = 0 and last_points is null;
+--   if v_n <> 2 then raise exception 'FAIL [R7c] % of 2 members reset on the cut path.', v_n; end if;
+--   v_checks := v_checks + 1;
+--   v_game_id := v_ret;
+--
+--   -- ==== R8: a WON match, but with another roster -- no gate =================
+--   -- A random uuid stands in for a player who has since been replaced
+--   -- (players is a plain uuid[], no foreign key).
+--   execute 'reset role';
+--   update public.games
+--   set status = 'ended', ended_reason = 'won', winner_id = v_p1,
+--       players = array[v_p1, gen_random_uuid()], ready_by = '{}',
+--       created_at = now() + interval '3 minutes'
+--   where id = v_game_id;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_ret := public.start_game_with_deal(v_table_id);
+--
+--   -- [R8a] One tap starts it...
+--   if v_ret is null then raise exception 'FAIL [R8a] after a changed roster, one tap returned NULL (gated).'; end if;
+--   v_checks := v_checks + 1;
+--   select * into v_g from public.games where id = v_ret;
+--   -- [R8b] ...as a cut for deal.
+--   if v_g.status <> 'cutting' or v_g.dealer_id is not null then
+--     raise exception 'FAIL [R8b] after a changed roster: status %, dealer %.', v_g.status, v_g.dealer_id;
+--   end if;
+--   v_checks := v_checks + 1;
+--   -- [R8c] The changed-roster game's ready_by was never touched.
+--   execute 'reset role';
+--   select ready_by into v_ready from public.games where id = v_game_id;
+--   if v_ready <> '{}' then raise exception 'FAIL [R8c] a no-gate tap wrote ready_by %.', v_ready; end if;
+--   v_checks := v_checks + 1;
+--
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Loser % dealt R4 and R6.', v_checks, v_p2;
+-- end $$;

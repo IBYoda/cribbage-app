@@ -110,7 +110,22 @@ const GAME_COLUMNS =
 
 // The last game to end in a win, kept after the live game is gone so the
 // result stays on screen (and survives a reload) until the next game starts.
-type FinishedGame = { id: string; winner_id: string | null };
+// players and ready_by are the New Game ready gate's: who played the match,
+// and who has tapped New Game since (stored on the WON game's own row).
+type FinishedGame = {
+  id: string;
+  winner_id: string | null;
+  players: string[];
+  ready_by: string[];
+};
+
+// Both lists, without repeats. The won game's ready_by only ever grows (the
+// gate appends to it; nothing else writes it once the game has ended), so the
+// union of two reads is never older than either -- which is what lets a REST
+// read and a realtime event land in any order without rolling the other back.
+function unionIds(a: string[], b: string[]) {
+  return [...a, ...b.filter((id) => !a.includes(id))];
+}
 
 // The key for "has visibility changed?" -- compared on every games UPDATE so
 // hands and the crib are refetched only when a reveal actually happened, not
@@ -186,6 +201,9 @@ export default function TablePage() {
   const [countStatus, setCountStatus] = useState<"idle" | "sending" | "error">("idle");
   const [countMessage, setCountMessage] = useState<string | null>(null);
   const [finishedGame, setFinishedGame] = useState<FinishedGame | null>(null);
+  // True once the roster (and so every score and last award) has been read.
+  // The score flash isn't mounted before then -- see ScoreFlash.
+  const [membersLoaded, setMembersLoaded] = useState(false);
   // THE PEGGING HOLD -- client-only, per screen, never stored. When this
   // screen sees the hand go from play to counting, it keeps showing the
   // pegging view (the final run, the final count, the last-card/go flash)
@@ -208,6 +226,21 @@ export default function TablePage() {
   // the active game changes, so reading activeGame inside its handlers would
   // capture a stale closure. A ref always reads current.
   const activeGameIdRef = useRef<string | null>(null);
+  // The won game whose result is on screen -- set synchronously, like
+  // activeGameIdRef, so realtime events are matched against it at once. Its
+  // UPDATEs carry New Game taps (ready_by), and nothing else is taken from them.
+  const finishedGameIdRef = useRef<string | null>(null);
+  // Every write of finishedGame goes through here: it keeps the ref in step,
+  // and a second read of the SAME won game merges ready_by rather than
+  // replacing it (see unionIds), so an older read can't drop a tap.
+  const showFinishedGame = useCallback((next: FinishedGame | null) => {
+    finishedGameIdRef.current = next?.id ?? null;
+    setFinishedGame((current) =>
+      next && current && current.id === next.id
+        ? { ...next, ready_by: unionIds(current.ready_by, next.ready_by) }
+        : next
+    );
+  }, []);
   // "<game id>:<hand_no>" of the hand this client last set up. A change in
   // either half means different cards are on the table -- a new hand within
   // the match (next_hand) or a new game altogether (New Game) -- and
@@ -481,19 +514,24 @@ export default function TablePage() {
       // who reconnects after the winning point, still sees who won. Only while
       // no game is live: once the next one starts, the old result is history.
       if (existingGame) {
-        setFinishedGame(null);
+        showFinishedGame(null);
       } else {
         const { data: lastGame } = await supabase
           .from("games")
-          .select("id, ended_reason, winner_id")
+          .select("id, ended_reason, winner_id, players, ready_by")
           .eq("table_id", tableId)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        setFinishedGame(
+        showFinishedGame(
           lastGame && lastGame.ended_reason === "won"
-            ? { id: lastGame.id, winner_id: lastGame.winner_id }
+            ? {
+                id: lastGame.id,
+                winner_id: lastGame.winner_id,
+                players: lastGame.players ?? [],
+                ready_by: lastGame.ready_by ?? [],
+              }
             : null
         );
       }
@@ -530,7 +568,8 @@ export default function TablePage() {
         last_awarded_at: m.last_awarded_at,
       }))
     );
-  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState]);
+    setMembersLoaded(true);
+  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame]);
 
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
@@ -597,9 +636,11 @@ export default function TablePage() {
     setGameStatus("creating");
     setGameMessage(null);
     setGameEndedNotice(null);
-    setFinishedGame(null);
+    // The result is NOT cleared here: after a won match the tap may only be
+    // recorded (the ready gate), and the result stays up while we wait. It
+    // goes when the new game arrives -- the re-read below, or its INSERT.
 
-    const { error: rpcError } = await supabase.rpc("start_game_with_deal", {
+    const { data: newGameId, error: rpcError } = await supabase.rpc("start_game_with_deal", {
       p_table_id: table.id,
     });
 
@@ -608,6 +649,22 @@ export default function TablePage() {
       // count) surface here as readable messages.
       setGameStatus("error");
       setGameMessage(rpcError.message);
+      return;
+    }
+
+    // NULL: the New Game ready gate recorded the tap (or already had it) and
+    // is waiting for the other player -- not an error, and nothing was dealt.
+    // A null always means this player is in the won game's ready_by, so it's
+    // shown at once rather than after the realtime echo; the re-read confirms
+    // it from the server (and finds the game, if the other tap has since
+    // started it).
+    if (newGameId === null) {
+      const myId = session.user.id;
+      setFinishedGame((current) =>
+        current ? { ...current, ready_by: unionIds(current.ready_by, [myId]) } : current
+      );
+      await refreshTableState(table.id);
+      setGameStatus("idle");
       return;
     }
 
@@ -1001,7 +1058,7 @@ export default function TablePage() {
             // cut card). Keep what we have.
             if (newGame.id === activeGameIdRef.current) {
               setGameEndedNotice(null);
-              setFinishedGame(null);
+              showFinishedGame(null);
               return;
             }
             setActiveGame({
@@ -1031,7 +1088,7 @@ export default function TablePage() {
             activeGameIdRef.current = newGame.id;
             lastGameStatusRef.current = newGame.status;
             setGameEndedNotice(null); // stale once a fresh game is under way
-            setFinishedGame(null); // likewise the last game's result -- the win banner
+            showFinishedGame(null); // likewise the last game's result -- the win banner
             // Plays, selection, sort, shown hands, crib, count status. Scores
             // need nothing here: start_game_with_deal reset them, and those
             // table_members UPDATEs arrive on their own -- with last_points
@@ -1077,6 +1134,23 @@ export default function TablePage() {
             hand_no: number | null;
             ready_by: string[] | null;
           };
+          // THE WON GAME ON SCREEN: its only change after it ends is a New
+          // Game tap (ready_by). Merge that and nothing else -- a union, so an
+          // event and a re-read can land in either order. Everything else
+          // about ended games stays ignored, as below.
+          if (
+            updatedGame.id === finishedGameIdRef.current &&
+            !LIVE_GAME_STATUSES.includes(updatedGame.status)
+          ) {
+            const readyBy: string[] = updatedGame.ready_by ?? [];
+            setFinishedGame((current) =>
+              current && current.id === updatedGame.id
+                ? { ...current, ready_by: unionIds(current.ready_by, readyBy) }
+                : current
+            );
+            return;
+          }
+
           // ONLY THE GAME ON SCREEN. This subscription is per TABLE, so it
           // also carries rows for other games at the table. Before this check,
           // the merge below folded whatever game's row arrived into the one on
@@ -1115,7 +1189,12 @@ export default function TablePage() {
             if (updatedGame.ended_reason === "won") {
               // The winner and final scores render from this plus the
               // roster, whose 121 arrives on its own table_members UPDATE.
-              setFinishedGame({ id: updatedGame.id, winner_id: updatedGame.winner_id });
+              showFinishedGame({
+                id: updatedGame.id,
+                winner_id: updatedGame.winner_id,
+                players: updatedGame.players ?? [],
+                ready_by: updatedGame.ready_by ?? [],
+              });
             }
             // Deliberately doesn't name the leaver: the roster DELETE arrives
             // as a separate event with no ordering guarantee, so building the
@@ -1203,7 +1282,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame]);
+  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
   // update, so this is a legitimate effect rather than a cascading render.
@@ -1390,6 +1469,25 @@ export default function TablePage() {
       : null;
 
   const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
+
+  // THE NEW GAME READY GATE, as the server applies it: only after a won match
+  // between exactly the players now at the table (anything else is a cut for
+  // deal, which starts on the first tap). Every state comes from the won
+  // game's ready_by, so a refresh shows the same thing.
+  const memberIds = members.map((m) => m.user_id);
+  const newGameGated =
+    !!finishedGame &&
+    canStartGame &&
+    finishedGame.players.length === memberIds.length &&
+    finishedGame.players.every((id) => memberIds.includes(id));
+  const newGameReadyBy = newGameGated ? finishedGame.ready_by : [];
+  const iAmReadyForNewGame = newGameReadyBy.includes(session.user.id);
+  const othersReadyForNewGame = newGameGated
+    ? finishedGame.players.filter((id) => id !== session.user.id && newGameReadyBy.includes(id))
+    : [];
+  const othersNotReadyForNewGame = newGameGated
+    ? finishedGame.players.filter((id) => id !== session.user.id && !newGameReadyBy.includes(id))
+    : [];
 
   // Derived from discarded_by rather than mirroring our own hand length: once
   // you discard and your opponent hasn't, mirroring would show 4 cards for a
@@ -1663,13 +1761,34 @@ export default function TablePage() {
               </p>
             </div>
           )}
-          <button
-            onClick={handleStartNewGame}
-            disabled={gameStatus === "creating" || !canStartGame}
-            className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-50"
-          >
-            {gameStatus === "creating" ? "Dealing..." : "New Game"}
-          </button>
+          {/* NEW GAME, after a won match: the Next Hand pattern. The other
+              player's tap shows above the button; mine greys it out, with
+              who we're waiting for below. A repeat tap is quiet server-side
+              too. Leave stays available throughout. */}
+          <div className="result-stage__actions">
+            {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
+              <p className="text-sm font-medium">
+                {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
+                {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
+              </p>
+            )}
+            <button
+              onClick={handleStartNewGame}
+              disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
+              className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
+            >
+              {gameStatus === "creating"
+                ? newGameGated && othersNotReadyForNewGame.length > 0
+                  ? "Sending..."
+                  : "Dealing..."
+                : "New Game"}
+            </button>
+            {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
+              <p className="text-sm text-zinc-500">
+                Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+              </p>
+            )}
+          </div>
           {!canStartGame && (
             <p className="text-sm text-zinc-500">
               Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
@@ -1697,7 +1816,8 @@ export default function TablePage() {
       }
       starter={{ card: starterCard }}
       // The score flash, between the piles, above Sort.
-      flash={<ScoreFlash plates={plates} />}
+      // Not mounted until the roster has loaded: see ScoreFlash.
+      flash={membersLoaded ? <ScoreFlash plates={plates} /> : null}
     >
       {/* Hidden, not just disabled, once sorting is locked (counting
           onward): the shown crib fans out in this row then, and needs the

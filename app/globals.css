@@ -343,6 +343,16 @@ body {
   align-items: center;
   gap: 10px;
 }
+/* The New Game button with its ready line ("X is ready" above it, or
+   "Waiting for X..." below it) -- one column in every layout, so a flat
+   window puts it beside the banner as a unit. */
+.result-stage__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
 
 /* -- The cut for deal. The cut fills the whole middle (no hands, no piles),
       and its cards are sized from that room. */
