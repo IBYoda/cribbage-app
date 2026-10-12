@@ -6,11 +6,17 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { cardPlayValue, sortHand } from "@/lib/cards";
-import { scoreHand, type HandScore } from "@/lib/scoring";
-import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
+import { PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
-import { PlayerScore } from "@/components/PlayerScore";
-import { PlayArea, type PlayEvent } from "@/components/PlayArea";
+import { TableHeader, TableShell } from "@/components/table/TableShell";
+import { OpponentBand, type OpponentSeat } from "@/components/table/OpponentBand";
+import { PileRow } from "@/components/table/PileRow";
+import { HandRow } from "@/components/table/HandRow";
+import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
+import { HAND_CARD } from "@/components/table/sizes";
+import { countingView } from "@/components/table/countingView";
+import { CountStage, SlotCards } from "@/components/table/CountStage";
+import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
 
 type TableRow = {
   id: string;
@@ -21,6 +27,8 @@ type TableRow = {
 type Member = {
   user_id: string;
   nickname: string | null;
+  // For the score plate. Optional on the profile; plates fall back to an initial.
+  avatar_url: string | null;
   joined_at: string;
   // The running score, and the last award that moved it. Lives on
   // table_members because that table is already keyed (table_id, user_id) --
@@ -104,20 +112,6 @@ const GAME_COLUMNS =
 // result stays on screen (and survives a reload) until the next game starts.
 type FinishedGame = { id: string; winner_id: string | null };
 
-// Mirrors the reason confirm_count writes ("15s 4 · pairs 2 · runs 3"), so the
-// breakdown next to a counted hand reads the same as the score-tracker flash.
-// Display only -- the points that count are awarded by the server.
-function formatBreakdown(score: HandScore) {
-  const parts = [
-    score.fifteens > 0 && `15s ${score.fifteens}`,
-    score.pairs > 0 && `pairs ${score.pairs}`,
-    score.runs > 0 && `runs ${score.runs}`,
-    score.flush > 0 && `flush ${score.flush}`,
-    score.nobs > 0 && `nobs ${score.nobs}`,
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join(" · ") : "nothing";
-}
-
 // The key for "has visibility changed?" -- compared on every games UPDATE so
 // hands and the crib are refetched only when a reveal actually happened, not
 // on every unrelated broadcast.
@@ -192,6 +186,15 @@ export default function TablePage() {
   const [countStatus, setCountStatus] = useState<"idle" | "sending" | "error">("idle");
   const [countMessage, setCountMessage] = useState<string | null>(null);
   const [finishedGame, setFinishedGame] = useState<FinishedGame | null>(null);
+  // THE PEGGING HOLD -- client-only, per screen, never stored. When this
+  // screen sees the hand go from play to counting, it keeps showing the
+  // pegging view (the final run, the final count, the last-card/go flash)
+  // until THIS player taps "Count hands". Holds the "<game id>:<hand_no>" it
+  // applies to, so a new hand or a new game can never inherit it.
+  const [pegHoldKey, setPegHoldKey] = useState<string | null>(null);
+  // The "<game id>:<hand_no>:<phase>" this screen last rendered -- how the
+  // play -> counting step is spotted (see below).
+  const [seenPhaseKey, setSeenPhaseKey] = useState<string | null>(null);
   // The revealKey last fetched for. A ref for the same reason as
   // lastGameStatusRef: it's read inside the realtime handler.
   const revealKeyRef = useRef<string | null>(null);
@@ -510,16 +513,17 @@ export default function TablePage() {
     const userIds = (memberRows ?? []).map((m) => m.user_id);
     const { data: profileRows } = await supabase
       .from("profiles")
-      .select("id, nickname")
+      .select("id, nickname, avatar_url")
       .in("id", userIds.length > 0 ? userIds : [""]);
 
-    const nicknameById = new Map((profileRows ?? []).map((p) => [p.id, p.nickname]));
+    const profileById = new Map((profileRows ?? []).map((p) => [p.id, p]));
 
     setMembers(
       (memberRows ?? []).map((m) => ({
         user_id: m.user_id,
         joined_at: m.joined_at,
-        nickname: nicknameById.get(m.user_id) ?? null,
+        nickname: profileById.get(m.user_id)?.nickname ?? null,
+        avatar_url: profileById.get(m.user_id)?.avatar_url ?? null,
         score: m.score ?? 0,
         last_points: m.last_points,
         last_reason: m.last_reason,
@@ -830,6 +834,7 @@ export default function TablePage() {
                 user_id: newRow.user_id,
                 joined_at: newRow.joined_at,
                 nickname: null,
+                avatar_url: null,
                 // A joining player starts at 0 with nothing to explain yet.
                 score: newRow.score ?? 0,
                 last_points: null,
@@ -841,14 +846,16 @@ export default function TablePage() {
 
           const { data: profile } = await supabase
             .from("profiles")
-            .select("nickname")
+            .select("nickname, avatar_url")
             .eq("id", newRow.user_id)
             .maybeSingle();
 
           if (profile) {
             setMembers((current) =>
               current.map((m) =>
-                m.user_id === newRow.user_id ? { ...m, nickname: profile.nickname } : m
+                m.user_id === newRow.user_id
+                  ? { ...m, nickname: profile.nickname, avatar_url: profile.avatar_url }
+                  : m
               )
             );
           }
@@ -936,11 +943,13 @@ export default function TablePage() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "profiles" },
         (payload) => {
-          const updated = payload.new as { id: string; nickname: string };
+          const updated = payload.new as { id: string; nickname: string; avatar_url: string | null };
 
           setMembers((current) =>
             current.map((m) =>
-              m.user_id === updated.id ? { ...m, nickname: updated.nickname } : m
+              m.user_id === updated.id
+                ? { ...m, nickname: updated.nickname, avatar_url: updated.avatar_url }
+                : m
             )
           );
         }
@@ -1258,6 +1267,30 @@ export default function TablePage() {
   const isPlaying = isActive && phase === "play";
   const isCounting = isActive && phase === "counting";
 
+  // Spot the play -> counting step AS IT HAPPENS on this screen, and hold
+  // the pegging view. React's "adjust state when a value changes" pattern
+  // (as in ScoreStrip): compared during render, so it catches the change
+  // whichever way it arrived -- a realtime event, our own last card's
+  // re-read, or a reconcile. Only a step seen live counts: a page that
+  // LOADS in counting (a refresh) never saw "play", so it goes straight to
+  // counting. Server and other screen are untouched.
+  const currentHandKey = activeGame ? `${activeGame.id}:${activeGame.hand_no}` : null;
+  const phaseKey = isActive && currentHandKey ? `${currentHandKey}:${phase}` : null;
+  if (phaseKey !== seenPhaseKey) {
+    if (seenPhaseKey === `${currentHandKey}:play` && phase === "counting") {
+      setPegHoldKey(currentHandKey);
+    }
+    setSeenPhaseKey(phaseKey);
+  }
+  // On hold: the hand is in counting (or beyond) on the server, but this
+  // screen still shows pegging. Keyed to this hand, so it lapses by itself
+  // on Next Hand or New Game, and an ended game (activeGame gone) never
+  // shows it.
+  const onPegHold =
+    isActive && (phase === "counting" || phase === "done") && pegHoldKey === currentHandKey;
+  // The pegging layout is on screen: during play, or holding after it.
+  const pegView = isPlaying || onPegHold;
+
   // game_hands.cards is the immutable four-card hand; what you still HOLD is
   // that minus what you've already played.
   const playedByMe = new Set(
@@ -1265,8 +1298,13 @@ export default function TablePage() {
   );
   // During counting you want the whole hand back -- those four cards are what
   // gets scored. Only during play is it reduced to what's left to play.
-  const handForDisplay = isPlaying ? myHand.filter((c) => !playedByMe.has(c)) : myHand;
-  const displayedHand = handSorted ? sortHand(handForDisplay) : handForDisplay;
+  const handForDisplay = pegView ? myHand.filter((c) => !playedByMe.has(c)) : myHand;
+  // From counting onward every hand is shown sorted, on every screen --
+  // including your own -- so a shown hand reads in the same order for its
+  // owner and for the table. Sort is locked on until the next hand.
+  const sortLocked = isActive && (phase === "counting" || phase === "done");
+  const displayedHand =
+    handSorted || sortLocked ? sortHand(handForDisplay) : handForDisplay;
 
   const isMyTurn = isPlaying && activeGame?.current_player === session.user.id;
   const playCount = activeGame?.play_count ?? 0;
@@ -1282,7 +1320,6 @@ export default function TablePage() {
   const iHaveDiscarded = discardedBy.includes(session.user.id);
   const cribComplete = discardedBy.length >= REQUIRED_PLAYERS;
   const iAmDealer = activeGame?.dealer_id === session.user.id;
-  const dealer = members.find((m) => m.user_id === activeGame?.dealer_id);
   const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
   const canDiscard = Boolean(activeGame) && !iHaveDiscarded && myHand.length === CARDS_DEALT;
 
@@ -1317,60 +1354,40 @@ export default function TablePage() {
   const othersNotReady = (activeGame?.players ?? []).filter(
     (p) => p !== session.user.id && !readyBy.includes(p)
   );
-  const isCountingOrDone = isCounting || isDone;
+  // The counting UI (banner, breakdowns, Show Hand) -- only once this player
+  // has left the pegging hold.
+  const isCountingOrDone = (isCounting || isDone) && !onPegHold;
   const countStep = activeGame?.count_step ?? 0;
   const revealedBy = activeGame?.revealed_by ?? [];
   const cribRevealed = activeGame?.crib_revealed ?? false;
   const starterCard = activeGame?.starter_card ?? null;
-  const counter = members.find((m) => m.user_id === activeGame?.current_player);
-  const iAmCounter = isCounting && activeGame?.current_player === session.user.id;
   const iHaveShown = revealedBy.includes(session.user.id);
-  // At the crib step Confirm Count stays disabled until the crib is shown --
-  // confirm_count refuses it anyway; this just makes the order visible.
-  const canConfirm = iAmCounter && (countStep < 2 || cribRevealed);
   const countBusy = countStatus === "sending";
 
-  // Whether a hand has been confirmed: the pone's at step 0, the dealer's at
-  // step 1, so it's "counted" once count_step has moved past it. Used only to
-  // decide when to show the breakdown -- before the confirm, the player counts
-  // out loud themselves rather than reading the answer off the screen.
-  function handCounted(userId: string) {
-    if (isDone) return true;
-    if (!isCounting) return false;
-    return userId === activeGame?.dealer_id ? countStep >= 2 : countStep >= 1;
-  }
-
-  // Display-only, from lib/scoring.ts. The awarded points come from
-  // confirm_count on the server; this mirrors them so a player can see why.
-  function breakdownFor(cards: string[], isCrib: boolean) {
-    if (!starterCard || cards.length !== CARDS_AFTER_DISCARD) return null;
-    const score = scoreHand(cards, starterCard, isCrib);
-    return `${score.points} — ${formatBreakdown(score)}`;
-  }
-
-  let countingHeadline = "";
-  let countingHint = "";
-  if (isDone) {
-    countingHeadline = "Every hand and the crib are counted.";
-    countingHint = `Next dealer: ${nextDealerName}`;
-  } else if (isCounting && countStep < 2) {
-    countingHeadline = iAmCounter
-      ? "Your count"
-      : `${displayName(counter)} is counting their hand`;
-    countingHint = iAmCounter
-      ? "Count your hand out loud, then Confirm Count."
-      : "Waiting for them to count out loud and confirm.";
-  } else if (isCounting) {
-    if (!cribRevealed) {
-      countingHeadline = iAmDealer ? "Your crib" : `${displayName(dealer)} is about to show the crib`;
-      countingHint = iAmDealer
-        ? "Show the crib, count it out loud, then Confirm Count."
-        : "The crib is shown after both hands are counted.";
-    } else {
-      countingHeadline = iAmDealer ? "Your crib" : `${displayName(dealer)} is counting the crib`;
-      countingHint = iAmDealer ? "Count the crib out loud, then Confirm Count." : "";
-    }
-  }
+  // THE COUNTING VIEW (UI polish, stage 3): what goes in my hand row, in the
+  // middle, in the opponent's strip and in the crib pile at each step --
+  // decided in one pure function (components/table/countingView.ts) that the
+  // layout mock calls too. 2-player: the one opponent.
+  const countOpp = opponents[0];
+  const view =
+    isCountingOrDone && activeGame?.dealer_id && countOpp
+      ? countingView({
+          myId: session.user.id,
+          dealerId: activeGame.dealer_id,
+          oppName: displayName(countOpp),
+          phase: isDone ? "done" : "counting",
+          step: countStep,
+          myHand: sortHand(myHand),
+          oppCards:
+            revealedBy.includes(countOpp.user_id) && revealedHands[countOpp.user_id]
+              ? sortHand(revealedHands[countOpp.user_id])
+              : null,
+          cribCards: cribCards ? sortHand(cribCards) : null,
+          starter: starterCard,
+          iHaveShown,
+          cribRevealed,
+        })
+      : null;
 
   const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
 
@@ -1380,7 +1397,7 @@ export default function TablePage() {
   // this reveals nothing that isn't already known.
   function opponentCardCount(opponentId: string) {
     if (!activeGame) return 0;
-    if (isPlaying) {
+    if (pegView) {
       // Derived from the public play log -- how many of their four they've
       // laid down. Reveals nothing: which cards they've played is already
       // public, and hand sizes are visible in a real game anyway.
@@ -1391,26 +1408,84 @@ export default function TablePage() {
     return discardedBy.includes(opponentId) ? CARDS_AFTER_DISCARD : CARDS_DEALT;
   }
 
-  return (
-    <main className="flex flex-1 flex-col gap-4 p-4">
-      <header className="flex items-baseline justify-between">
-        <h1 className="text-lg font-semibold">Table {code}</h1>
-        <div className="flex items-center gap-3 text-sm">
+  // ---- The table, as a fixed-height shell (UI polish, stage 1). ----------
+  //
+  // TableShell gives every region a fixed height except the middle, which takes
+  // what's left -- so the hand, the piles and the scores stay put for the
+  // whole game and the page never scrolls. Errors and notices are overlays
+  // inside the middle, so they never add height either.
+
+  // WHO SAID GO in the run on the table (pegging, or the hold after it): an
+  // amber "Go" by each such player -- above my hand, or under the opponent's
+  // name. It clears when the run clears, because it's read from the same run
+  // the play area shows (displayedRun).
+  const goBy =
+    pegView && activeGame
+      ? goSayers(displayedRun(plays, activeGame.play_segment, onPegHold).events)
+      : new Set<string>();
+  const goLabel = <span className="text-xs font-semibold text-amber-600 dark:text-amber-500">Go</span>;
+
+  // Opponents across the top. Each seat's hand is drawn face-down from the
+  // public hand size, or face-up -- sorted, as on every screen from counting
+  // onward -- once it has been shown.
+  const seats: OpponentSeat[] = opponents.map((opponent) => {
+    const shown = revealedBy.includes(opponent.user_id) ? revealedHands[opponent.user_id] : undefined;
+    return {
+      userId: opponent.user_id,
+      name: displayName(opponent),
+      isDealer: activeGame?.dealer_id === opponent.user_id,
+      // In counting the strip keeps only a hand still WAITING to be counted
+      // (face-down); a hand being counted is in the middle, and a counted
+      // one has cleared.
+      cardCount: view ? view.oppBandCount : opponentCardCount(opponent.user_id),
+      shownCards: view ? undefined : shown ? sortHand(shown) : undefined,
+      saidGo: goBy.has(opponent.user_id),
+    };
+  });
+
+  // One plate per player (2-player). Built as a list so a 4-player team game
+  // only has to group members into plates -- see ScoreStrip.
+  const plates: ScorePlate[] = [...(me ? [me] : []), ...opponents].map((m) => ({
+    key: m.user_id,
+    members: [{ userId: m.user_id, name: displayName(m), avatarUrl: m.avatar_url }],
+    score: m.score,
+    isMine: m.user_id === session.user.id,
+    hasDealer: activeGame?.dealer_id === m.user_id,
+    lastPoints: m.last_points,
+    lastReason: m.last_reason,
+    lastAwardedAt: m.last_awarded_at,
+  }));
+
+  // Every error the old layout stacked into the page as extra lines now
+  // shares one overlay at the bottom of the middle region.
+  const errorToast =
+    (leaveStatus === "error" && leaveMessage) ||
+    (discardStatus === "error" && discardMessage) ||
+    (playStatus === "error" && playMessage) ||
+    (gameStatus === "error" && gameMessage) ||
+    null;
+
+  const header = (
+    <TableHeader
+      code={code}
+      handNo={isActive ? (activeGame?.hand_no ?? null) : null}
+      right={
+        <>
           {realtimeStatus === "disconnected" && (
-            <span className="text-amber-600 dark:text-amber-500">Reconnecting...</span>
+            <span className="text-xs text-amber-600 dark:text-amber-500">Reconnecting...</span>
           )}
           {leaveConfirming ? (
             <>
               <button
                 onClick={handleLeave}
                 disabled={leaveStatus === "leaving"}
-                className="rounded bg-red-600 px-3 py-1 text-white disabled:opacity-50"
+                className="tap-40 rounded bg-red-600 px-3 text-xs text-white disabled:opacity-50"
               >
                 {leaveStatus === "leaving" ? "Leaving..." : "End game & leave"}
               </button>
               <button
                 onClick={() => setLeaveConfirming(false)}
-                className="underline text-zinc-600 dark:text-zinc-400"
+                className="tap-40 px-1 text-xs text-zinc-600 underline dark:text-zinc-400"
               >
                 Cancel
               </button>
@@ -1419,32 +1494,36 @@ export default function TablePage() {
             <button
               onClick={() => (activeGame ? setLeaveConfirming(true) : handleLeave())}
               disabled={leaveStatus === "leaving"}
-              className="underline text-zinc-600 disabled:opacity-50 dark:text-zinc-400"
+              className="tap-40 px-1 text-xs text-zinc-600 underline disabled:opacity-50 dark:text-zinc-400"
             >
               {leaveStatus === "leaving" ? "Leaving..." : "Leave"}
             </button>
           )}
-        </div>
-      </header>
+        </>
+      }
+    />
+  );
 
-      {leaveStatus === "error" && leaveMessage && (
-        <p className="text-center text-sm text-red-600">{leaveMessage}</p>
-      )}
-
+  const middle = (
+    <>
+      {/* Overlays: never part of the flow, so they can't grow the table. */}
       {gameEndedNotice && (
-        <div className="flex items-center justify-center gap-3 rounded border border-amber-500 px-3 py-2 text-sm text-amber-700 dark:text-amber-500">
+        <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">
           <span>{gameEndedNotice}</span>
-          <button onClick={() => setGameEndedNotice(null)} className="underline">
+          <button onClick={() => setGameEndedNotice(null)} className="tap-40 px-1 underline">
             Dismiss
           </button>
         </div>
       )}
+      {errorToast && (
+        <p className="absolute inset-x-0 bottom-0 z-10 rounded bg-red-600 px-3 py-1 text-center text-sm text-white shadow">
+          {errorToast}
+        </p>
+      )}
 
-      {/* THE CUT. Replaces the table entirely rather than overlaying it: during
-          'cutting' there are no hands, no crib and no starter, so there is
-          genuinely nothing to render underneath. It has its own seating (you at
-          the bottom) and no dismissal -- closing it would strand the player on
-          an empty table with no way back into the cut. */}
+      {/* THE CUT. During 'cutting' there are no hands, no crib and no
+          starter, so the cut view takes the whole middle; the hand row and
+          the pile row are left out (see below) to give it the room. */}
       {isCutting && activeGame ? (
         <CutForDealView
           rounds={activeGame.deal_cut ?? [[]]}
@@ -1456,344 +1535,241 @@ export default function TablePage() {
           onDraw={handleDrawCutCard}
           onAcknowledge={handleAcknowledgeCut}
         />
-      ) : (
-      <>
-      {/* OPPONENTS -- always the top of the screen */}
-      <section className="flex justify-center gap-6">
-        {opponents.length === 0 ? (
-          <p className="text-sm text-zinc-500">Waiting for another player to join...</p>
+      ) : activeGame ? (
+        !cribComplete ? (
+          iHaveDiscarded ? (
+            <p className="text-sm text-zinc-500">
+              Waiting for {waitingOn.map(displayName).join(", ")} to discard...
+            </p>
+          ) : (
+            <p className="text-base font-medium">
+              Pick {CARDS_TO_DISCARD} cards for {iAmDealer ? "your" : "their"} crib
+            </p>
+          )
         ) : (
-          opponents.map((opponent) => {
-            // Face-up once they've shown it -- by Show Hand, or by confirming
-            // their count, which reveals it automatically. Gated on revealed_by
-            // as well as the fetch, so a hand from a stale fetch can't linger.
-            const shownCards = revealedBy.includes(opponent.user_id)
-              ? revealedHands[opponent.user_id]
-              : undefined;
-            const breakdown =
-              shownCards && handCounted(opponent.user_id) ? breakdownFor(shownCards, false) : null;
-
-            return (
-            <div key={opponent.user_id} className="flex w-full max-w-xs flex-col items-center gap-2">
-              <div className="flex w-full gap-1">
-                {shownCards
-                  ? shownCards.map((card) => <PlayingCard key={card} card={card} />)
-                  : Array.from({ length: opponentCardCount(opponent.user_id) }).map((_, i) => (
-                      <FaceDownCard key={i} />
-                    ))}
-              </div>
-              {breakdown && <p className="text-xs text-zinc-500">Hand: {breakdown}</p>}
-              <p className="flex items-baseline gap-2 text-sm font-medium">
-                <span>
-                  {displayName(opponent)}
-                  {activeGame?.dealer_id === opponent.user_id && (
-                    <span className="text-zinc-500"> · dealer</span>
-                  )}
-                </span>
-                <PlayerScore
-                  score={opponent.score}
-                  lastPoints={opponent.last_points}
-                  lastReason={opponent.last_reason}
-                  lastAwardedAt={opponent.last_awarded_at}
-                />
-              </p>
-            </div>
-            );
-          })
-        )}
-      </section>
-
-      {/* MIDDLE -- game controls / status. Grows to push the hand to the bottom. */}
-      <section className="flex flex-1 flex-col items-center justify-center gap-2">
-        {activeGame ? (
           <>
-            {cribComplete ? (
+            {pegView && (
               <>
-                {/* items-end so the two labels sit on a shared baseline even
-                    though the starter is rendered larger than a crib card.
-                    Both shrink once play starts, to leave room for the run. */}
-                <div className="flex items-end justify-center gap-6">
-                  <div className="flex flex-col items-center gap-1">
-                    {/* Face-down for EVERYONE, dealer included, until the dealer
-                        taps Show Crib -- before that the read policy returns no
-                        row at all, so there is nothing to show even if we tried.
-                        Wider once face-up so the cards are readable. */}
-                    <div
-                      className={`flex gap-1 ${
-                        cribCards ? "w-40" : isPlaying || isCountingOrDone ? "w-20" : "w-32"
-                      }`}
-                    >
-                      {cribCards
-                        ? cribCards.map((card) => <PlayingCard key={card} card={card} />)
-                        : Array.from({ length: REQUIRED_PLAYERS * CARDS_TO_DISCARD }).map((_, i) => (
-                            <FaceDownCard key={i} />
-                          ))}
-                    </div>
-                    <p className="text-xs font-medium">
-                      {iAmDealer ? "Your crib" : `${displayName(dealer)}'s crib`}
-                    </p>
-                    {cribCards && isDone && (
-                      <p className="text-xs text-zinc-500">{breakdownFor(cribCards, true)}</p>
-                    )}
-                  </div>
+                <PlayArea
+                  plays={plays}
+                  playCount={playCount}
+                  playSegment={activeGame.play_segment}
+                  currentPlayer={activeGame.current_player}
+                  myUserId={session.user.id}
+                  nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+                  // The hold: the hand is over; show the final run and a
+                  // "Count hands" button. Tapping it only clears this
+                  // screen's hold -- nothing is sent anywhere -- so it can
+                  // never stall the other player, and whoever counts first
+                  // can always reach Confirm Count by tapping it.
+                  handOver={onPegHold ? { onCountHands: () => setPegHoldKey(null) } : undefined}
+                />
+              </>
+            )}
 
-                  {/* The one card everybody is meant to be looking at. Absent
-                      for the brief moment between the crib completing and the
-                      starter UPDATE arriving. */}
-                  {activeGame.starter_card && (
-                    <div className="flex flex-col items-center gap-1">
-                      <div className={`flex gap-1 ${isPlaying || isCountingOrDone ? "w-12" : "w-16"}`}>
-                        <PlayingCard card={activeGame.starter_card} />
-                      </div>
-                      <p className="text-xs font-medium">Starter</p>
-                    </div>
-                  )}
-                </div>
-
-                {isPlaying && (
-                  <PlayArea
-                    plays={plays}
-                    playCount={playCount}
-                    playSegment={activeGame.play_segment}
-                    currentPlayer={activeGame.current_player}
-                    myUserId={session.user.id}
-                    nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
-                  />
-                )}
-
-                {/* THE COUNTING BANNER. Order is fixed by the server: the pone's
-                    hand, the dealer's hand, then the crib. Confirm Count is
-                    shown to everyone but only enabled for whoever's count is up
-                    (PRD Section 8), so it's obvious whose turn it is. */}
-                {isCountingOrDone && (
-                  <div className="flex flex-col items-center gap-2 rounded border border-zinc-400 px-4 py-3 text-center dark:border-zinc-600">
-                    <p className="text-sm font-medium">{countingHeadline}</p>
-                    {countingHint && <p className="text-xs text-zinc-500">{countingHint}</p>}
-                    {isCounting && (
-                      <div className="flex gap-2">
-                        {countStep === 2 && iAmDealer && !cribRevealed && (
-                          <button
-                            onClick={handleShowCrib}
-                            disabled={countBusy}
-                            className="rounded border border-zinc-400 px-4 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-                          >
-                            Show Crib
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleConfirmCount(countStep)}
-                          disabled={!canConfirm || countBusy}
-                          className="rounded bg-foreground px-4 py-1.5 text-sm font-medium text-background disabled:opacity-40"
-                        >
-                          {countBusy && canConfirm ? "Confirming..." : "Confirm Count"}
-                        </button>
-                      </div>
-                    )}
-                    {/* NEXT HAND. Either player; isDone already requires a live
-                        game, so an ended game (a leave, a timeout) never shows
-                        it. Disabled while the call is in flight -- and a tap
-                        that loses the race to the other player's returns
-                        quietly, so it never shows an error. */}
-                    {/* Every state below comes from ready_by on the game row,
-                        so a refresh shows the same thing. The tap that
-                        completes the set deals; the hand_no change then
-                        resets both screens, and ready_by arrives empty. */}
-                    {isDone && !iAmReady && othersReady.length > 0 && (
-                      <p className="text-sm font-medium">
-                        {othersReady.map(nameOf).join(", ")} {othersReady.length === 1 ? "is" : "are"} ready
-                      </p>
-                    )}
-                    {isDone && (
+            {/* THE COUNTING STAGE. Order is fixed by the server: the pone's
+                hand, the dealer's hand, then the crib. Buttons appear only on
+                MY turn; otherwise a plain "X is counting". Each confirmed
+                count leaves a small recap line. */}
+            {view && (
+              <CountStage
+                headline={view.headline}
+                hint={isDone ? `Next dealer: ${nextDealerName}` : view.hint}
+                subject={view.middle}
+                subjectLabel={view.middleLabel}
+                recap={view.recap}
+                error={countStatus === "error" ? countMessage : null}
+                actions={
+                  isDone ? (
+                    <>
+                      {/* NEXT HAND. Every state comes from ready_by on the
+                          game row, so a refresh shows the same thing. The tap
+                          that completes the set deals; the hand_no change
+                          then resets both screens. */}
+                      {!iAmReady && othersReady.length > 0 && (
+                        <p className="text-sm font-medium">
+                          {othersReady.map(nameOf).join(", ")} {othersReady.length === 1 ? "is" : "are"} ready
+                        </p>
+                      )}
                       <button
                         onClick={handleNextHand}
                         disabled={countBusy || iAmReady}
-                        className="rounded bg-foreground px-4 py-1.5 text-sm font-medium text-background disabled:opacity-40"
+                        className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
                       >
                         {countBusy ? "Sending..." : "Next Hand"}
                       </button>
-                    )}
-                    {isDone && iAmReady && (
-                      <p className="text-sm text-zinc-500">
-                        Waiting for {othersNotReady.map(nameOf).join(", ")}…
-                      </p>
-                    )}
-                    {countStatus === "error" && countMessage && (
-                      <p className="text-sm text-red-600">{countMessage}</p>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : iHaveDiscarded ? (
-              <p className="text-sm text-zinc-500">
-                Waiting for {waitingOn.map(displayName).join(", ")} to discard...
-              </p>
-            ) : (
-              <p className="text-base font-medium">
-                Pick {CARDS_TO_DISCARD} cards for {iAmDealer ? "your" : "their"} crib
-              </p>
-            )}
-          </>
-        ) : (
-          <>
-            {/* THE RESULT. Shown once a game has ended by a win and nothing
-                has replaced it -- a reload or a late reconnect finds it via
-                refreshTableState. Scores are read live from the roster, so
-                the winner's 121 shows even if its UPDATE lands after this. */}
-            {finishedGame && (
-              <div className="mb-2 flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
-                <p className="text-lg font-semibold">
-                  {finishedGame.winner_id === session.user.id
-                    ? "You win!"
-                    : `${winner ? displayName(winner) : "A player who has left"} wins!`}
-                  {/* How it ended: the winner's last award IS the winning one,
-                      since nothing can score after the game ends. Read live from
-                      the roster, so if the games UPDATE beats the table_members
-                      UPDATE here, this briefly shows the previous award and then
-                      corrects itself. */}
-                  {winner && (
-                    <>
-                      {" "}
-                      {winner.score}
-                      {winner.last_reason &&
-                        ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
+                      {iAmReady && (
+                        <p className="text-sm text-zinc-500">
+                          Waiting for {othersNotReady.map(nameOf).join(", ")}…
+                        </p>
+                      )}
                     </>
-                  )}
-                </p>
-                <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                  {members.map((m) => `${displayName(m)} ${m.score}`).join(" — ")}
-                </p>
-              </div>
-            )}
-            <button
-              onClick={handleStartNewGame}
-              disabled={gameStatus === "creating" || !canStartGame}
-              className="rounded bg-foreground px-6 py-3 text-lg text-background disabled:opacity-50"
-            >
-              {gameStatus === "creating" ? "Dealing..." : "New Game"}
-            </button>
-            {!canStartGame && (
-              <p className="text-sm text-zinc-500">
-                Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
-              </p>
+                  ) : view.myTurn ? (
+                    <>
+                      {view.showHandButton && (
+                        <button
+                          onClick={handleShowHand}
+                          disabled={countBusy}
+                          className="min-h-10 rounded border border-zinc-400 px-4 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+                        >
+                          Show Hand
+                        </button>
+                      )}
+                      {view.showCribButton && (
+                        <button
+                          onClick={handleShowCrib}
+                          disabled={countBusy}
+                          className="min-h-10 rounded border border-zinc-400 px-4 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+                        >
+                          Show Crib
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleConfirmCount(countStep)}
+                        disabled={!view.canConfirm || countBusy}
+                        className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
+                      >
+                        {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
+                      </button>
+                    </>
+                  ) : undefined
+                }
+              />
             )}
           </>
-        )}
-        {gameStatus === "error" && gameMessage && (
-          <p className="text-center text-sm text-red-600">{gameMessage}</p>
-        )}
-      </section>
-
-      {/* YOU -- always the bottom of the screen */}
-      <section className="flex flex-col items-center gap-2">
-        {myHand.length > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setHandSorted(true)}
-              disabled={handSorted}
-              className="rounded border border-zinc-400 px-6 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-            >
-              Sort
-            </button>
-            {/* Only appears at exactly 2 selected -- there is no valid partial
-                discard, so a disabled-but-visible button would just be noise. */}
-            {canDiscard && selectedCards.length === CARDS_TO_DISCARD && (
-              <button
-                onClick={handleDiscard}
-                disabled={discardStatus === "sending"}
-                className="rounded bg-foreground px-6 py-1.5 text-sm font-medium text-background disabled:opacity-50"
-              >
-                {discardStatus === "sending" ? "Sending..." : "Send to Crib"}
-              </button>
-            )}
-            {/* Show Hand: counting and done only (design decision 7), one-way
-                for the rest of the hand. Confirm Count reveals it anyway, so
-                this is for showing early -- or before the dealer's turn. */}
-            {isCountingOrDone &&
-              (iHaveShown ? (
-                <span className="text-xs text-zinc-500">Shown to the table</span>
-              ) : (
-                <button
-                  onClick={handleShowHand}
-                  disabled={countBusy}
-                  className="rounded border border-zinc-400 px-6 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-                >
-                  Show Hand
-                </button>
-              ))}
-          </div>
-        )}
-
-        {/* Your own breakdown, once your count is confirmed. */}
-        {isCountingOrDone && handCounted(session.user.id) && breakdownFor(myHand, false) && (
-          <p className="text-xs text-zinc-500">Hand: {breakdownFor(myHand, false)}</p>
-        )}
-
-        {discardStatus === "error" && discardMessage && (
-          <p className="text-center text-sm text-red-600">{discardMessage}</p>
-        )}
-
-        {playStatus === "error" && playMessage && (
-          <p className="text-center text-sm text-red-600">{playMessage}</p>
-        )}
-
-        {/* During play, a prompt that names the constraint rather than leaving
-            the player to work out why cards are greyed. */}
-        {isPlaying && isMyTurn && (
-          <p className="text-sm text-zinc-500">
-            Tap a card to play — up to {31 - playCount} more
-          </p>
-        )}
-
-        {/* max-w scales with hand size so a shrinking hand doesn't stretch to
-            fill the width six cards needed. */}
-        <div
-          className={`flex w-full gap-1 ${
-            displayedHand.length > CARDS_AFTER_DISCARD ? "max-w-md" : "max-w-xs"
-          }`}
-        >
-          {displayedHand.map((card) => (
-            <PlayingCard
-              key={card}
-              card={card}
-              selected={selectedCards.includes(card)}
-              // Dimmed when it exists but can't be used right now: not your
-              // turn, or it would take the count past 31. Visible-but-inert
-              // beats hiding it, since "why can't I play my king?" has an
-              // answer the player should be able to see.
-              dimmed={isPlaying && !canPlayCard(card)}
-              // One handler, two phases. Omitted entirely when no action is
-              // available, which also renders the card as a plain div with
-              // nothing to click or tab to.
-              onSelect={
-                canDiscard
-                  ? () => toggleCardSelection(card)
-                  : isPlaying && canPlayCard(card) && playStatus !== "sending"
-                    ? () => handlePlayCard(card)
-                    : undefined
-              }
-            />
-          ))}
-        </div>
-
-        <p className="flex items-baseline gap-2 text-sm font-medium">
-          <span>
-            {displayName(me)} <span className="text-zinc-500">(you)</span>
-            {activeGame?.dealer_id === session.user.id && (
-              <span className="text-zinc-500"> · dealer</span>
-            )}
-          </span>
-          {me && (
-            <PlayerScore
-              score={me.score}
-              lastPoints={me.last_points}
-              lastReason={me.last_reason}
-              lastAwardedAt={me.last_awarded_at}
-            />
+        )
+      ) : (
+        <div className="result-stage">
+          {/* THE RESULT. Shown once a game has ended by a win and nothing
+              has replaced it -- a reload or a late reconnect finds it via
+              refreshTableState. Scores are read live from the roster, so
+              the winner's 121 shows even if its UPDATE lands after this. */}
+          {finishedGame && (
+            <div className="flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
+              <p className="text-lg font-semibold">
+                {finishedGame.winner_id === session.user.id
+                  ? "You win!"
+                  : `${winner ? displayName(winner) : "A player who has left"} wins!`}
+                {/* How it ended: the winner's last award IS the winning one,
+                    since nothing can score after the game ends. */}
+                {winner && (
+                  <>
+                    {" "}
+                    {winner.score}
+                    {winner.last_reason &&
+                      ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
+                  </>
+                )}
+              </p>
+            </div>
           )}
-        </p>
-      </section>
-      </>
+          <button
+            onClick={handleStartNewGame}
+            disabled={gameStatus === "creating" || !canStartGame}
+            className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-50"
+          >
+            {gameStatus === "creating" ? "Dealing..." : "New Game"}
+          </button>
+          {!canStartGame && (
+            <p className="text-sm text-zinc-500">
+              Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
+            </p>
+          )}
+        </div>
       )}
-    </main>
+    </>
+  );
+
+  // The crib (left) and the starter or deck (right), with the hand's action
+  // buttons between them. Only while cards are out.
+  const piles = isActive ? (
+    <PileRow
+      crib={
+        view
+          ? // Counting: a face-down pile until the crib's turn; then an
+            // empty outline -- its cards are in the dealer's slot -- which
+            // stays once the crib is counted.
+            { faceDownCount: view.cribPile === "pile" ? 4 : 0, shownCards: null }
+          : {
+              faceDownCount: discardedBy.length * CARDS_TO_DISCARD,
+              shownCards: null,
+            }
+      }
+      starter={{ card: starterCard }}
+      // The score flash, between the piles, above Sort.
+      flash={<ScoreFlash plates={plates} />}
+    >
+      {/* Hidden, not just disabled, once sorting is locked (counting
+          onward): the shown crib fans out in this row then, and needs the
+          room at hand-card size. */}
+      {myHand.length > 0 && !sortLocked && (
+        <button
+          onClick={() => setHandSorted(true)}
+          disabled={handSorted}
+          className="min-h-10 rounded border border-zinc-400 px-5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+        >
+          Sort
+        </button>
+      )}
+      {/* Only at exactly 2 selected -- there is no valid partial discard, so
+          a disabled-but-visible button would just be noise. */}
+      {canDiscard && selectedCards.length === CARDS_TO_DISCARD && (
+        <button
+          onClick={handleDiscard}
+          disabled={discardStatus === "sending"}
+          className="min-h-10 rounded bg-foreground px-5 text-sm font-medium text-background disabled:opacity-50"
+        >
+          {discardStatus === "sending" ? "Sending..." : "Send to Crib"}
+        </button>
+      )}
+    </PileRow>
+  ) : null;
+
+  const hand = view ? (
+    // Counting: my hand at full size on my turn, small while it waits, gone
+    // once counted -- or the crib, face-down then face-up, if I deal.
+    <HandRow>
+      <SlotCards slot={view.myRow} />
+    </HandRow>
+  ) : (
+    <HandRow label={goBy.has(session.user.id) ? goLabel : undefined}>
+      {displayedHand.map((card) => (
+        <PlayingCard
+          key={card}
+          card={card}
+          sizing={HAND_CARD}
+          selected={selectedCards.includes(card)}
+          // Dimmed when it exists but can't be used right now: not your
+          // turn, or it would take the count past 31. Visible-but-inert
+          // beats hiding it, since "why can't I play my king?" has an
+          // answer the player should be able to see.
+          dimmed={isPlaying && !canPlayCard(card)}
+          // One handler, two phases. Omitted entirely when no action is
+          // available, which also renders the card as a plain div with
+          // nothing to click or tab to.
+          onSelect={
+            canDiscard
+              ? () => toggleCardSelection(card)
+              : isPlaying && canPlayCard(card) && playStatus !== "sending"
+                ? () => handlePlayCard(card)
+                : undefined
+          }
+        />
+      ))}
+    </HandRow>
+  );
+
+  return (
+    <TableShell
+      header={header}
+      opponents={isCutting ? null : <OpponentBand seats={seats} />}
+      middle={middle}
+      piles={isCutting ? null : piles}
+      // The hand row reserves its full height even when empty (no game yet),
+      // so the table doesn't jump when cards are dealt -- except during the
+      // cut, which needs the space and has no hand to show.
+      hand={isCutting ? null : hand}
+      scores={<ScoreStrip plates={plates} />}
+    />
   );
 }

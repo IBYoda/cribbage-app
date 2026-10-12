@@ -50,30 +50,45 @@ export function PlayingCard({
   // Selected cards lift out of the row, matching the reference app. The ring
   // is there because lift alone is easy to miss on a small screen, and colour
   // alone wouldn't survive a colourblind user.
+  // @container makes the card its own size reference: every glyph below is
+  // sized in cqw (percent of the card's width), so a card reads the same at
+  // any size -- full-size in the hand, small in the play area or a pile.
+  // Replaces fixed text sizes, which were too big for small cards and fixed
+  // to the screen breakpoint rather than to the card.
   const className = [
     sizing,
     CARD_LOOK,
-    "flex flex-col justify-between border-zinc-300 bg-white p-1 dark:border-zinc-600",
+    "@container relative overflow-hidden border-zinc-300 bg-white dark:border-zinc-600",
     selected ? "-translate-y-4 ring-2 ring-blue-500" : "",
     dimmed ? "opacity-40 saturate-50" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
+  // A corner index -- rank over a small suit -- like a real card. The suit is
+  // in the corner (not just the middle) so a card still identifies itself
+  // when only its top part is showing: an opponent's shown hand along the top
+  // edge, or a card half-covered in a fan.
+  //
+  // Scales with the card, but never below 11px, so even the smallest card
+  // on the table (a 32px played card) keeps a readable corner.
+  const index = (
+    <span className={`flex flex-col items-center font-bold leading-[0.95] ${textColor}`}>
+      <span className="text-[length:max(11px,26cqw)]">{rankLabel(card)}</span>
+      <span className="text-[length:max(11px,22cqw)]">{suitSymbol(card)}</span>
+    </span>
+  );
+
   const content = (
     <>
-      <span className={`text-sm font-bold leading-none sm:text-base ${textColor}`}>
-        {rankLabel(card)}
-      </span>
-      <span className={`self-center text-xl leading-none sm:text-3xl ${textColor}`}>
+      <span className="absolute left-[6cqw] top-[5cqw]">{index}</span>
+      <span
+        className={`absolute inset-0 flex items-center justify-center text-[40cqw] leading-none ${textColor}`}
+      >
         {suitSymbol(card)}
       </span>
       {/* Mirrored corner, like a real card. */}
-      <span
-        className={`self-end rotate-180 text-sm font-bold leading-none sm:text-base ${textColor}`}
-      >
-        {rankLabel(card)}
-      </span>
+      <span className="absolute bottom-[5cqw] right-[6cqw] rotate-180">{index}</span>
     </>
   );
 
@@ -106,12 +121,16 @@ export function FlipCard({
   revealed,
   onFlip,
   label,
+  sizing = "aspect-[5/7] w-24",
 }: {
   card: string;
   revealed: boolean;
   // Omitted for the opponent's card -- it isn't yours to turn over.
   onFlip?: () => void;
   label: string;
+  // The card's box. Defaults to the original 96px; the cut-for-deal view
+  // passes a size derived from the room it has, so it fits any window.
+  sizing?: string;
 }) {
   const inner = (
     <div
@@ -138,7 +157,7 @@ export function FlipCard({
   // perspective on the wrapper is what makes the rotation read as depth rather
   // than a flat horizontal squash.
   const wrapperStyle = { perspective: "900px" };
-  const wrapperClass = "aspect-[5/7] w-24";
+  const wrapperClass = sizing;
 
   if (onFlip && !revealed) {
     return (

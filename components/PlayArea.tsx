@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { PlayingCard } from "@/components/PlayingCard";
 
 export type PlayEvent = {
@@ -11,10 +12,55 @@ export type PlayEvent = {
   count_after: number;
 };
 
-// Played cards are laid out small -- several rows of them have to fit above
-// the hand on a phone.
-const PLAYED_CARD_SIZING = "w-9 shrink-0 aspect-[5/7]";
+// WHICH RUN IS ON THE TABLE -- shared by the play area (which draws it) and
+// the table page (which puts each player's "Go" label by their seat).
+//
+// The current run once it has a card; between runs, the run that just
+// finished; in the hold after the last card, the newest run with any plays.
+export function displayedRun(
+  plays: PlayEvent[],
+  playSegment: number,
+  handOver: boolean
+): { events: PlayEvent[]; finished: boolean } {
+  const currentCards = plays.filter((p) => p.segment === playSegment && p.kind === "play");
+  const finished = currentCards.length === 0 || handOver;
+  const lastFinishedSegment = Math.max(
+    -1,
+    ...plays.filter((p) => p.segment < playSegment).map((p) => p.segment)
+  );
+  // At the end of the hand the last run may be the current segment (the last
+  // card didn't reset the count) or the one before it (it made 31): either
+  // way, the newest segment that has any plays.
+  const lastSegmentWithPlays = Math.max(-1, ...plays.map((p) => p.segment));
+  const segment = handOver ? lastSegmentWithPlays : finished ? lastFinishedSegment : playSegment;
+  return { events: plays.filter((p) => p.segment === segment), finished };
+}
 
+// WHO SAID GO in the run on the table: the user ids of its go events.
+//
+// A go event's user_id is the player who could NOT play (play_card logs one
+// for the opponent who can't answer, while they still hold cards) -- exactly
+// "who said go". A player stuck for several plays in a row gets a go event
+// each time; the Set makes that one label. The player who plays the last card
+// of a deadlocked run never gets one, which matches the rules: they peg the
+// point, they don't say go. DISPLAY ONLY -- the go POINT is awarded inside
+// play_card from control flow, never from these rows.
+export function goSayers(events: PlayEvent[]): Set<string> {
+  return new Set(events.filter((p) => p.kind === "go").map((p) => p.user_id));
+}
+
+// ONE shared play area, in play order -- the order is what makes runs.
+//
+// One row: the run's cards, left to right, always overlapping like a fanned
+// hand (newest on top, in full), with the running count straight after the
+// newest card. Sizing and overlap are in .play-area in app/globals.css.
+//
+// WHICH RUN IS SHOWN: the current one -- or, between runs, the one that just
+// finished. When a run ends (31, or nobody can go) the server starts a new
+// segment with no cards in it yet; rather than blanking the row, the finished
+// run stays up, dimmed, with a quiet "New count" hint, until the first card
+// of the new run replaces it. Purely client-side: derived from the plays
+// already loaded, nothing stored.
 export function PlayArea({
   plays,
   playCount,
@@ -22,6 +68,7 @@ export function PlayArea({
   currentPlayer,
   myUserId,
   nameFor,
+  handOver,
 }: {
   plays: PlayEvent[];
   playCount: number;
@@ -32,88 +79,79 @@ export function PlayArea({
   currentPlayer: string | null;
   myUserId: string;
   nameFor: (userId: string) => string;
+  // THE HOLD after the last card of the hand (see the table page): the
+  // server is already in counting, but this screen still shows the final run
+  // until the player taps Count hands.
+  handOver?: { onCountHands: () => void };
 }) {
-  // Group into runs-to-31. Every reset increments the segment, so this is how
-  // the history reads as separate runs rather than one undifferentiated pile.
-  const segments = new Map<number, PlayEvent[]>();
-  for (const event of plays) {
-    const bucket = segments.get(event.segment) ?? [];
-    bucket.push(event);
-    segments.set(event.segment, bucket);
-  }
-  // The current segment may legitimately be empty (a reset just happened), so
-  // it is included explicitly rather than only taken from what's in `plays`.
-  if (!segments.has(playSegment)) segments.set(playSegment, []);
-
-  const orderedSegments = [...segments.entries()].sort((a, b) => a[0] - b[0]);
+  // Between runs, or the hand is over: either way the row shows the run
+  // that just FINISHED, dimmed, with its own final total.
+  const { events: shown, finished: betweenRuns } = displayedRun(plays, playSegment, Boolean(handOver));
+  const cards = shown.filter((p) => p.kind === "play");
+  // The finished run keeps its own final total (31, or wherever the go
+  // stopped it); the live run shows the live count.
+  const shownCount = betweenRuns ? (shown.at(-1)?.count_after ?? 0) : playCount;
 
   const isMyTurn = currentPlayer === myUserId;
 
   return (
-    <div className="flex w-full max-w-md flex-col items-center gap-3">
-      <div className="flex items-baseline gap-2">
-        <span className="text-sm text-zinc-500">Count</span>
-        <span className="text-3xl font-bold tabular-nums">{playCount}</span>
-        <span className="text-sm text-zinc-500">/ 31</span>
-      </div>
-
-      <div className="flex w-full flex-col gap-2">
-        {orderedSegments.map(([segment, events]) => {
-          const isCurrent = segment === playSegment;
-          return (
-            <div
-              key={segment}
-              // Completed runs stay visible but recede -- useful context,
-              // without competing with the run actually in progress.
-              className={`flex min-h-12 flex-wrap items-center gap-1 rounded border px-2 py-1 ${
-                isCurrent
-                  ? "border-zinc-400 dark:border-zinc-500"
-                  : "border-zinc-200 opacity-50 dark:border-zinc-800"
-              }`}
+    <div className="play-area">
+      <div className="play-area__status">
+        <p
+          className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+            isMyTurn
+              ? "bg-green-600 text-white"
+              : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+          }`}
+        >
+          {/* During the hold current_player is already the first COUNTER,
+              so "X's turn" would be wrong here -- pegging is simply over. */}
+          {handOver
+            ? "Pegging over"
+            : isMyTurn
+              ? "Your turn"
+              : currentPlayer
+                ? `${nameFor(currentPlayer)}'s turn`
+                : "Waiting..."}
+        </p>
+        {/* Reserved for a future Go button -- empty for now (it holds Count
+            hands during the hold). The "Go" label itself sits by the player
+            who said it: above my hand, or under the opponent's name. */}
+        <div className="play-area__go-slot gap-2">
+          {handOver && (
+            // Drawn 28px tall to fit the status line; .tap-40-overlay gives it
+            // a 40px tap target without growing the line.
+            <button
+              onClick={handOver.onCountHands}
+              className="tap-40-overlay h-7 whitespace-nowrap rounded-full bg-foreground px-3 text-sm font-semibold text-background"
             >
-              {events.length === 0 && (
-                <span className="text-xs text-zinc-500">New count — play a card</span>
-              )}
-              {events.map((event) =>
-                event.kind === "play" ? (
-                  <PlayingCard
-                    key={event.seq}
-                    card={event.card!}
-                    sizing={PLAYED_CARD_SIZING}
-                  />
-                ) : (
-                  // A go is part of the history, not just a transient message:
-                  // it explains a gap in the alternation. DISPLAY ONLY -- the
-                  // go point is awarded inside play_card, from control flow,
-                  // and never by reading this event's user_id. In a deadlock
-                  // the point belongs to the OTHER player.
-                  <span
-                    key={event.seq}
-                    className="rounded border border-amber-500 px-2 py-1 text-xs font-semibold text-amber-600 dark:text-amber-500"
-                    title={`${nameFor(event.user_id)} could not play`}
-                  >
-                    GO
-                  </span>
-                )
-              )}
-            </div>
-          );
-        })}
+              Count hands
+            </button>
+          )}
+        </div>
+        {betweenRuns && !handOver && (
+          <span className="whitespace-nowrap text-xs text-zinc-500">New count</span>
+        )}
       </div>
 
-      <p
-        className={`rounded px-4 py-1.5 text-base font-semibold ${
-          isMyTurn
-            ? "bg-green-600 text-white"
-            : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
-        }`}
+      <div
+        className={`play-area__run ${betweenRuns ? "opacity-50" : ""}`}
+        style={{ "--n": Math.max(cards.length, 1) } as CSSProperties}
+        aria-label={handOver ? "Last run of the hand" : betweenRuns ? "Last run (finished)" : "Cards played this run"}
       >
-        {isMyTurn
-          ? "Your turn"
-          : currentPlayer
-            ? `${nameFor(currentPlayer)}'s turn`
-            : "Waiting..."}
-      </p>
+        {cards.map((event) => (
+          <div key={event.seq} className="play-area__card">
+            <PlayingCard card={event.card!} sizing="w-full aspect-[5/7]" />
+          </div>
+        ))}
+        {/* The count, straight after the newest card. Hidden only before the
+            very first card of the hand, when there's nothing to total. */}
+        {cards.length > 0 && (
+          <span className="play-area__count" aria-label={`Count ${shownCount}`}>
+            {shownCount}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
