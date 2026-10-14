@@ -112,7 +112,7 @@ export function PlayArea({
           <p
             className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
               isMyTurn
-                ? "bg-green-600 text-white"
+                ? "bg-green-600 text-white surface:bg-violet-600"
                 : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
             }`}
           >

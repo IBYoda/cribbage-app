@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { DEFAULT_TABLE_SURFACE, surfaceIsDark, type TableSurface } from "@/lib/appearance";
 
 // The fixed-height table. Six regions, top to bottom, sized by .table-shell in
 // app/globals.css: exactly one screen tall, never scrolling, never wider than
@@ -14,6 +15,7 @@ export function TableShell({
   piles,
   hand,
   scores,
+  surface = DEFAULT_TABLE_SURFACE,
 }: {
   header: ReactNode;
   opponents: ReactNode;
@@ -23,9 +25,17 @@ export function TableShell({
   piles: ReactNode;
   hand: ReactNode;
   scores: ReactNode;
+  // THIS player's table surface (lib/appearance.ts). data-surface paints it
+  // (app/globals.css, "TABLE SURFACES"); data-scheme="dark" turns on the dark
+  // palette for the whole table on every surface but Classic.
+  surface?: TableSurface;
 }) {
   return (
-    <main className="table-shell mx-auto w-full max-w-4xl gap-1">
+    <main
+      className="table-shell mx-auto w-full max-w-4xl gap-1"
+      data-surface={surface}
+      data-scheme={surfaceIsDark(surface) ? "dark" : undefined}
+    >
       <div className="min-w-0">{header}</div>
       <div className="min-w-0">{opponents}</div>
       {/* table-middle: the size container the play area measures itself

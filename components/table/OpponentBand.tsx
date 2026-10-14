@@ -57,7 +57,7 @@ export function OpponentBand({ seats }: { seats: OpponentSeat[] }) {
               {seat.isDealer && <DealerChip />}
             </p>
             {seat.saidGo && (
-              <span className="mt-0.5 text-xs font-semibold text-amber-600 dark:text-amber-500">Go</span>
+              <span className="mt-0.5 text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>
             )}
           </div>
         </div>

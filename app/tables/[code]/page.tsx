@@ -1636,9 +1636,9 @@ export default function TablePage() {
     pegView && activeGame
       ? goSayers(displayedRun(plays, activeGame.play_segment, onPegHold).events)
       : new Set<string>();
-  const goLabel = <span className="text-xs font-semibold text-amber-600 dark:text-amber-500">Go</span>;
+  const goLabel = <span className="text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>;
   const countingLabel = (
-    <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-500">Counting</span>
+    <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-500 surface:text-violet-200">Counting</span>
   );
 
   // Opponents across the top. Each seat's hand is drawn face-down from the
@@ -1695,7 +1695,7 @@ export default function TablePage() {
       right={
         <>
           {realtimeStatus === "disconnected" && (
-            <span className="text-xs text-amber-600 dark:text-amber-500">Reconnecting...</span>
+            <span className="text-xs text-amber-600 dark:text-amber-500 surface:text-amber-200">Reconnecting...</span>
           )}
           {leaveConfirming ? (
             <>
@@ -1872,7 +1872,7 @@ export default function TablePage() {
                 refreshTableState. Scores are read live from the roster, so
                 the winner's 121 shows even if its UPDATE lands after this. */}
             {finishedGame && (
-              <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
+              <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 surface:border-violet-300 px-6 py-3 text-center">
                 <p className="text-lg font-semibold">
                   {finishedGame.winner_id === session.user.id
                     ? "You win!"

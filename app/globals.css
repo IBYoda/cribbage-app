@@ -25,6 +25,29 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* The dark: variant. Tailwind's default follows only the device's setting;
+   this keeps that, and ALSO turns it on inside anything marked
+   data-scheme="dark" -- the table, on every surface but Classic (see TABLE
+   SURFACES below). With no such attribute, it's exactly the default. */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    @slot;
+  }
+  &:where([data-scheme="dark"], [data-scheme="dark"] *) {
+    @slot;
+  }
+}
+
+/* surface: -- only on a non-Classic table surface; Classic, in either mode,
+   never sees it. Declared after dark: so it wins over it. Used for:
+     - the coloured labels (Go, Reconnecting) whose dark-mode shade sinks
+       into felt or wood;
+     - THE ACCENT: Classic's green becomes violet on every surface (green
+       loses contrast on Green Felt), one family everywhere -- violet-600
+       fills ("Your turn", the score flash), violet-300 borders (the win
+       banner), violet-200 text (the Counting marker). */
+@custom-variant surface (&:where([data-scheme="dark"] *));
+
 /* The "+2 — pair" flash on the score tracker. Done as a pure CSS animation
    rather than a timer in React on purpose: re-running it is just a matter of
    remounting the element (the component keys it on last_awarded_at), so there
@@ -551,4 +574,78 @@ body {
     min-width: 0;
     max-width: 50%;
   }
+}
+
+/* ===========================================================================
+   TABLE SURFACES -- each player's own choice, for their own screen only
+   (lib/appearance.ts; data-surface on .table-shell, set by TableShell).
+
+   Classic paints nothing: the page keeps its own light/dark background, so
+   the table looks exactly as it did before. Every other surface is dark, so
+   the shell also carries data-scheme="dark": the dark palette (white text,
+   every dark: variant) applies to the whole table whatever the device's mode.
+
+   Black and the two felts are CSS only (gradients plus a fine grain); Wood
+   is a photo (public/textures/wood-cedar.webp) under a scrim, with the same
+   grain on top. A real texture can replace any of them by swapping that one
+   surface's background; nothing else changes.
+
+   The surface is painted on <body> (via :has), not just the shell, so the
+   sides of a wide window and the strips under a notch are table too.
+   =========================================================================== */
+:root {
+  /* A fine grain over every surface: SVG noise, mostly transparent. */
+  --surface-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.28 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+}
+
+body:has(.table-shell[data-surface="black"]) {
+  background:
+    var(--surface-grain),
+    radial-gradient(ellipse at 50% 40%, #1d1d21 0%, #0c0c0e 70%) fixed;
+  background-color: #0c0c0e;
+}
+body:has(.table-shell[data-surface="green-felt"]) {
+  background:
+    var(--surface-grain),
+    radial-gradient(ellipse at 50% 40%, #276b43 0%, #1b5232 55%, #123a23 100%) fixed;
+  background-color: #1b5232;
+}
+body:has(.table-shell[data-surface="blue-felt"]) {
+  background:
+    var(--surface-grain),
+    radial-gradient(ellipse at 50% 40%, #275a8b 0%, #1b4469 55%, #112b47 100%) fixed;
+  background-color: #1b4469;
+}
+/* Wood is a real photo (bright cedar, vertical grain) under a dark scrim --
+   as light as it can be while every line of text on the table stays at
+   4.5:1 or better against the LIGHTEST pixel behind it. */
+body:has(.table-shell[data-surface="wood"]) {
+  --wood-scrim: 0.6;
+  background:
+    var(--surface-grain),
+    linear-gradient(rgb(0 0 0 / var(--wood-scrim)), rgb(0 0 0 / var(--wood-scrim))),
+    url("/textures/wood-cedar.webp") center / cover no-repeat;
+  background-color: #3a2414;
+}
+
+/* The dark palette on a dark surface. --background/--foreground are what
+   bg-background / text-foreground (buttons, overlays) and the page text use;
+   the shell sets its own colour because body's was computed outside it. */
+.table-shell[data-scheme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  color: var(--foreground);
+  /* Muted text, lifted: the zinc greys used for hints, labels and "X is
+     counting" are tuned for a near-black page and sink into felt and wood.
+     Remapped here, inside the table only, so every one of those lines stays
+     readable on all four surfaces without touching each component. */
+  --color-zinc-300: #e4e4e7;
+  --color-zinc-400: #e4e4e7;
+  --color-zinc-500: #dadadf;
+}
+
+/* The cut for deal draws its own dark panel on Classic; on a surface, the
+   surface shows through, with a faint shade to keep the panel's shape. */
+.table-shell[data-scheme="dark"] .cut-view {
+  background-color: rgb(0 0 0 / 0.18);
 }

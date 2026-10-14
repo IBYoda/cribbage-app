@@ -128,7 +128,7 @@ export function ScoreFlash({ plates }: { plates: ScorePlate[] }) {
     <span
       key={latestAt}
       title={`${name} ${points}${latest.lastReason ? ` — ${latest.lastReason}` : ""}`}
-      className="score-flash flex max-w-full flex-col items-center rounded-xl bg-green-600 px-2 py-0.5 text-[11px] font-semibold leading-[13px] text-white shadow"
+      className="score-flash flex max-w-full flex-col items-center rounded-xl bg-green-600 surface:bg-violet-600 px-2 py-0.5 text-[11px] font-semibold leading-[13px] text-white shadow"
     >
       <span className="flex max-w-full">
         <span className="min-w-0 truncate">{name}</span>
