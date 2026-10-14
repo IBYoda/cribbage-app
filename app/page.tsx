@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { LandingView } from "@/components/brand/LandingView";
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
@@ -26,19 +27,20 @@ export default function Home() {
     await supabase.auth.signOut();
   }
 
-  if (loading) {
-    return (
-      <main className="flex flex-1 items-center justify-center">
-        <p>Loading...</p>
-      </main>
-    );
+  // THE LANDING PAGE: signed out -- and also while the session is still being
+  // read, so the first paint is the card room (with the buttons held back
+  // until we know nobody is signed in; see LandingView).
+  if (loading || !session) {
+    return <LandingView signedOut={!loading && !session} />;
   }
 
+  // THE HOME VIEW (signed in) -- unchanged for now; the main-menu redesign is
+  // stage 2.
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
       <h1 className="text-2xl font-semibold">Cribbage App</h1>
 
-      {session ? (
+      {session && (
         <>
           <p>
             Logged in as <span className="font-medium">{session.user.email}</span>
@@ -76,18 +78,6 @@ export default function Home() {
             </button>
           </div>
         </>
-      ) : (
-        <div className="flex gap-4">
-          <Link href="/login" className="rounded bg-foreground px-4 py-2 text-background">
-            Log In
-          </Link>
-          <Link
-            href="/signup"
-            className="rounded border border-zinc-300 px-4 py-2 dark:border-zinc-700"
-          >
-            Sign Up
-          </Link>
-        </div>
       )}
     </main>
   );

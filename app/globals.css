@@ -607,7 +607,9 @@ body {
                                     <html> by the inline script in
                                     app/layout.tsx before first paint), so a
                                     refresh never flashes Classic;
-     - .surface-swatch[...]         the Profile page's preview and swatches. */
+     - .surface-swatch[...]         the Profile page's preview and swatches;
+     - body:has(.card-room)         Green Felt only: the landing page and the
+                                    main menu ("CARD ROOM", below). */
 body:has(.table-shell[data-surface="black"]),
 html[data-appearance-surface="black"] body:has(.table-loading),
 .surface-swatch[data-surface="black"] {
@@ -618,7 +620,8 @@ html[data-appearance-surface="black"] body:has(.table-loading),
 }
 body:has(.table-shell[data-surface="green-felt"]),
 html[data-appearance-surface="green-felt"] body:has(.table-loading),
-.surface-swatch[data-surface="green-felt"] {
+.surface-swatch[data-surface="green-felt"],
+body:has(.card-room) {
   background:
     var(--surface-grain),
     radial-gradient(ellipse at 50% 40%, #276b43 0%, #1b5232 55%, #123a23 100%) fixed;
@@ -662,7 +665,8 @@ html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-lo
    bg-background / text-foreground (buttons, overlays) and the page text use;
    the shell sets its own colour because body's was computed outside it. */
 .table-shell[data-scheme="dark"],
-.surface-swatch[data-scheme="dark"] {
+.surface-swatch[data-scheme="dark"],
+.card-room[data-scheme="dark"] {
   --background: #0a0a0a;
   --foreground: #ededed;
   color: var(--foreground);
@@ -755,4 +759,200 @@ html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-lo
 [data-back]:not([data-back="classic"]) .cut-fan-card {
   background-color: var(--card-back-color);
   border-color: rgb(255 255 255 / 0.45);
+}
+
+/* ===========================================================================
+   CARD ROOM -- the landing page and the main menu (components/brand/).
+
+   A FIXED look, not the player's Appearance setting: Green Felt (the very
+   same rule as the table's, above -- body:has(.card-room) is in its selector
+   list), the table's dark palette (.card-room carries data-scheme="dark", so
+   the dark: and surface: variants and the violet accent apply), and brass
+   and cream accents.
+
+   CONTRAST on the felt (against its LIGHTEST point, #276b43):
+     cream #f3ead3 ......... 5.36:1  -- all small text
+     light brass #f1deb0 ... 4.84:1  -- small accent text
+     brass #e2c17d ......... 3.72:1  -- LARGE text only (the wordmark)
+   and the brass button's dark text on its lightest point: 11.15:1.
+   =========================================================================== */
+:root {
+  --brass: #e2c17d;
+  --brass-light: #f1deb0;
+  --cream: #f3ead3;
+}
+
+/* The display face (lib/fonts.ts): the wordmark and headings only. */
+.font-display {
+  font-family: var(--font-display), Georgia, "Times New Roman", serif;
+}
+
+.card-room {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--cream);
+}
+
+.wordmark {
+  color: var(--brass);
+  line-height: 1.05;
+  text-shadow: 0 2px 0 rgb(0 0 0 / 0.45);
+}
+
+/* THE BUTTONS: big, rounded, thumb-friendly. The "peg drop": a 2px drop on
+   hover -- and on press, since touch screens have no hover. */
+.peg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding-inline: 1.25rem;
+  border-radius: 14px;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 3px 0 rgb(0 0 0 / 0.35);
+  transition:
+    transform 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+.peg-btn:hover,
+.peg-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
+}
+.peg-btn:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 3px;
+}
+.peg-btn--brass {
+  background: linear-gradient(#e7c98a, #c9a24f);
+  color: #1f1608;
+}
+.peg-btn--ghost {
+  background: rgb(0 0 0 / 0.25);
+  border: 2px solid var(--brass);
+  color: var(--cream);
+}
+
+/* THE 29 HAND (HeroHand): overlapping cards fanned about a point below
+   their base, dealt in one by one. */
+.hero-hand {
+  --card-w: clamp(62px, 18vw, 104px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: min(7vw, 40px);
+}
+/* The left card's tilt overhangs to the left, but on the right the outermost
+   card is the upright starter: this padding (in card widths, since the
+   overhang grows with the card) balances it, so the hand sits centred. */
+.hero-hand__fan {
+  display: flex;
+  align-items: flex-end;
+  padding-left: calc(var(--card-w) * 0.35);
+}
+.hero-card {
+  /* Never squeezed: every card, the starter included, keeps the same size. */
+  flex-shrink: 0;
+  width: var(--card-w);
+  margin-bottom: calc(var(--drop, 0px) * -1);
+  transform: rotate(var(--turn, 0deg));
+  transform-origin: 50% 110%;
+  animation: deal-in 500ms ease-out both;
+  animation-delay: var(--deal-delay, 0ms);
+}
+.hero-hand__fan .hero-card + .hero-card {
+  margin-left: calc(var(--card-w) * -0.5);
+}
+@keyframes deal-in {
+  from {
+    opacity: 0;
+    transform: translateY(30px) rotate(var(--turn, 0deg));
+  }
+  to {
+    opacity: 1;
+    transform: rotate(var(--turn, 0deg));
+  }
+}
+
+/* THE TAGLINE (RotatingTagline): one fixed line, never wrapping, so a change
+   never moves the page. */
+.tagline {
+  height: 2rem;
+  line-height: 2rem;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 1.25rem;
+  font-style: italic;
+  font-weight: 700;
+  transition: opacity 300ms ease;
+}
+.tagline[data-visible="false"] {
+  opacity: 0;
+}
+
+/* THE FOOTER (SiteFooter): links with brass pegs between them. */
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.25rem 1rem max(env(safe-area-inset-bottom), 1rem);
+  font-size: 0.875rem;
+}
+.footer-link {
+  min-height: 40px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+.footer-link:focus-visible {
+  outline: 2px solid var(--cream);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.peg-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #f6dfa6, #b38a3b 70%);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 0.5);
+}
+
+/* ABOUT (AboutDialog): a native <dialog>, styled as a card-room panel. */
+.about-dialog {
+  max-width: min(28rem, calc(100vw - 2rem));
+  margin: auto;
+  padding: 1.25rem;
+  border: 2px solid var(--brass);
+  border-radius: 16px;
+  background: #143f26;
+  color: var(--cream);
+  line-height: 1.5;
+}
+.about-dialog::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+
+/* Reduced motion: no deal-in, no peg drop, no fade. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-card {
+    animation: none;
+  }
+  .peg-btn {
+    transition: none;
+  }
+  .peg-btn:hover,
+  .peg-btn:active {
+    transform: none;
+  }
+  .tagline {
+    transition: none;
+  }
 }
