@@ -179,10 +179,19 @@ function unionIds(a: string[], b: string[]) {
 }
 
 // The key for "has visibility changed?" -- compared on every games UPDATE so
-// hands and the crib are refetched only when a reveal actually happened, not
-// on every unrelated broadcast.
-function revealKey(revealedBy: string[] | null | undefined, cribRevealed: boolean | null | undefined) {
-  return `${(revealedBy ?? []).join(",")}|${cribRevealed ? 1 : 0}`;
+// hands and the crib are refetched only when what's readable can have
+// changed, not on every unrelated broadcast: a reveal (revealed_by,
+// crib_revealed), or the count reaching a point where the read policies open
+// up (phase2-open-hands-in-count.sql) -- counting starts (both hands), and
+// count_step 2 or 'done' (the crib).
+function revealKey(row: {
+  revealed_by: string[] | null | undefined;
+  crib_revealed: boolean | null | undefined;
+  phase: string | null | undefined;
+  count_step: number | null | undefined;
+}) {
+  const cribUp = row.phase === "done" || (row.count_step ?? 0) >= 2;
+  return `${(row.revealed_by ?? []).join(",")}|${row.crib_revealed ? 1 : 0}|${row.phase}|${cribUp ? 1 : 0}`;
 }
 
 // A game is "live" while it is either cutting for deal or actually being
@@ -421,6 +430,7 @@ export default function TablePage() {
         hand_no: number | null;
         revealed_by: string[] | null;
         crib_revealed: boolean | null;
+        count_step: number | null;
       },
       previousStatus: string | null
     ) => {
@@ -433,9 +443,10 @@ export default function TablePage() {
         return;
       }
 
-      // A hand or the crib was just shown -- refetch what the read policies
-      // now allow. Only from counting on, the only time anything can be shown.
-      const key = revealKey(row.revealed_by, row.crib_revealed);
+      // Counting just started, the crib's count came up, or something was
+      // shown -- refetch what the read policies now allow. Only from counting
+      // on, the only time any of it is readable.
+      const key = revealKey(row);
       if ((row.phase === "counting" || row.phase === "done") && key !== revealKeyRef.current) {
         revealKeyRef.current = key;
         fetchRevealed(row.id);
@@ -563,13 +574,14 @@ export default function TablePage() {
         setPlays([]);
       }
 
-      // Shown hands and the crib only exist from counting on.
+      // Both hands, and the crib from its count on, are readable only from
+      // counting on (phase2-open-hands-in-count.sql).
       if (
         existingGame &&
         existingGame.status === "active" &&
         (existingGame.phase === "counting" || existingGame.phase === "done")
       ) {
-        revealKeyRef.current = revealKey(existingGame.revealed_by, existingGame.crib_revealed);
+        revealKeyRef.current = revealKey(existingGame);
         await fetchRevealed(existingGame.id);
       } else {
         clearRevealed();
@@ -853,27 +865,25 @@ export default function TablePage() {
     setCountStatus("idle");
   }
 
-  function handleShowHand() {
-    if (!activeGame) return;
-    const gameId = activeGame.id;
-    return runCountAction(() => supabase.rpc("show_hand", { p_game_id: gameId }));
-  }
-
-  function handleShowCrib() {
-    if (!activeGame) return;
-    const gameId = activeGame.id;
-    return runCountAction(() => supabase.rpc("show_crib", { p_game_id: gameId }));
-  }
-
   // p_step is the step THIS screen is showing. If the server has already moved
   // past it (a double tap, a second tab) the call returns quietly instead of
   // scoring twice; a step ahead of the server is rejected.
+  //
+  // THE CRIB (step 2): there's no Show Crib tap -- the crib is already
+  // face-up on both screens (the read policy opens it at step 2) -- but
+  // confirm_count still requires crib_revealed (its Guard 9), so the dealer's
+  // Confirm sets it first. show_crib is a quiet no-op if it's already set;
+  // if confirm_count then fails, the crib was face-up anyway.
   function handleConfirmCount(step: number) {
     if (!activeGame) return;
     const gameId = activeGame.id;
-    return runCountAction(() =>
-      supabase.rpc("confirm_count", { p_game_id: gameId, p_step: step })
-    );
+    return runCountAction(async () => {
+      if (step === 2) {
+        const shown = await supabase.rpc("show_crib", { p_game_id: gameId });
+        if (shown.error) return shown;
+      }
+      return supabase.rpc("confirm_count", { p_game_id: gameId, p_step: step });
+    });
   }
 
   // Marks this player ready for the next hand; the tap that makes EVERY
@@ -1544,10 +1554,7 @@ export default function TablePage() {
   // has left the pegging hold.
   const isCountingOrDone = (isCounting || isDone) && !onPegHold;
   const countStep = activeGame?.count_step ?? 0;
-  const revealedBy = activeGame?.revealed_by ?? [];
-  const cribRevealed = activeGame?.crib_revealed ?? false;
   const starterCard = activeGame?.starter_card ?? null;
-  const iHaveShown = revealedBy.includes(session.user.id);
   const countBusy = countStatus === "sending";
 
   // THE COUNTING VIEW (UI polish, stage 3): what goes in my hand row, in the
@@ -1564,14 +1571,11 @@ export default function TablePage() {
           phase: isDone ? "done" : "counting",
           step: countStep,
           myHand: sortHand(myHand),
-          oppCards:
-            revealedBy.includes(countOpp.user_id) && revealedHands[countOpp.user_id]
-              ? sortHand(revealedHands[countOpp.user_id])
-              : null,
+          // Whatever the read policies returned: from counting on, the
+          // opponent's whole hand (face-down until it arrives).
+          oppCards: revealedHands[countOpp.user_id] ? sortHand(revealedHands[countOpp.user_id]) : null,
           cribCards: cribCards ? sortHand(cribCards) : null,
           starter: starterCard,
-          iHaveShown,
-          cribRevealed,
         })
       : null;
 
@@ -1633,34 +1637,31 @@ export default function TablePage() {
       ? goSayers(displayedRun(plays, activeGame.play_segment, onPegHold).events)
       : new Set<string>();
   const goLabel = <span className="text-xs font-semibold text-amber-600 dark:text-amber-500">Go</span>;
+  const countingLabel = (
+    <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-500">Counting</span>
+  );
 
   // Opponents across the top. Each seat's hand is drawn face-down from the
-  // public hand size, or face-up -- sorted, as on every screen from counting
-  // onward -- once it has been shown.
+  // public hand size -- except in counting, where it shows face-up in the
+  // middle and the strip keeps only the name -- or face-up, sorted, on the
+  // final board.
   const seats: OpponentSeat[] = opponents.map((opponent) => {
-    const shown = revealedBy.includes(opponent.user_id) ? revealedHands[opponent.user_id] : undefined;
     return {
       userId: opponent.user_id,
       name: displayName(opponent),
       isDealer: handDealerId === opponent.user_id,
-      // In counting the strip keeps only a hand still WAITING to be counted
-      // (face-down); a hand being counted is in the middle, and a counted
-      // one has cleared.
+      // In counting the hand is in the middle: the strip keeps no cards.
       // The final board: the hand face-up when readable, else face-down.
       cardCount: finalBoard
         ? CARDS_AFTER_DISCARD
         : view
-          ? view.oppBandCount
+          ? 0
           : opponentCardCount(opponent.user_id),
       shownCards: finalBoard
         ? finalBoard.board.hands[opponent.user_id]
           ? sortHand(finalBoard.board.hands[opponent.user_id])
           : undefined
-        : view
-          ? undefined
-          : shown
-            ? sortHand(shown)
-            : undefined,
+        : undefined,
       saidGo: goBy.has(opponent.user_id),
     };
   });
@@ -1791,8 +1792,10 @@ export default function TablePage() {
 
             {/* THE COUNTING STAGE. Order is fixed by the server: the pone's
                 hand, the dealer's hand, then the crib. Buttons appear only on
-                MY turn; otherwise a plain "X is counting". Each confirmed
-                count leaves a small recap line. */}
+                MY turn; otherwise a plain "X is counting". Both hands stay
+                face-up throughout (the opponent's here, mine in my hand
+                row); each confirmed count leaves a small recap line -- and
+                nothing shows a count's points before its confirm. */}
             {view && (
               <CountStage
                 headline={view.headline}
@@ -1827,33 +1830,15 @@ export default function TablePage() {
                       )}
                     </>
                   ) : view.myTurn ? (
-                    <>
-                      {view.showHandButton && (
-                        <button
-                          onClick={handleShowHand}
-                          disabled={countBusy}
-                          className="min-h-10 rounded border border-zinc-400 px-4 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-                        >
-                          Show Hand
-                        </button>
-                      )}
-                      {view.showCribButton && (
-                        <button
-                          onClick={handleShowCrib}
-                          disabled={countBusy}
-                          className="min-h-10 rounded border border-zinc-400 px-4 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-                        >
-                          Show Crib
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleConfirmCount(countStep)}
-                        disabled={!view.canConfirm || countBusy}
-                        className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
-                      >
-                        {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
-                      </button>
-                    </>
+                    <button
+                      onClick={() => handleConfirmCount(countStep)}
+                      disabled={!view.canConfirm || countBusy}
+                      className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
+                    >
+                      {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
+                    </button>
+                  ) : view.waitingOn ? (
+                    <p className="text-sm text-zinc-500">{view.waitingOn}</p>
                   ) : undefined
                 }
               />
@@ -1966,10 +1951,9 @@ export default function TablePage() {
     <PileRow
       crib={
         view
-          ? // Counting: a face-down pile until the crib's turn; then an
-            // empty outline -- its cards are in the dealer's slot -- which
-            // stays once the crib is counted.
-            { faceDownCount: view.cribPile === "pile" ? 4 : 0, shownCards: null }
+          ? // Counting: a face-down pile until the crib's count is up, then
+            // the face-up fan (as on the final board), through 'done'.
+            { faceDownCount: CARDS_AFTER_DISCARD, shownCards: view.cribFan }
           : {
               faceDownCount: discardedBy.length * CARDS_TO_DISCARD,
               shownCards: null,
@@ -2018,9 +2002,9 @@ export default function TablePage() {
           ))}
     </HandRow>
   ) : view ? (
-    // Counting: my hand at full size on my turn, small while it waits, gone
-    // once counted -- or the crib, face-down then face-up, if I deal.
-    <HandRow>
+    // Counting: my four at full size for the whole count -- never shrunk,
+    // never cleared -- marked while it's the hand being counted.
+    <HandRow label={view.myRowCounting ? countingLabel : undefined}>
       <SlotCards slot={view.myRow} />
     </HandRow>
   ) : (

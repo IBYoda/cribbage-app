@@ -1,0 +1,389 @@
+-- Open hands in the count: VERIFICATION QUERIES.
+--
+-- Run in the Supabase Dashboard -> SQL Editor AFTER
+-- docs/sql/phase2-open-hands-in-count.sql. The SQL Editor shows the result of
+-- the LAST statement only, so run each numbered query on its own.
+--
+-- Query 1 is read-only. Query 2 is a DO block that WRITES -- it rewrites one
+-- game's state and its hands, crib and deck as the owner, then reads them
+-- back as each player -- and then deliberately raises an exception at the
+-- very end, which rolls every write back. It always "fails": the message is
+-- the verdict. "ALL n CHECKS PASSED (rolled back)" is a pass; anything
+-- starting "FAIL" or "SETUP" is not. Re-runnable, because nothing it does
+-- survives -- and since only committed changes reach Realtime, neither
+-- browser sees anything while it runs.
+--
+-- Same impersonation as phase2-won-game-reveal-verification.sql:
+-- request.jwt.claims plus "set local role authenticated" to read as a player,
+-- and "reset role" to write as the owner. A read as a player is a plain
+-- SELECT, so RLS decides what comes back -- exactly what the table page sees.
+--
+-- ISOLATING THE NEW POLICIES: throughout, revealed_by stays '{}' and
+-- crib_revealed stays false, so the older "shown" policies open nothing --
+-- every OPEN below is the new policies' doing, and every CLOSED proves they
+-- don't open it. (In a real 'done' hand crib_revealed would be true; here it
+-- is deliberately false, to test the new crib policy on its own.)
+--
+-- THE FROZEN now() LESSON (see the handoff): now() is the TRANSACTION's start
+-- time, and a DO block is one transaction. None of these read policies looks
+-- at created_at, but the game under test is still given an explicit, strictly
+-- later created_at (now() + 1 minute) so it is unambiguously the table's
+-- newest game -- the one the table page would show.
+
+
+-- ---------------------------------------------------------------------------
+-- 1. READ-ONLY. The policies as the catalog has them.
+--
+-- EXPECT 6 rows, every one SELECT and PERMISSIVE:
+--   game_cribs  Players at the table read a shown crib
+--   game_cribs  Players of a won game read its crib
+--   game_cribs  Players read the crib once it is up for counting
+--   game_hands  Players of a won game read its hands
+--   game_hands  Players read every hand once pegging is over
+--   game_hands  Players read their own hand, or a hand shown at their table
+-- and NO row for game_decks (it has no policy, so it stays unreadable).
+--
+-- The two NEW rows' "qual" must contain status = 'active' -- that is what
+-- keeps them shut on every ENDED game, won or not. (Query 2 proves it for
+-- games ended by a leaver, an admin or the timeout; a WON game can't be used
+-- to prove it by reading, because the won-game policies open those rows on
+-- purpose. This column is the proof for that case.)
+-- ---------------------------------------------------------------------------
+
+-- select tablename, policyname, cmd, permissive, qual
+-- from pg_policies
+-- where schemaname = 'public'
+--   and tablename in ('game_hands', 'game_cribs', 'game_decks')
+-- order by tablename, policyname;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. THE READ WALK-THROUGH (rolled back).
+--
+-- SETUP: any OPEN table with EXACTLY 2 members that has had at least one
+-- game, live or ended, in any state -- plus at least ONE OTHER account in
+-- the project (any user who is not one of the two), who is added to the
+-- table's roster for the non-player case. As the owner, the block takes the
+-- table's latest game, makes it a game between the first-joined player (p1)
+-- and the second (p2, the dealer), and gives it known hands, crib and deck.
+-- Then, as each user in turn:
+--
+--   C  CLOSED before the count -- 'cutting', 'discard', 'play':
+--        p1 reads neither p2's hand nor the crib; p1 still reads their own.
+--   K0 COUNTING, step 0:  p2's hand OPEN to p1 (exactly p2's four), p1's
+--        hand OPEN to p2; the crib CLOSED.
+--   K1 COUNTING, step 1:  p2's hand OPEN; the crib CLOSED.
+--   K2 COUNTING, step 2:  p2's hand OPEN; the crib OPEN (exactly its four);
+--        the deck CLOSED.
+--   N  NOT a player, at step 2 (everything open to the players): p3 (on the
+--        table's roster now, not in games.players) reads no hand, no crib,
+--        no deck; a stranger (not a member at all) reads no hand, no crib.
+--   D  DONE:  p2's hand OPEN; the crib OPEN; the deck CLOSED.
+--   E  ENDED (player_left, admin, timeout), left at counting step 2 -- where
+--        the new policies would otherwise be open: p1 reads neither p2's
+--        hand nor the crib; p1 still reads their own.
+--
+-- Expected message:
+--   ALL 36 CHECKS PASSED (rolled back) ...
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_code text := '0000';                     -- <<< SET THE TABLE CODE
+--   v_table_id uuid;
+--   v_p1 uuid;
+--   v_p2 uuid;
+--   v_p3 uuid;
+--   v_stranger uuid := gen_random_uuid();
+--   v_last uuid;
+--   v_n int;
+--   v_cards text[];
+--   v_label text;
+--   v_status text;
+--   v_phase text;
+--   v_reason text;
+--   v_p1_hand text[] := array['5H', '5D', 'JS', 'QC'];
+--   v_p2_hand text[] := array['4S', '6C', '9D', 'KH'];
+--   v_crib text[] := array['2C', '7S', '8H', 'TC'];
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select t.id into v_table_id from public.tables t where t.code = v_code and t.status = 'open';
+--   if v_table_id is null then
+--     raise exception 'SETUP: no open table %.', v_code;
+--   end if;
+--
+--   select count(*) into v_n from public.table_members where table_id = v_table_id;
+--   if v_n <> 2 then
+--     raise exception 'SETUP: the table needs exactly 2 members (has %).', v_n;
+--   end if;
+--
+--   select user_id into v_p1 from public.table_members where table_id = v_table_id order by joined_at limit 1;
+--   select user_id into v_p2 from public.table_members where table_id = v_table_id order by joined_at offset 1 limit 1;
+--
+--   -- p3: any other real account (table_members.user_id references auth.users,
+--   -- so it can't be a made-up uuid).
+--   select u.id into v_p3 from auth.users u where u.id not in (v_p1, v_p2) order by u.created_at limit 1;
+--   if v_p3 is null then
+--     raise exception 'SETUP: the project needs a third account (any user other than the two players).';
+--   end if;
+--
+--   select g.id into v_last from public.games g where g.table_id = v_table_id order by g.created_at desc limit 1;
+--   if v_last is null then
+--     raise exception 'SETUP: the table has never had a game. Start one first.';
+--   end if;
+--
+--   -- No other live game at this table, so v_last can be made live below
+--   -- (one live game per table).
+--   update public.games
+--   set status = 'ended', ended_reason = 'admin'
+--   where table_id = v_table_id and id <> v_last and status in ('cutting', 'active');
+--
+--   -- The game under test: p1 v p2 (p2 deals), the table's newest game,
+--   -- nothing shown -- so only the new policies can open anything.
+--   update public.games
+--   set players = array[v_p1, v_p2], dealer_id = v_p2,
+--       revealed_by = '{}', crib_revealed = false,
+--       created_at = now() + interval '1 minute'
+--   where id = v_last;
+--
+--   -- Known hands, crib and deck (replacing whatever the game had).
+--   delete from public.game_hands where game_id = v_last;
+--   insert into public.game_hands (game_id, user_id, cards)
+--   values (v_last, v_p1, v_p1_hand), (v_last, v_p2, v_p2_hand);
+--
+--   delete from public.game_cribs where game_id = v_last;
+--   insert into public.game_cribs (game_id, cards) values (v_last, v_crib);
+--
+--   delete from public.game_decks where game_id = v_last;
+--   insert into public.game_decks (game_id, cards) values (v_last, array['AS', '3D', '8C']);
+--
+--   -- ==== C: CLOSED before the count -- cutting, discard, play ================
+--   foreach v_label in array array['cutting/discard', 'active/discard', 'active/play'] loop
+--     v_status := split_part(v_label, '/', 1);
+--     v_phase := split_part(v_label, '/', 2);
+--
+--     execute 'reset role';
+--     update public.games
+--     set status = v_status, ended_reason = null, winner_id = null,
+--         phase = v_phase, count_step = 0
+--     where id = v_last;
+--
+--     execute 'set local role authenticated';
+--     perform set_config('request.jwt.claim.role', 'authenticated', true);
+--     perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--     perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--     -- [C-hand] p1 cannot read p2's hand.
+--     select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--     if v_n <> 0 then raise exception 'FAIL [C-hand %] p1 read p2''s hand.', v_label; end if;
+--     v_checks := v_checks + 1;
+--
+--     -- [C-crib] ...nor the crib.
+--     select count(*) into v_n from public.game_cribs where game_id = v_last;
+--     if v_n <> 0 then raise exception 'FAIL [C-crib %] p1 read the crib.', v_label; end if;
+--     v_checks := v_checks + 1;
+--
+--     -- [C-own] ...but reads their own hand, as always.
+--     select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--     if v_n <> 1 then raise exception 'FAIL [C-own %] p1 could not read their own hand.', v_label; end if;
+--     v_checks := v_checks + 1;
+--   end loop;
+--
+--   -- ==== K0: COUNTING, step 0 -- hands open, crib closed =====================
+--   execute 'reset role';
+--   update public.games set status = 'active', phase = 'counting', count_step = 0 where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [K0a] p1 reads p2's hand...
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [K0a] p1 read % rows of p2''s hand at step 0, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [K0b] ...exactly p2's four cards.
+--   select cards into v_cards from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_cards is distinct from v_p2_hand then
+--     raise exception 'FAIL [K0b] p1 read p2''s hand as %, expected %.', v_cards, v_p2_hand;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [K0c] The crib is still closed.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [K0c] p1 read the crib at step 0.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--
+--   -- [K0d] p2 reads p1's hand too.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--   if v_n <> 1 then raise exception 'FAIL [K0d] p2 read % rows of p1''s hand at step 0, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== K1: COUNTING, step 1 -- hands open, crib still closed ===============
+--   execute 'reset role';
+--   update public.games set count_step = 1 where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [K1a] p1 reads p2's hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [K1a] p1 read % rows of p2''s hand at step 1, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [K1b] The crib is still closed.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [K1b] p1 read the crib at step 1.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== K2: COUNTING, step 2 -- the crib opens ==============================
+--   execute 'reset role';
+--   update public.games set count_step = 2 where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [K2a] p1 (the pone -- not the crib's owner) reads p2's hand...
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [K2a] p1 read % rows of p2''s hand at step 2, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [K2b] ...and the crib, exactly its four cards.
+--   select cards into v_cards from public.game_cribs where game_id = v_last;
+--   if v_cards is distinct from v_crib then
+--     raise exception 'FAIL [K2b] p1 read the crib at step 2 as %, expected %.', v_cards, v_crib;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [K2c] The deck stays closed.
+--   v_n := 0;
+--   begin
+--     select count(*) into v_n from public.game_decks where game_id = v_last;
+--   exception when insufficient_privilege then v_n := 0;
+--   end;
+--   if v_n <> 0 then raise exception 'FAIL [K2c] p1 read the deck at step 2.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--
+--   -- [K2d] p2 (the dealer) reads the crib too.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 1 then raise exception 'FAIL [K2d] p2 read % crib rows at step 2, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== N: NOT a player, while everything is open to the players ============
+--   -- p3 joins the table's roster now (as the owner).
+--   execute 'reset role';
+--   insert into public.table_members (table_id, user_id, joined_at)
+--   values (v_table_id, v_p3, now() + interval '2 minutes');
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p3, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p3::text, true);
+--
+--   -- [N1] p3, on the roster but not in players, reads no hand...
+--   select count(*) into v_n from public.game_hands where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N1] a roster member who is not playing read % hand rows.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N2] ...no crib...
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N2] a roster member who is not playing read the crib.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N3] ...and no deck.
+--   v_n := 0;
+--   begin
+--     select count(*) into v_n from public.game_decks where game_id = v_last;
+--   exception when insufficient_privilege then v_n := 0;
+--   end;
+--   if v_n <> 0 then raise exception 'FAIL [N3] a roster member read the deck.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_stranger::text, true);
+--
+--   -- [N4] A stranger (no membership at all) reads no hand...
+--   select count(*) into v_n from public.game_hands where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N4] a stranger read % hand rows.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N5] ...and no crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 0 then raise exception 'FAIL [N5] a stranger read the crib.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- p3 leaves the roster again.
+--   execute 'reset role';
+--   delete from public.table_members where table_id = v_table_id and user_id = v_p3;
+--
+--   -- ==== D: DONE -- hands and crib open ======================================
+--   update public.games set phase = 'done', count_step = 2 where id = v_last;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [D1] p1 reads p2's hand.
+--   select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--   if v_n <> 1 then raise exception 'FAIL [D1] p1 read % rows of p2''s hand in done, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [D2] p1 reads the crib.
+--   select count(*) into v_n from public.game_cribs where game_id = v_last;
+--   if v_n <> 1 then raise exception 'FAIL [D2] p1 read % crib rows in done, expected 1.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [D3] The deck stays closed.
+--   v_n := 0;
+--   begin
+--     select count(*) into v_n from public.game_decks where game_id = v_last;
+--   exception when insufficient_privilege then v_n := 0;
+--   end;
+--   if v_n <> 0 then raise exception 'FAIL [D3] p1 read the deck in done.'; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== E: ENDED (not won), left at counting step 2 -- the new policies shut =
+--   foreach v_reason in array array['player_left', 'admin', 'timeout'] loop
+--     execute 'reset role';
+--     update public.games
+--     set status = 'ended', ended_reason = v_reason, winner_id = null,
+--         phase = 'counting', count_step = 2
+--     where id = v_last;
+--
+--     execute 'set local role authenticated';
+--     perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--     perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--     -- [E-hand] p1 cannot read p2's hand of a game ended this way.
+--     select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p2;
+--     if v_n <> 0 then
+--       raise exception 'FAIL [E-hand %] p1 read p2''s hand of a game ended by %.', v_reason, v_reason;
+--     end if;
+--     v_checks := v_checks + 1;
+--
+--     -- [E-crib] ...nor its crib.
+--     select count(*) into v_n from public.game_cribs where game_id = v_last;
+--     if v_n <> 0 then
+--       raise exception 'FAIL [E-crib %] p1 read the crib of a game ended by %.', v_reason, v_reason;
+--     end if;
+--     v_checks := v_checks + 1;
+--
+--     -- [E-own] ...but still reads their own hand.
+--     select count(*) into v_n from public.game_hands where game_id = v_last and user_id = v_p1;
+--     if v_n <> 1 then
+--       raise exception 'FAIL [E-own %] p1 could not read their own hand of a game ended by %.', v_reason, v_reason;
+--     end if;
+--     v_checks := v_checks + 1;
+--   end loop;
+--
+--   execute 'reset role';
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Players % and % (dealer), roster-only %.', v_checks, v_p1, v_p2, v_p3;
+-- end $$;

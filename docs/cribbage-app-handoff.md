@@ -12,7 +12,7 @@ A real-time multiplayer cribbage companion app for 2-4 players, playing remotely
 
 - Responsive **web app** (not native mobile) — Next.js, works in a phone browser
 - **Confirm Count** and **auto-scored pegging** calculate all scores automatically — nothing is typed in manually
-- **Show Hand** is a voluntary, always-available reveal button (not turn-gated); **Confirm Count** is turn-gated
+- **Open hands in the count** (`phase2-open-hands-in-count.sql`): after each player taps "Count hands", both four-card hands are face-up for both players for the whole count and stay until Next Hand; the crib turns face-up by itself when its count is up (step 2). There is no Show Hand or Show Crib button any more (the `show_hand` / `show_crib` functions remain in the database; the dealer's crib Confirm calls `show_crib` itself). **Confirm Count** is turn-gated, and a count's points appear only after its confirm
 - Structure is **Table** (persistent room, 4-digit join code) → can host multiple **Games** (one match to 121) back to back via "New Game," without leaving the table
 - Real accounts (Supabase Auth) with profile icon + editable game nickname
 - Admin role for the project owner: view/kill abandoned tables & games; 5-hour game timeout, 12-hour table timeout, both automatic

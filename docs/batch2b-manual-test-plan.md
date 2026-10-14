@@ -206,9 +206,10 @@ needed, and query B resets between scenarios.
    - **Expect:** the pone on exactly 120, **no win banner**, the turn passing
      to the dealer, and the game still live (query H: `status active`).
 2. **A crib win.**
-   - After the dealer's hand is confirmed (step 2, before Show Crib), set the
+   - After the dealer's hand is confirmed (step 2 -- the crib is already
+     face-up on both screens, since phase2-open-hands-in-count), set the
      dealer to 121 − `crib_points`, keeping the pone low.
-   - The dealer taps Show Crib, then Confirm Count.
+   - The dealer taps Confirm Count (it shows the crib, then counts it).
    - **Expect:** the win banner on both screens, reading like
      "<dealer> wins! 121 — crib: … (+n)". Query H: `won`, `count_step` 2,
      crib shown.
@@ -225,16 +226,18 @@ needed, and query B resets between scenarios.
    - **Expect:** one award, so the score rises once and the flash fires once.
      No error. The turn moves on once.
 5. **Refresh mid-count.**
-   - Refresh the pone's browser at step 1, and again at step 2 with the crib
-     shown.
-   - **Expect:** the page comes back with the pone's own four cards, every
-     shown hand (and the crib, if shown) face-up, the right banner, and the
-     right button states.
+   - Refresh the pone's browser at step 1, and again at step 2.
+   - **Expect:** the page comes back (no Count hands pause) with both hands
+     face-up -- the pone's own in their hand row, the dealer's in the middle
+     -- the crib a face-down pile at step 1 and a face-up fan at step 2, the
+     right "Counting: …" headline, the recap lines for confirmed counts only,
+     and Confirm Count only on the counting player's screen.
 6. **The server refuses Show Hand during play.**
    - During the **play** phase, use `testing-force-near-win.sql` query I to
      call `show_hand` as either player.
    - **Expect:** *"Hands can only be shown once counting has begun."* The UI
-     never offers the button then, so this is the only way to check the
+     no longer has a Show Hand button at all (phase2-open-hands-in-count),
+     but the function is still in the database, so this still checks the
      server.
 
 ## Part 6 — regression
