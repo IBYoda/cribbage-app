@@ -97,7 +97,7 @@ Then run query B before the next scenario.
 | C — pegging | During play, set a player to 120 | That player scores any pegging point | Banner straight after the play. A +2 flashes `+2` but the score reads 121 |
 | D — pone mid-count | At counting step 0, pone to `score_for_exact_121` | Pone taps Confirm Count | Banner; the dealer never counts |
 | G — near miss | At counting step 0, pone to `score_for_exact_121` − 1 | Pone taps Confirm Count | Pone on 120, **no banner**, turn passes to the dealer |
-| E — crib | At step 2 (after the dealer's hand), dealer to 121 − `crib_points` | Dealer taps Show Crib, then Confirm Count | Banner |
+| E — crib | At step 2 (after the dealer's hand), dealer to 121 − `crib_points` | Dealer taps Confirm Count (it shows the crib first; there is no Show Crib button since phase2-open-hands-in-count) | Banner |
 | F — his heels | Dealer to 119, force a jack starter, then the second discard | — | Banner the moment the starter is cut, before any card is played |
 
 F is the "status before phase" case. The ended game is left with
@@ -105,61 +105,69 @@ F is the "status before phase" case. The ended game is left with
 
 **Server-side Show Hand refusal.** Using `testing-force-near-win.sql` query I,
 call `show_hand` during the **play** phase. It must fail with *"Hands can only
-be shown once counting has begun."* The UI never offers the button then, so
-this is the only way to check the server.
+be shown once counting has begun."* The UI no longer offers a Show Hand button
+at all (phase2-open-hands-in-count: both hands open for the whole count), but
+the function is still in the database, so this still checks the server.
 
 ## Part 4 — two people, two screens
 
 Play one normal hand to `done` with scores reset, watching both screens.
 
+_Updated for phase2-open-hands-in-count (both hands open for the whole count,
+the crib automatic at step 2; no Show Hand / Show Crib buttons)._
+
 1. **Pegging ends.**
-   - Both screens show the counting banner. The pone's reads **"Your count"**
-     with **Confirm Count** enabled. The dealer's reads
-     **"<pone> is counting their hand"**, and their Confirm Count is visible
-     but greyed out.
-   - Both players get **Show Hand** next to Sort.
-   - Both cribs are still face-down.
-2. **No Show Hand before counting.** During discard and play, there is no
-   Show Hand button on either screen (decision 7).
-3. **Pone taps Show Hand.**
-   - The pone's cards turn face-up at their seat on the dealer's screen,
-     without a refresh.
-   - The pone's button becomes "Shown to the table".
-   - No breakdown is shown yet: the player is meant to count out loud before
-     the app does.
-   - The dealer's hand stays face-down on the pone's screen.
+   - Each screen holds the pegging view with **Count hands**, exactly as
+     before. Nothing about the count shows until that player taps it.
+2. **Count hands.**
+   - Both four-card hands are face-up on both screens: my own at full size
+     in my hand row, the opponent's at hand size in the middle. The
+     opponent's strip at the top shows only their name and the dealer chip.
+   - The crib is a face-down pile; the starter is face-up beside it.
+   - The pone's screen reads **"Counting: your hand"**, with a small
+     **Counting** marker over their hand row and **Confirm Count** enabled.
+     The dealer's reads **"Counting: <pone>'s hand"** and **"<pone> is
+     counting"**, with no button.
+   - **No points or breakdown anywhere** for a hand that hasn't been
+     confirmed: the player counts out loud first.
+3. **No hands before counting.** During discard and play, the opponent's
+   cards are face-down and there is no Show Hand button on either screen.
 4. **Pone taps Confirm Count.**
    - The flash on both screens reads like `+7 — hand: 15s 4 · runs 3`.
-   - A breakdown line, `Hand: 7 — 15s 4 · runs 3`, appears under the pone's
-     cards on both screens. Its number matches the flash.
-   - The turn passes to the dealer: the banner flips on both screens.
+   - A recap line, `Your hand: 7 — 15s 4 · runs 3` (`<pone>'s hand: …` on the
+     dealer's screen), appears in the middle on both screens. Its number
+     matches the flash.
+   - **Both hands stay face-up** -- nothing clears after a confirm.
+   - The turn passes to the dealer: the headlines flip on both screens.
 5. **Double tap.** On the next confirm, tap Confirm Count twice quickly.
    Nothing extra is scored and no error appears. The button is disabled while
    the first call is in flight, and the server treats a late duplicate as a
    stale step.
-6. **Dealer taps Confirm Count without tapping Show Hand.** Their hand turns
-   face-up on the pone's screen anyway (auto-reveal), and the flash and
-   breakdown follow.
+6. **Dealer taps Confirm Count** for their hand. The flash and recap line
+   follow; both hands stay up.
 7. **The crib.**
-   - The dealer's banner reads **"Your crib — Show the crib, count it out loud,
-     then Confirm Count."**
-   - Show Crib appears, and Confirm Count stays greyed out until it's tapped.
-   - The pone's screen reads "<dealer> is about to show the crib".
-   - After Show Crib, the crib turns face-up on **both** screens.
-   - Confirm Count then scores it as `crib: …`.
+   - As step 2 starts, the crib turns face-up **by itself** on both screens,
+     in its fan in the pile row -- no tap. The hands stay where they are.
+   - The dealer's screen reads **"Counting: your crib"** with Confirm Count;
+     the pone's reads **"Counting: <dealer>'s crib"** and "<dealer> is
+     counting".
+   - Confirm Count scores it as `crib: …` (the Confirm calls show_crib, then
+     confirm_count).
 8. **`done`.**
    - The banner reads "Every hand and the crib are counted."
-   - Both hands, the crib (now with its breakdown) and the starter stay
-     face-up on both screens.
-   - Nobody has a counting button.
+   - Both hands, the crib (face-up in its fan) and the starter stay face-up
+     on both screens, with one recap line per count.
+   - Nobody has a counting button; Next Hand as before.
 9. **Zero hand.** When a hand scores 0, the flash reads `+0 — hand: nothing`
    and the breakdown reads `Hand: 0 — nothing`.
 10. **Reconnect mid-count.**
-    - Refresh the pone's browser at step 1. It must come back showing:
-      - the pone's own four cards;
-      - any shown hands face-up;
-      - "<dealer> is counting their hand";
-      - the right button states.
+    - Refresh the pone's browser at step 1. It must come back (with no
+      Count hands pause -- a page that loads mid-count skips it) showing:
+      - both hands face-up, the pone's own in their hand row;
+      - the crib still a face-down pile;
+      - "Counting: <dealer>'s hand" and "<dealer> is counting";
+      - the recap line for the pone's confirmed hand.
+    - Refresh at step 2: the crib comes back face-up in its fan.
     - Refresh at `done`: everything is still face-up.
 
 ## Part 5 — regression

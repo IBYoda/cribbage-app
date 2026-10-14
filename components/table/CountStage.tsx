@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
-import { HAND_CARD, SMALL_CARD } from "@/components/table/sizes";
+import { HAND_CARD } from "@/components/table/sizes";
 import type { CardSlot } from "@/components/table/countingView";
 
-// The middle region during counting and `done` (UI polish, stage 3): the
-// status line, the opponent's hand or crib while they count it (hand-card
-// size, using the middle's room), my buttons on my turn, and a small recap
-// line per confirmed count. Sized from the middle region (.count-stage in
+// The middle region during counting and `done`: whose count it is, the
+// opponent's hand (hand-card size, using the middle's room) for the whole
+// count, Confirm on my turn (or "X is counting"), and a small recap line per
+// confirmed count. Sized from the middle region (.count-stage in
 // app/globals.css): it never scrolls or clips, and lays out in one row in a
 // flat window.
 export function CountStage({
@@ -64,9 +64,8 @@ export function CountStage({
   );
 }
 
-// My hand row's contents in counting: full-size cards (being counted), small
-// overlapping cards (still waiting their turn), or face-down cards (the crib
-// before it's shown).
+// My hand row's contents in counting: my four, face-up at full size (or
+// face-down, if a slot ever holds cards that aren't readable).
 export function SlotCards({ slot }: { slot: CardSlot }) {
   if (slot.kind === "none") return null;
   if (slot.kind === "faceDown") {
@@ -76,22 +75,6 @@ export function SlotCards({ slot }: { slot: CardSlot }) {
           <FaceDownCard key={i} sizing={HAND_CARD} />
         ))}
       </>
-    );
-  }
-  if (slot.kind === "collapsed") {
-    // Overlapped down to the corners: readable, but plainly not the hand
-    // being counted.
-    return (
-      <div className="flex" aria-label="Your hand (counted later)">
-        {slot.cards.map((card, i) => (
-          <div
-            key={card}
-            className={i === 0 ? "" : "-ml-[calc(var(--small-w)_-_max(18px,_var(--small-w)_*_0.36))]"}
-          >
-            <PlayingCard card={card} sizing={SMALL_CARD} />
-          </div>
-        ))}
-      </div>
     );
   }
   return (
