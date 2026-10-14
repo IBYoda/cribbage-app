@@ -150,18 +150,14 @@ export function CutForDealView({
                 aria-label={`Cut the deck at position ${i + 1}`}
                 style={{ marginLeft: i === 0 ? 0 : "-1.15rem" }}
                 className={[
-                  "h-[var(--cut-fan-h)] w-[calc(var(--cut-fan-h)/2)] shrink-0 rounded border border-red-900/60 bg-red-900 transition-transform",
+                  "cut-fan-card h-[var(--cut-fan-h)] w-[calc(var(--cut-fan-h)/2)] shrink-0 rounded border border-red-900/60 bg-red-900 transition-transform",
                   interactive ? "cursor-pointer hover:-translate-y-2" : "cursor-default",
                   tappedIndex === i ? "-translate-y-3 ring-2 ring-white" : "",
                 ].join(" ")}
               >
-                <span
-                  className="block h-full w-full rounded"
-                  style={{
-                    backgroundImage:
-                      "repeating-linear-gradient(45deg, rgba(255,255,255,0.16) 0 4px, transparent 4px 8px)",
-                  }}
-                />
+                {/* The player's card back (app/globals.css, "CARD BACKS"):
+                    Classic's stripes, or the chosen art. */}
+                <span className="card-back block h-full w-full rounded" />
               </button>
             );
           })}

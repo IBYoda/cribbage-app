@@ -27,3 +27,31 @@ export function isTableSurface(value: unknown): value is TableSurface {
 export function surfaceIsDark(surface: TableSurface) {
   return surface !== "classic";
 }
+
+// CARD BACKS: what every face-down card on MY screen looks like. Classic is
+// the original red CSS stripes and loads nothing; the others are 5:7 WebP
+// art in public/cards/backs/. Painted by app/globals.css ("CARD BACKS") from
+// data-back on an ancestor -- the table shell, or the Profile preview.
+export const CARD_BACKS = [
+  { id: "classic", label: "Classic (current)" },
+  { id: "metallic-black", label: "Modern Metallic Black" },
+  { id: "vintage", label: "Vintage" },
+  { id: "oktoberfish", label: "Oktoberfish" },
+  { id: "plain-black", label: "Plain Black" },
+  { id: "standard-red", label: "Standard Red" },
+  { id: "standard-blue", label: "Standard Blue" },
+] as const;
+
+export type CardBack = (typeof CARD_BACKS)[number]["id"];
+
+export const DEFAULT_CARD_BACK: CardBack = "classic";
+
+export function isCardBack(value: unknown): value is CardBack {
+  return CARD_BACKS.some((b) => b.id === value);
+}
+
+// The art's URL, or null for Classic (CSS only). For preloading the chosen
+// back; the stylesheet holds the same paths.
+export function cardBackUrl(back: CardBack) {
+  return back === "classic" ? null : `/cards/backs/${back}.webp`;
+}

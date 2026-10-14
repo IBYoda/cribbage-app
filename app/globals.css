@@ -649,3 +649,79 @@ body:has(.table-shell[data-surface="wood"]) {
 .table-shell[data-scheme="dark"] .cut-view {
   background-color: rgb(0 0 0 / 0.18);
 }
+
+/* ===========================================================================
+   CARD BACKS -- each player's own choice, for their own screen only
+   (lib/appearance.ts; data-back on an ancestor of the card -- the table
+   shell, or the Profile preview -- and .card-back on FaceDownCard).
+
+   Classic is the original back, unchanged: red-900 with these diagonal
+   stripes (moved here from an inline style, so a chosen back can replace
+   them; the border and the red come from FaceDownCard's own classes).
+
+   Every other back is 5:7 WebP art. It is only REFERENCED by the rule for
+   the chosen back, so the browser fetches that one file and no other; and
+   Classic fetches nothing.
+   =========================================================================== */
+.card-back {
+  background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.16) 0 4px, transparent 4px 8px);
+}
+
+[data-back="metallic-black"] {
+  --card-back-image: url("/cards/backs/metallic-black.webp");
+  --card-back-color: #2b2b2f;
+}
+[data-back="vintage"] {
+  --card-back-image: url("/cards/backs/vintage.webp");
+  --card-back-color: #ecdfbf;
+}
+[data-back="oktoberfish"] {
+  --card-back-image: url("/cards/backs/oktoberfish.webp");
+  --card-back-color: #3a2a1b;
+}
+[data-back="plain-black"] {
+  --card-back-image: url("/cards/backs/plain-black.webp");
+  --card-back-color: #141414;
+}
+[data-back="standard-red"] {
+  --card-back-image: url("/cards/backs/standard-red.webp");
+  --card-back-color: #c4232b;
+}
+[data-back="standard-blue"] {
+  --card-back-image: url("/cards/backs/standard-blue.webp");
+  --card-back-color: #1f3a78;
+}
+
+/* The art: cover the card, centred, clipped by its rounded corners (a
+   background follows border-radius). The solid colour, close to the art,
+   shows until the image arrives, so there's no blank flash.
+
+   A thin translucent outline on every non-Classic back, so a dark back stays
+   outlined on a dark surface even at 32px -- light on a dark table, and a
+   dark hairline on Classic's white page in light mode (where a light line
+   would vanish, and the cream Vintage back would blur into the page). */
+[data-back]:not([data-back="classic"]) .card-back {
+  background-color: var(--card-back-color);
+  background-image: var(--card-back-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-color: rgb(0 0 0 / 0.28);
+}
+@media (prefers-color-scheme: dark) {
+  [data-back]:not([data-back="classic"]) .card-back {
+    border-color: rgb(255 255 255 / 0.45);
+  }
+}
+[data-scheme="dark"][data-back]:not([data-back="classic"]) .card-back,
+[data-scheme="dark"] [data-back]:not([data-back="classic"]) .card-back {
+  border-color: rgb(255 255 255 / 0.45);
+}
+
+/* The cut-for-deal fan: each sliver is a button (with Classic's red and
+   border) holding a .card-back. With a chosen back, the button takes the
+   same outline as every other back instead of the red one. */
+[data-back]:not([data-back="classic"]) .cut-fan-card {
+  background-color: var(--card-back-color);
+  border-color: rgb(255 255 255 / 0.45);
+}
