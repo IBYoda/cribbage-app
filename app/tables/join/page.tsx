@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-
-const CODE_PATTERN = /^[0-9]{4}$/;
+import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { TABLE_CODE_LENGTH, cleanTableCodeInput, tableCodeError } from "@/lib/tableCode";
 
 export default function JoinTablePage() {
   const router = useRouter();
@@ -14,8 +13,9 @@ export default function JoinTablePage() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!CODE_PATTERN.test(code)) {
-      setError("Enter the 4-digit table code.");
+    const codeError = tableCodeError(code);
+    if (codeError) {
+      setError(codeError);
       return;
     }
 
@@ -26,10 +26,8 @@ export default function JoinTablePage() {
   }
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Join a Table</h1>
-
-      <form onSubmit={handleSubmit} className="flex w-full max-w-sm flex-col gap-4">
+    <CardRoomFrame title="Join a Table">
+      <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className="flex flex-col gap-1">
           <label htmlFor="code" className="text-sm font-medium">
             Table code
@@ -39,27 +37,26 @@ export default function JoinTablePage() {
             type="text"
             inputMode="numeric"
             pattern="[0-9]{4}"
-            maxLength={4}
+            maxLength={TABLE_CODE_LENGTH}
             required
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-            className="rounded border border-zinc-300 px-3 py-2 text-center text-2xl tracking-widest dark:border-zinc-700 dark:bg-zinc-900"
+            onChange={(e) => setCode(cleanTableCodeInput(e.target.value))}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "code-error" : undefined}
+            className="felt-input felt-input--code"
           />
         </div>
 
-        <button
-          type="submit"
-          className="rounded bg-foreground px-4 py-2 text-background"
-        >
+        <button type="submit" className="peg-btn peg-btn--brass">
           Join
         </button>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+          <p id="code-error" className="text-sm text-[var(--error-on-felt)]">
+            {error}
+          </p>
+        )}
       </form>
-
-      <Link href="/" className="text-sm underline">
-        Back home
-      </Link>
-    </main>
+    </CardRoomFrame>
   );
 }

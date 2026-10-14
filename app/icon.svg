@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Nobs! app icon: a jack-of-spades card on felt. Drawn for this app. -->
+  <rect width="64" height="64" rx="14" fill="#1b5232"/>
+  <rect x="14" y="6" width="36" height="52" rx="5" fill="#f3ead3" stroke="#e2c17d" stroke-width="2.5"/>
+  <path d="M25.5 12 v10.5 a4.25 4.25 0 0 1 -8.5 0" fill="none" stroke="#1f1608" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M32 26 C26 33 21 36 21 40.5 C21 44 24 46 27 46 C29 46 30.5 45 31 44 L29.5 50.5 L34.5 50.5 L33 44 C33.5 45 35 46 37 46 C40 46 43 44 43 40.5 C43 36 38 33 32 26 Z" fill="#1f1608"/>
+</svg>

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { AuthCard } from "@/components/brand/AuthCard";
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
@@ -30,10 +30,13 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Sign Up</h1>
-
-      <form onSubmit={handleSubmit} className="flex w-full max-w-sm flex-col gap-4">
+    <AuthCard
+      title="Sign Up"
+      switchPrompt="Already have an account?"
+      switchHref="/login"
+      switchLabel="Log in"
+    >
+      <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className="flex flex-col gap-1">
           <label htmlFor="email" className="text-sm font-medium">
             Email
@@ -44,7 +47,7 @@ export default function SignUpPage() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="felt-input"
           />
         </div>
 
@@ -59,14 +62,14 @@ export default function SignUpPage() {
             minLength={6}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="felt-input"
           />
         </div>
 
         <button
           type="submit"
           disabled={status === "loading"}
-          className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
+          className="peg-btn peg-btn--brass disabled:opacity-60"
         >
           {status === "loading" ? "Signing up..." : "Sign Up"}
         </button>
@@ -74,20 +77,15 @@ export default function SignUpPage() {
         {message && (
           <p
             className={
-              status === "error" ? "text-sm text-red-600" : "text-sm text-green-600"
+              status === "error"
+                ? "text-sm text-[var(--error-on-felt)]"
+                : "text-sm text-[var(--success-on-felt)]"
             }
           >
             {message}
           </p>
         )}
       </form>
-
-      <p className="text-sm">
-        Already have an account?{" "}
-        <Link href="/login" className="underline">
-          Log in
-        </Link>
-      </p>
-    </main>
+    </AuthCard>
   );
 }

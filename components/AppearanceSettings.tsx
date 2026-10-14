@@ -54,11 +54,11 @@ export function AppearanceSettings() {
   }
 
   return (
-    <section className="flex w-full max-w-sm flex-col gap-4" aria-labelledby="appearance-heading">
-      <h2 id="appearance-heading" className="text-lg font-semibold">
+    <section className="flex w-full flex-col gap-4" aria-labelledby="appearance-heading">
+      <h2 id="appearance-heading" className="font-display text-2xl font-bold italic">
         Appearance
       </h2>
-      <p className="-mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+      <p className="-mt-3 text-sm">
         Your table and card backs -- only you see them.
       </p>
 
@@ -96,7 +96,7 @@ export function AppearanceSettings() {
                 className="peer sr-only"
               />
               <span
-                className="surface-swatch block h-10 w-full rounded-md border-2 border-zinc-300 bg-background peer-checked:border-violet-600 peer-checked:ring-2 peer-checked:ring-violet-600/40 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-blue-500 dark:border-zinc-700 dark:peer-checked:border-violet-400"
+                className="surface-swatch block h-10 w-full rounded-md border-2 border-white/25 bg-background peer-checked:border-[var(--cream)] peer-checked:ring-2 peer-checked:ring-[var(--brass)] peer-checked:ring-offset-2 peer-checked:ring-offset-transparent peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
                 data-surface={surface.id}
                 aria-hidden="true"
               />
@@ -120,7 +120,7 @@ export function AppearanceSettings() {
                 className="peer sr-only"
               />
               <span
-                className="block w-12 rounded-lg p-0.5 ring-offset-2 peer-checked:ring-2 peer-checked:ring-violet-600 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-blue-500 dark:peer-checked:ring-violet-400"
+                className="block w-12 rounded-lg p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
                 data-back={back.id}
                 aria-hidden="true"
               >
@@ -136,14 +136,14 @@ export function AppearanceSettings() {
         type="button"
         onClick={handleSave}
         disabled={!changed || status === "saving" || !appearance.ready}
-        className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
+        className="peg-btn peg-btn--brass disabled:opacity-60"
       >
         {status === "saving" ? "Saving..." : "Save Appearance"}
       </button>
 
       <p role="status" className="min-h-5 text-sm">
-        {status === "saved" && <span className="text-green-600">Saved.</span>}
-        {status === "error" && message && <span className="text-red-600">{message}</span>}
+        {status === "saved" && <span className="text-[var(--success-on-felt)]">Saved.</span>}
+        {status === "error" && message && <span className="text-[var(--error-on-felt)]">{message}</span>}
       </p>
     </section>
   );
