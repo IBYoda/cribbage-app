@@ -598,19 +598,35 @@ body {
   --surface-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.28 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
 }
 
-body:has(.table-shell[data-surface="black"]) {
+/* Each surface is ONE rule that paints in three places, so they can never
+   drift apart:
+     - body:has(.table-shell[...])  the body behind the table;
+     - html[data-appearance-surface=...] body:has(.table-loading)
+                                    the table page's "Loading..." screen,
+                                    from this device's cached choice (set on
+                                    <html> by the inline script in
+                                    app/layout.tsx before first paint), so a
+                                    refresh never flashes Classic;
+     - .surface-swatch[...]         the Profile page's preview and swatches. */
+body:has(.table-shell[data-surface="black"]),
+html[data-appearance-surface="black"] body:has(.table-loading),
+.surface-swatch[data-surface="black"] {
   background:
     var(--surface-grain),
     radial-gradient(ellipse at 50% 40%, #1d1d21 0%, #0c0c0e 70%) fixed;
   background-color: #0c0c0e;
 }
-body:has(.table-shell[data-surface="green-felt"]) {
+body:has(.table-shell[data-surface="green-felt"]),
+html[data-appearance-surface="green-felt"] body:has(.table-loading),
+.surface-swatch[data-surface="green-felt"] {
   background:
     var(--surface-grain),
     radial-gradient(ellipse at 50% 40%, #276b43 0%, #1b5232 55%, #123a23 100%) fixed;
   background-color: #1b5232;
 }
-body:has(.table-shell[data-surface="blue-felt"]) {
+body:has(.table-shell[data-surface="blue-felt"]),
+html[data-appearance-surface="blue-felt"] body:has(.table-loading),
+.surface-swatch[data-surface="blue-felt"] {
   background:
     var(--surface-grain),
     radial-gradient(ellipse at 50% 40%, #275a8b 0%, #1b4469 55%, #112b47 100%) fixed;
@@ -619,7 +635,9 @@ body:has(.table-shell[data-surface="blue-felt"]) {
 /* Wood is a real photo (bright cedar, vertical grain) under a dark scrim --
    as light as it can be while every line of text on the table stays at
    4.5:1 or better against the LIGHTEST pixel behind it. */
-body:has(.table-shell[data-surface="wood"]) {
+body:has(.table-shell[data-surface="wood"]),
+html[data-appearance-surface="wood"] body:has(.table-loading),
+.surface-swatch[data-surface="wood"] {
   --wood-scrim: 0.6;
   background:
     var(--surface-grain),
@@ -628,10 +646,23 @@ body:has(.table-shell[data-surface="wood"]) {
   background-color: #3a2414;
 }
 
+/* A swatch is a small box, not the viewport: its gradients belong to it
+   rather than to the window (the table's are "fixed"). Same specificity as
+   the surface rules above and later in the file, so it wins. */
+.surface-swatch[data-surface] {
+  background-attachment: scroll;
+}
+
+/* The Loading screen on a cached dark surface: light text, like the table. */
+html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-loading {
+  color: #ededed;
+}
+
 /* The dark palette on a dark surface. --background/--foreground are what
    bg-background / text-foreground (buttons, overlays) and the page text use;
    the shell sets its own colour because body's was computed outside it. */
-.table-shell[data-scheme="dark"] {
+.table-shell[data-scheme="dark"],
+.surface-swatch[data-scheme="dark"] {
   --background: #0a0a0a;
   --foreground: #ededed;
   color: var(--foreground);

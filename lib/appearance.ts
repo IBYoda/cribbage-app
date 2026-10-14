@@ -55,3 +55,93 @@ export function isCardBack(value: unknown): value is CardBack {
 export function cardBackUrl(back: CardBack) {
   return back === "classic" ? null : `/cards/backs/${back}.webp`;
 }
+
+// ---------------------------------------------------------------------------
+// A player's whole appearance, as saved in public.user_appearance
+// (docs/sql/appearance-settings.sql). No row means Classic for both.
+// ---------------------------------------------------------------------------
+export type Appearance = { surface: TableSurface; back: CardBack };
+
+export const CLASSIC_APPEARANCE: Appearance = {
+  surface: DEFAULT_TABLE_SURFACE,
+  back: DEFAULT_CARD_BACK,
+};
+
+// Anything unknown -- an old value, a typo, a missing row -- is Classic.
+export function normalizeAppearance(value: unknown): Appearance {
+  const v = (value ?? {}) as { surface?: unknown; back?: unknown };
+  return {
+    surface: isTableSurface(v.surface) ? v.surface : DEFAULT_TABLE_SURFACE,
+    back: isCardBack(v.back) ? v.back : DEFAULT_CARD_BACK,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE PER-DEVICE COPY (localStorage), keyed by user id, so a refresh can show
+// the right look at once and one account's look never shows for another:
+//   LAST_USER_KEY        the user the cached copy belongs to;
+//   cacheKey(userId)     that user's { surface, back }.
+// Cleared on sign-out and when a different user signs in. Every access is in
+// try/catch: with storage blocked, the app simply has no cache.
+// The database is the source of truth; this is only a head start.
+// ---------------------------------------------------------------------------
+const CACHE_PREFIX = "cribbage.appearance.";
+const LAST_USER_KEY = `${CACHE_PREFIX}lastUser`;
+const cacheKey = (userId: string) => `${CACHE_PREFIX}user.${userId}`;
+
+// This user's cached copy -- only if it IS this user's (the last user on
+// this device). Otherwise null.
+export function readCachedAppearance(userId: string): Appearance | null {
+  try {
+    if (localStorage.getItem(LAST_USER_KEY) !== userId) return null;
+    const raw = localStorage.getItem(cacheKey(userId));
+    return raw ? normalizeAppearance(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Makes this user the device's last user (dropping anyone else's copy) and
+// stores their appearance.
+export function writeCachedAppearance(userId: string, appearance: Appearance) {
+  try {
+    const previous = localStorage.getItem(LAST_USER_KEY);
+    if (previous && previous !== userId) localStorage.removeItem(cacheKey(previous));
+    localStorage.setItem(LAST_USER_KEY, userId);
+    localStorage.setItem(cacheKey(userId), JSON.stringify(appearance));
+  } catch {
+    // Storage blocked or full: no cache, nothing else changes.
+  }
+}
+
+// Sign-out: forget the device's last user and their copy.
+export function clearCachedAppearance() {
+  try {
+    const previous = localStorage.getItem(LAST_USER_KEY);
+    if (previous) localStorage.removeItem(cacheKey(previous));
+    localStorage.removeItem(LAST_USER_KEY);
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+// The attribute on <html> that carries this device's cached surface before
+// the first paint (set by the inline script below, then kept in step by
+// AppearanceProvider). Read ONLY by the table page's Loading screen
+// (app/globals.css) -- the table itself takes its look from the provider.
+export const HTML_SURFACE_ATTRIBUTE = "data-appearance-surface";
+
+// THE INLINE SCRIPT for app/layout.tsx's <head>. Runs synchronously while the
+// HTML is parsed, before the first paint: reads the cached copy for the
+// device's last user and, if it holds a known non-Classic surface, sets the
+// attribute above. It can't throw (everything is in try/catch) and it only
+// reads storage and sets one attribute, so it never blocks the page.
+export const APPEARANCE_INLINE_SCRIPT = `(function(){try{var u=localStorage.getItem(${JSON.stringify(
+  LAST_USER_KEY
+)});if(!u)return;var v=JSON.parse(localStorage.getItem(${JSON.stringify(
+  `${CACHE_PREFIX}user.`
+)}+u)||"null");if(v&&v.surface!=="classic"&&${JSON.stringify(
+  TABLE_SURFACES.map((s) => s.id)
+)}.indexOf(v.surface)>=0)document.documentElement.setAttribute(${JSON.stringify(
+  HTML_SURFACE_ATTRIBUTE
+)},v.surface)}catch(e){}})()`;

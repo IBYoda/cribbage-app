@@ -1,0 +1,426 @@
+-- Appearance settings: VERIFICATION QUERIES.
+--
+-- Run in the Supabase Dashboard -> SQL Editor AFTER
+-- docs/sql/appearance-settings.sql. The SQL Editor shows the result of the
+-- LAST statement only, so run each numbered query on its own.
+--
+-- Query 1 is read-only. Query 2 is a DO block that WRITES -- it inserts,
+-- updates and tries to break into user_appearance rows as real players --
+-- and then deliberately raises an exception at the very end, which rolls
+-- every write back. It always "fails": the message is the verdict.
+-- "ALL n CHECKS PASSED (rolled back)" is a pass; anything starting "FAIL" or
+-- "SETUP" is not. Re-runnable, because nothing it does survives.
+--
+-- Same impersonation as the earlier verification scripts:
+-- request.jwt.claims plus "set local role authenticated" (or anon) to act as
+-- a client, and "reset role" to act as the owner between steps.
+--
+-- THE FROZEN now() LESSON (see the handoff): now() is the TRANSACTION's start
+-- time, and a DO block is one transaction, so every updated_at written here
+-- would be the same instant. updated_at has no trigger and nothing reads it,
+-- so this script deliberately does NOT test it -- a "did updated_at move?"
+-- check would be meaningless inside one transaction.
+
+
+-- ---------------------------------------------------------------------------
+-- 1. READ-ONLY. The table as the catalog has it.
+--
+-- EXPECT these rows (verdict = 'ok' on every one):
+--   rls_enabled          true
+--   authenticated_privs  {INSERT,SELECT,UPDATE}
+--   anon_privs           (null -- nothing)
+--   public_privs         (null -- nothing)
+--   policies             {INSERT,SELECT,UPDATE}, every one TO authenticated
+--   in_realtime          false
+-- ---------------------------------------------------------------------------
+
+-- with t as (select 'public.user_appearance'::regclass as oid),
+-- privs as (
+--   select coalesce(r.rolname, 'PUBLIC') as grantee, a.privilege_type
+--   from pg_class c
+--   join t on t.oid = c.oid
+--   cross join lateral aclexplode(c.relacl) a
+--   left join pg_roles r on r.oid = a.grantee
+-- )
+-- select 'rls_enabled' as item,
+--        (select relrowsecurity::text from pg_class where oid = (select oid from t)) as value,
+--        case when (select relrowsecurity from pg_class where oid = (select oid from t)) then 'ok' else 'FAIL' end as verdict
+-- union all
+-- select 'authenticated_privs',
+--        (select array_agg(privilege_type order by privilege_type)::text from privs where grantee = 'authenticated'),
+--        case when (select array_agg(privilege_type order by privilege_type) from privs where grantee = 'authenticated')
+--                  = array['INSERT', 'SELECT', 'UPDATE'] then 'ok' else 'FAIL' end
+-- union all
+-- select 'anon_privs',
+--        (select array_agg(privilege_type order by privilege_type)::text from privs where grantee = 'anon'),
+--        case when not exists (select 1 from privs where grantee = 'anon') then 'ok' else 'FAIL' end
+-- union all
+-- select 'public_privs',
+--        (select array_agg(privilege_type order by privilege_type)::text from privs where grantee = 'PUBLIC'),
+--        case when not exists (select 1 from privs where grantee = 'PUBLIC') then 'ok' else 'FAIL' end
+-- union all
+-- select 'policies',
+--        (select string_agg(cmd || ' to ' || array_to_string(roles, ','), '; ' order by cmd)
+--         from pg_policies where schemaname = 'public' and tablename = 'user_appearance'),
+--        case when (select array_agg(cmd order by cmd) from pg_policies
+--                   where schemaname = 'public' and tablename = 'user_appearance') = array['INSERT', 'SELECT', 'UPDATE']
+--              and not exists (select 1 from pg_policies
+--                              where schemaname = 'public' and tablename = 'user_appearance'
+--                                and roles <> array['authenticated']::name[])
+--             then 'ok' else 'FAIL' end
+-- union all
+-- select 'in_realtime',
+--        (exists (select 1 from pg_publication_tables
+--                 where pubname = 'supabase_realtime' and schemaname = 'public'
+--                   and tablename = 'user_appearance'))::text,
+--        case when not exists (select 1 from pg_publication_tables
+--                              where pubname = 'supabase_realtime' and schemaname = 'public'
+--                                and tablename = 'user_appearance')
+--             then 'ok' else 'FAIL' end;
+
+
+-- ---------------------------------------------------------------------------
+-- 2. THE WALK-THROUGH (rolled back).
+--
+-- SETUP: any TWO accounts in the project (the two oldest in auth.users --
+-- user_appearance.user_id references auth.users, so they must be real). Any
+-- rows they already have in user_appearance are removed first (rolled back
+-- with everything else). Then:
+--
+--   I  p2 cannot INSERT a row keyed to p1.
+--   O  p1 inserts, reads (defaults: classic / classic) and updates their own
+--      row; p2 inserts their own.
+--   X  p2 cannot READ p1's row (0 rows), sees only their own, and cannot
+--      UPDATE it (0 rows; p1's row unchanged).
+--   K  p1 cannot re-key their row to p2 (refused; still keyed to p1).
+--   V  both CHECKs refuse a bad value (on update and on insert), and accept
+--      every allowed value (7 backs, 5 surfaces).
+--   N  anon can neither read nor write.
+--   D  no delete path: p1's delete of their own row affects nothing.
+--   C  the catalog: RLS on, exactly SELECT/INSERT/UPDATE for authenticated,
+--      nothing for anon or PUBLIC, policies SELECT/INSERT/UPDATE only, not in
+--      the supabase_realtime publication.
+--
+-- Expected message:
+--   ALL 28 CHECKS PASSED (rolled back) ...
+-- ---------------------------------------------------------------------------
+
+-- do $$
+-- declare
+--   v_p1 uuid;
+--   v_p2 uuid;
+--   v_n int;
+--   v_back text;
+--   v_surface text;
+--   v_owner uuid;
+--   v_msg text;
+--   v_state text;
+--   v_privs text[];
+--   v_checks int := 0;
+-- begin
+--   -- ---- Setup, as the owner ------------------------------------------------
+--   select u.id into v_p1 from auth.users u order by u.created_at limit 1;
+--   select u.id into v_p2 from auth.users u order by u.created_at offset 1 limit 1;
+--   if v_p1 is null or v_p2 is null then
+--     raise exception 'SETUP: the project needs at least two accounts.';
+--   end if;
+--
+--   delete from public.user_appearance where user_id in (v_p1, v_p2);
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--
+--   -- ==== I: p2 cannot insert a row keyed to p1 ==============================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--
+--   -- [I1] Refused by the insert policy's WITH CHECK.
+--   v_state := null;
+--   begin
+--     insert into public.user_appearance (user_id) values (v_p1);
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '42501' then
+--     raise exception 'FAIL [I1] p2 inserting a row for p1: expected 42501 (RLS), got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== O: p1 owns their row ================================================
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [O1] p1 inserts their own row (defaults only).
+--   v_state := null;
+--   begin
+--     insert into public.user_appearance (user_id) values (v_p1);
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is not null then
+--     raise exception 'FAIL [O1] p1 could not insert their own row: %.', v_state;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [O2] p1 reads it: one row, the Classic defaults.
+--   select count(*), max(card_back), max(table_surface) into v_n, v_back, v_surface
+--   from public.user_appearance where user_id = v_p1;
+--   if v_n <> 1 or v_back <> 'classic' or v_surface <> 'classic' then
+--     raise exception 'FAIL [O2] p1 read % row(s): % / %, expected 1 classic / classic.', v_n, v_back, v_surface;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [O3] p1 updates it: exactly one row.
+--   update public.user_appearance set card_back = 'vintage', table_surface = 'wood' where user_id = v_p1;
+--   get diagnostics v_n = row_count;
+--   if v_n <> 1 then raise exception 'FAIL [O3] p1''s update of their own row touched % rows.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [O4] ...and reads the new values back.
+--   select card_back, table_surface into v_back, v_surface from public.user_appearance where user_id = v_p1;
+--   if v_back <> 'vintage' or v_surface <> 'wood' then
+--     raise exception 'FAIL [O4] after the update p1 reads % / %, expected vintage / wood.', v_back, v_surface;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [O5] p2 inserts their own row.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_state := null;
+--   begin
+--     insert into public.user_appearance (user_id, card_back, table_surface)
+--     values (v_p2, 'standard-blue', 'green-felt');
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is not null then
+--     raise exception 'FAIL [O5] p2 could not insert their own row: %.', v_state;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== X: p2 cannot see or change p1's row =================================
+--   -- [X1] p2 reads p1's row: nothing.
+--   select count(*) into v_n from public.user_appearance where user_id = v_p1;
+--   if v_n <> 0 then raise exception 'FAIL [X1] p2 read % row(s) of p1''s appearance.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [X2] p2 reads the whole table: only their own row.
+--   select count(*), max(user_id::text)::uuid into v_n, v_owner from public.user_appearance;
+--   if v_n <> 1 or v_owner is distinct from v_p2 then
+--     raise exception 'FAIL [X2] p2 sees % row(s) in the table, expected only their own.', v_n;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [X3] p2 updates p1's row: 0 rows (the row isn't visible to them).
+--   update public.user_appearance set card_back = 'plain-black' where user_id = v_p1;
+--   get diagnostics v_n = row_count;
+--   if v_n <> 0 then raise exception 'FAIL [X3] p2''s update of p1''s row touched % row(s).', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [X4] p1's row is untouched (checked as the owner).
+--   execute 'reset role';
+--   select card_back into v_back from public.user_appearance where user_id = v_p1;
+--   if v_back <> 'vintage' then raise exception 'FAIL [X4] p1''s card_back became % after p2''s update.', v_back; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== K: no re-keying ====================================================
+--   -- Clear p2's row first, so a re-key could only fail on the policy, not on
+--   -- the primary key.
+--   delete from public.user_appearance where user_id = v_p2;
+--
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [K1] p1 moves their row to p2: refused by the update policy's WITH CHECK.
+--   v_state := null;
+--   begin
+--     update public.user_appearance set user_id = v_p2 where user_id = v_p1;
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '42501' then
+--     raise exception 'FAIL [K1] re-keying p1''s row to p2: expected 42501 (RLS), got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [K2] ...and the row is still p1's (as the owner).
+--   execute 'reset role';
+--   select count(*) into v_n from public.user_appearance where user_id = v_p1;
+--   if v_n <> 1 then raise exception 'FAIL [K2] after the re-key attempt p1 has % row(s).', v_n; end if;
+--   v_checks := v_checks + 1;
+--   select count(*) into v_n from public.user_appearance where user_id = v_p2;
+--   if v_n <> 0 then raise exception 'FAIL [K3] after the re-key attempt p2 has % row(s).', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== V: the CHECKs =======================================================
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [V1] A bad card_back on update: 23514.
+--   v_state := null;
+--   begin
+--     update public.user_appearance set card_back = 'tie-dye' where user_id = v_p1;
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '23514' then
+--     raise exception 'FAIL [V1] card_back ''tie-dye'': expected 23514 (check), got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [V2] A bad table_surface on update: 23514.
+--   v_state := null;
+--   begin
+--     update public.user_appearance set table_surface = 'marble' where user_id = v_p1;
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '23514' then
+--     raise exception 'FAIL [V2] table_surface ''marble'': expected 23514 (check), got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [V3] Case matters: 'Classic' is not 'classic'.
+--   v_state := null;
+--   begin
+--     update public.user_appearance set card_back = 'Classic' where user_id = v_p1;
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '23514' then
+--     raise exception 'FAIL [V3] card_back ''Classic'': expected 23514 (check), got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [V4] A bad value on INSERT is refused too (p2, for their own row).
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p2, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p2::text, true);
+--   v_state := null;
+--   begin
+--     insert into public.user_appearance (user_id, table_surface) values (v_p2, 'lava');
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '23514' then
+--     raise exception 'FAIL [V4] inserting table_surface ''lava'': expected 23514 (check), got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [V5] Every allowed card_back is accepted.
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--   foreach v_back in array array['classic', 'metallic-black', 'vintage', 'oktoberfish',
+--                                 'plain-black', 'standard-red', 'standard-blue'] loop
+--     update public.user_appearance set card_back = v_back where user_id = v_p1;
+--     get diagnostics v_n = row_count;
+--     if v_n <> 1 then raise exception 'FAIL [V5] card_back % was not saved (% rows).', v_back, v_n; end if;
+--   end loop;
+--   v_checks := v_checks + 1;
+--
+--   -- [V6] Every allowed table_surface is accepted.
+--   foreach v_surface in array array['classic', 'black', 'green-felt', 'blue-felt', 'wood'] loop
+--     update public.user_appearance set table_surface = v_surface where user_id = v_p1;
+--     get diagnostics v_n = row_count;
+--     if v_n <> 1 then raise exception 'FAIL [V6] table_surface % was not saved (% rows).', v_surface, v_n; end if;
+--   end loop;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== N: anon gets nothing ================================================
+--   execute 'reset role';
+--   execute 'set local role anon';
+--   perform set_config('request.jwt.claim.role', 'anon', true);
+--   perform set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+--   perform set_config('request.jwt.claim.sub', '', true);
+--
+--   -- [N1] anon cannot read: no privilege (42501) -- or, at the very least,
+--   -- no rows.
+--   v_state := null; v_n := 0;
+--   begin
+--     select count(*) into v_n from public.user_appearance;
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if not (v_state = '42501' or (v_state is null and v_n = 0)) then
+--     raise exception 'FAIL [N1] anon read: % row(s), error %.', v_n, coalesce(v_state, 'none');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [N2] anon cannot write.
+--   v_state := null;
+--   begin
+--     insert into public.user_appearance (user_id) values (v_p2);
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if v_state is distinct from '42501' then
+--     raise exception 'FAIL [N2] anon insert: expected 42501, got %.', coalesce(v_state, 'no error');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== D: no delete path ===================================================
+--   execute 'reset role';
+--   execute 'set local role authenticated';
+--   perform set_config('request.jwt.claim.role', 'authenticated', true);
+--   perform set_config('request.jwt.claims', json_build_object('sub', v_p1, 'role', 'authenticated')::text, true);
+--   perform set_config('request.jwt.claim.sub', v_p1::text, true);
+--
+--   -- [D1] p1 deletes their own row: refused (no DELETE privilege, 42501) or
+--   -- affects 0 rows (no DELETE policy) -- either way, nothing goes.
+--   v_state := null; v_n := 0;
+--   begin
+--     delete from public.user_appearance where user_id = v_p1;
+--     get diagnostics v_n = row_count;
+--   exception when others then v_state := sqlstate;
+--   end;
+--   if not (v_state = '42501' or (v_state is null and v_n = 0)) then
+--     raise exception 'FAIL [D1] p1''s delete: % row(s), error %.', v_n, coalesce(v_state, 'none');
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [D2] The row is still there (as the owner).
+--   execute 'reset role';
+--   select count(*) into v_n from public.user_appearance where user_id = v_p1;
+--   if v_n <> 1 then raise exception 'FAIL [D2] after the delete attempt p1 has % row(s).', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- ==== C: the catalog, as the owner =========================================
+--   -- [C1] RLS is on.
+--   if not (select relrowsecurity from pg_class where oid = 'public.user_appearance'::regclass) then
+--     raise exception 'FAIL [C1] row-level security is OFF on user_appearance.';
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C2] authenticated holds exactly SELECT, INSERT, UPDATE.
+--   select array_agg(a.privilege_type::text order by a.privilege_type) into v_privs
+--   from pg_class c
+--   cross join lateral aclexplode(c.relacl) a
+--   join pg_roles r on r.oid = a.grantee
+--   where c.oid = 'public.user_appearance'::regclass and r.rolname = 'authenticated';
+--   if v_privs is distinct from array['INSERT', 'SELECT', 'UPDATE'] then
+--     raise exception 'FAIL [C2] authenticated holds %, expected {INSERT,SELECT,UPDATE}.', v_privs;
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C3] anon and PUBLIC hold nothing.
+--   select count(*) into v_n
+--   from pg_class c
+--   cross join lateral aclexplode(c.relacl) a
+--   left join pg_roles r on r.oid = a.grantee
+--   where c.oid = 'public.user_appearance'::regclass
+--     and (r.rolname = 'anon' or a.grantee = 0);
+--   if v_n <> 0 then raise exception 'FAIL [C3] anon/PUBLIC hold % privilege(s) on user_appearance.', v_n; end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C4] Exactly three policies -- SELECT, INSERT, UPDATE, no DELETE -- each
+--   -- for authenticated only.
+--   select count(*) into v_n from pg_policies
+--   where schemaname = 'public' and tablename = 'user_appearance'
+--     and cmd in ('SELECT', 'INSERT', 'UPDATE') and roles = array['authenticated']::name[];
+--   if v_n <> 3 or exists (select 1 from pg_policies
+--                         where schemaname = 'public' and tablename = 'user_appearance'
+--                           and (cmd not in ('SELECT', 'INSERT', 'UPDATE') or roles <> array['authenticated']::name[])) then
+--     raise exception 'FAIL [C4] user_appearance policies are not exactly SELECT/INSERT/UPDATE for authenticated.';
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   -- [C5] Not in the supabase_realtime publication.
+--   if exists (select 1 from pg_publication_tables
+--              where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'user_appearance') then
+--     raise exception 'FAIL [C5] user_appearance IS in the supabase_realtime publication.';
+--   end if;
+--   v_checks := v_checks + 1;
+--
+--   raise exception 'ALL % CHECKS PASSED (rolled back). Players % and %.', v_checks, v_p1, v_p2;
+-- end $$;

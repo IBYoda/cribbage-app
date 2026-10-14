@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { AppearanceProvider } from "@/components/AppearanceProvider";
+import { APPEARANCE_INLINE_SCRIPT } from "@/lib/appearance";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,11 +34,24 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
+    // suppressHydrationWarning: the inline script below may add an attribute
+    // to <html> before React hydrates (see the Next guide "Preventing flash
+    // before hydration"); the DOM wins.
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        {/* This device's cached table surface, on <html> before the first
+            paint, so the table page's Loading screen is already the right
+            colour on a refresh (lib/appearance.ts). Can't throw. */}
+        <script dangerouslySetInnerHTML={{ __html: APPEARANCE_INLINE_SCRIPT }} />
+      </head>
+      <body className="min-h-full flex flex-col">
+        {/* The signed-in player's own card back and table surface. */}
+        <AppearanceProvider>{children}</AppearanceProvider>
+      </body>
     </html>
   );
 }

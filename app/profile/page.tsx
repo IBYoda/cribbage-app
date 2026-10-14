@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { AppearanceSettings } from "@/components/AppearanceSettings";
 
 const NICKNAME_MAX_LENGTH = 30;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
@@ -184,6 +185,10 @@ export default function ProfilePage() {
           </p>
         )}
       </form>
+
+      {/* Card back and table surface: a section of its own, with its own
+          Save (components/AppearanceSettings.tsx). */}
+      <AppearanceSettings />
 
       <Link href="/" className="text-sm underline">
         Back home
