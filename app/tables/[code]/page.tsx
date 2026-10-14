@@ -12,6 +12,7 @@ import { TableHeader, TableShell } from "@/components/table/TableShell";
 import { OpponentBand, type OpponentSeat } from "@/components/table/OpponentBand";
 import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
+import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
 import { countingView } from "@/components/table/countingView";
@@ -1439,6 +1440,10 @@ export default function TablePage() {
   // (Phase 3) slot in without restructuring the layout.
   const opponents = members.filter((m) => m.user_id !== session.user.id);
   const canStartGame = members.length === REQUIRED_PLAYERS;
+  // Alone at the table with no game and no result on screen. Only once the
+  // roster has loaded -- an empty roster before then isn't "alone".
+  const waitingAlone =
+    membersLoaded && !activeGame && !finishedGame && members.length < REQUIRED_PLAYERS;
 
   const phase = activeGame?.phase ?? "discard";
   // STATUS BEFORE PHASE: every phase flag requires a live, dealt game first.
@@ -1855,6 +1860,11 @@ export default function TablePage() {
             )}
           </>
         )
+      ) : waitingAlone ? (
+        // A host alone at the table, with no result to show: what they are
+        // waiting for, and the code to send. New Game needs two players, so
+        // its disabled button is left out here.
+        <WaitingForPlayer code={code} />
       ) : (
         <div className="final-board">
           {/* THE FINAL BOARD: the hand's last run as it stood, with its
