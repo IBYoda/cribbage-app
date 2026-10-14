@@ -1,10 +1,11 @@
 # Product Requirements Document (PRD)
-## Cribbage App — "Shared Deck" Companion App
+## Nobs! — "Shared Deck" Cribbage Companion App
 
 **Owner:** Yoda
+**Name:** the app is called **Nobs!** (shipped in PR #25). The repo, the URL and internal names stay `cribbage-app`.
 **Status:** Phase 2 complete and live. Two people can play whole 2-player matches at https://cribbage-app.vercel.app. Phase 3 (3 and 4 players) has not started.
 **Last updated:** October 14, 2026
-**Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8. **October 2026:** Phase 2 finished and deployed (Section 5, Deployment). After live testing, the counting flow changed: every hand is face-up for everyone once pegging is over, and Show Hand / Show Crib left the screen (Section 6, item 8). New Game became a two-player ready gate and a win now leaves the final board on screen (Section 7).
+**Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8. **October 2026:** Phase 2 finished and deployed (Section 5, Deployment). After live testing, the counting flow changed: every hand is face-up for everyone once pegging is over, and Show Hand / Show Crib left the screen (Section 6, item 8). New Game became a two-player ready gate and a win now leaves the final board on screen (Section 7). The app was renamed **Nobs!** and got a landing page, a signed-in main menu and a matching "card room" look on its simple pages (Section 6, item 14; PR #25).
 
 ---
 
@@ -114,6 +115,11 @@ The original plan (see revision history) included a fully virtual board with ani
 11. **Live score tracker (numbers only, not a visual board)** — a simple, real-time number for each player's current score (e.g., "Yoda: 42 — Sam: 37"), synced across everyone's screens as points are logged. This is not an animated board with pegs — just a running number — but it means everyone can glance at their phone and confirm their physical peg is in the right spot, so there's no confusion or arguing about the score, especially a few drinks in. No visual board rendering or theming beyond this (see 2.5).
 12. **Admin & table management (for you)** — your account gets an admin role that lets you see all active tables/games and force-end ("kill") any that have been abandoned, without needing to be a player in them. Every game also has a **hard 5-hour timeout** — after 5 hours, it auto-ends on its own, so a forgotten or abandoned session doesn't sit open forever even if no one manually cleans it up. Tables have their own outer limit too: a **hard 12-hour table timeout**, so a table nobody remembered to end (e.g., everyone logged off after a session) doesn't just sit open indefinitely, even across multiple back-to-back games.
 13. **Personal appearance (table surface and card back)** — on the Profile page, each player picks their own **table surface** (Classic, Black, Green Felt, Blue Felt, Wood) and **card back** (Classic, Modern Metallic Black, Vintage, Oktoberfish, Plain Black, Standard Red, Standard Blue), with a live preview and its own Save button. The choice is **seen only on that player's own screen** (your cards and the whole table, in your look), is saved to the account so it follows you across devices, and never reaches the other players: it lives in its own owner-only table, `user_appearance`, which is not in Realtime. **Classic is the default** and is exactly the look the app had before this feature (the page's light or dark background, red striped backs); a missing row means Classic. Every non-Classic surface is dark (white text), swaps the green accents for violet, and keeps text contrast at 4.5:1 or better. Face-up card designs, custom uploads and per-table themes are out of scope for now (Section 12).
+14. **Landing page and main menu (PR #25)** — the front door of the app, in a fixed "card room" look (green felt, brass and cream).
+   - **Signed-out landing:** the Nobs! wordmark, a hero hand (a 29, with the 5 of spades as the starter, no label), rotating taglines, and **Log In** / **Sign Up** buttons in the lower third of a phone screen with a peg-style press effect. A footer with **About** (a native dialog), **Rules** (an external link to Bicycle Cards' cribbage rules) and **Contact** (plain text). A jack-of-spades icon. The site is marked noindex/nofollow, because the taglines are deliberately rude and the app is for friends only.
+   - **Signed-in home (main menu):** a greeting (the time-of-day text is worked out on the player's device after the page loads; the server render says "Welcome back"), the player's avatar and nickname, **Start a Table**, an inline 4-digit **Join** field, and a **"Your tables"** list with a Rejoin button for every open table the player is seated at, showing the other players' nicknames and whether a game is live. Small **Profile** and **Log out** links, and an **Admin** link only for admins (read from the player's own `admin_users` row).
+   - **Restyled in the same card-room look:** Log In, Sign Up, Start a Table, Join a Table and Profile, all through one shared `CardRoomFrame` component. Styling only: auth and game logic are unchanged.
+   - **Decided:** the card-room look is fixed and is **not** tied to the per-player Appearance setting (item 13). One shared table-code validator (`lib/tableCode.ts`) is used everywhere a code is typed. No database changes were made: the home page reads existing tables through the existing RLS.
 
 ---
 
@@ -217,6 +223,7 @@ Actual Phase 2 slice order, since it's drifted from the original plan once alrea
 15. **Create-table redirect and waiting block (merged, PR #22):** creating a table drops you straight into it with a "Waiting for a second player" block showing the table code and a Copy button.
 16. **Open hands in the count (merged, PR #23):** the redesigned counting flow in Section 6, item 8, with two new read policies and a rewritten counting view.
 17. **Personal appearance (merged with this update):** table surfaces and card backs, picked on the Profile page and saved per account (Section 6, item 13). Built in three stages: the CSS surfaces (Wood is a cedar photo under a dark scrim), the six card backs (5:7 WebP in `public/cards/backs/`), then saving (`user_appearance` table, `AppearanceProvider` with a per-device cache keyed by user id, a head script so a refresh never flashes Classic, and the Appearance section with its own Save). Verified with two accounts: each sees only their own look at the same table.
+18. **Landing page and main menu — DONE (PR #25, merged to main as 86f9ff4):** the Nobs! name, the signed-out landing page, the signed-in main menu with "Your tables", and the card-room restyle of Log In, Sign Up, Start a Table, Join a Table and Profile (Section 6, item 14). No database changes.
 
 **Next up:** a stress test with real friends on the live site (portrait phones), then the queue in Section 11.5, then Phase 3 (3 and 4 players).
 
@@ -282,16 +289,20 @@ Small UI/UX adjustments observed while actually playing, logged here so they are
 **Queue (from live testing and review, October 2026):**
 
 - **Manual, server-validated Go button:** its own batch. Includes cleaning up duplicate go rows.
+- **Plain pages still in the old look:** `/admin`, the 404 page (there is no `app/not-found.tsx`), and the table page's "table not found / load failed" and "not logged in" screens. The last two matter for friends who mistype a code. Plan: one small follow-up branch. The table's waiting view and Loading screen intentionally follow the player's Appearance surface, so leave them.
+- **Broad read access (existing):** any signed-in user can read `tables`, `table_members` and `games`. Tighten to members only. This needs a design first, because joining by code means looking a table up by its code before you are a member. Do it as its own reviewed SQL change.
+- **Login and Sign Up have no autocomplete attributes** (`email`, `current-password`, `new-password`). A small password-manager win.
+- **`/tables/join` is now redundant** with the Join field on the home page. Decide whether to keep it as a fallback or remove it.
 - **Landscape layout (polish stage 4)** and **3 and 4 seat layout (stage 5, teams or individual, score plates per team or player).**
 - **Duplicate waiting text:** the top band still says "Waiting for another player to join..." above the new WaitingForPlayer block. Remove the band text.
 - **Opponent band shows only the top half of the cards:** accepted for now.
 - **Count hands is per screen:** one player's screen can flip before the other's. Decided to keep, since each player controls when they look.
 - **Optional idea:** tap-to-flip reveal of the opponent's hand.
 - **Housekeeping:** delete the unused PlayerScore file; check the login page against `viewport-fit=cover`; update the handoff doc's function table (`start_game_with_deal` now lives in its own SQL file, the revoke is done, ten grants plus the Supabase `rls_auto_enable` trigger).
-- **Contrast, existing and out of scope of the appearance work:** the white "D" on the amber dealer chip (about 2.1:1) and the "Your turn" pill (about 3.2:1 on Classic's green) are below 4.5:1. The pill passes in violet on the non-Classic surfaces. Fix both in one small pass.
+- **Contrast, existing and out of scope of the appearance work:** the white "D" on the amber dealer chip (about 2.1:1) and the "Your turn" pill (about 3.2:1 on Classic's green) are below 4.5:1. The pill passes in violet on the non-Classic surfaces. Fix both in one small pass. Also noted: the border of an unselected swatch in the Profile page's Appearance section is only 2.01:1. That is acceptable, since the selection is shown by the ring and the bold label.
 - **Appearance ideas, later:** face-up card designs, more surfaces, custom uploads, a "Preview on a real table" button on the Profile page. Adding a back or a surface means changing `lib/appearance.ts`, its CSS, AND the CHECK on `user_appearance` (drop and re-add the named constraint).
 - **Test live:** a win on the dealer's hand and a win on the crib (the pone's count win and the pegging wins have been tested).
-- **Friend-testing risks:** Supabase free-plan pause after about a week of inactivity, and the sign-up email rate limit.
+- **Friend-testing risks (friends stress test):** the Supabase free-plan project pauses after about a week of inactivity, and the sign-up email rate limit can block several friends signing up in a short window. Check both before inviting people.
 
 ---
 
