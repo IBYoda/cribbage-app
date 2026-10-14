@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
+import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 
 const NICKNAME_MAX_LENGTH = 30;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
@@ -112,40 +113,50 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <main className="flex flex-1 items-center justify-center">
-        <p>Loading...</p>
-      </main>
+      <CardRoomFrame backHome={false} followDeviceScheme>
+        <p className="text-center">Loading...</p>
+      </CardRoomFrame>
     );
   }
 
   if (!session) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <CardRoomFrame backHome={false} followDeviceScheme>
         <p>You need to be logged in to edit your profile.</p>
-        <Link href="/login" className="underline">
+        <Link href="/login" className="peg-btn peg-btn--brass">
           Log in
         </Link>
-      </main>
+      </CardRoomFrame>
     );
   }
 
   const displayedAvatar = avatarPreview ?? avatarUrl;
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Your Profile</h1>
-
-      <form onSubmit={handleSubmit} className="flex w-full max-w-sm flex-col gap-4">
+    // followDeviceScheme: the Appearance preview and swatches below must look
+    // exactly as on a plain page (see CardRoomFrame).
+    <CardRoomFrame
+      title="Your Profile"
+      followDeviceScheme
+      after={
+        // Card back and table surface: a section of its own, with its own
+        // Save (components/AppearanceSettings.tsx).
+        <section className="felt-panel w-full">
+          <AppearanceSettings />
+        </section>
+      }
+    >
+      <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className="flex flex-col items-center gap-3">
           {displayedAvatar ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={displayedAvatar}
               alt="Profile picture"
-              className="h-24 w-24 rounded-full object-cover"
+              className="h-24 w-24 rounded-full border-2 border-[var(--brass)] object-cover"
             />
           ) : (
-            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-zinc-200 text-center text-xs text-zinc-500 dark:bg-zinc-800">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full border-2 border-[var(--brass)] bg-[#2a6a44] text-center text-xs">
               No photo
             </div>
           )}
@@ -153,6 +164,7 @@ export default function ProfilePage() {
             type="file"
             accept="image/png,image/jpeg,image/webp"
             onChange={handleFileChange}
+            className="felt-file"
           />
         </div>
 
@@ -167,32 +179,30 @@ export default function ProfilePage() {
             maxLength={NICKNAME_MAX_LENGTH}
             value={nickname}
             onChange={(e) => setNickname(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="felt-input"
           />
         </div>
 
         <button
           type="submit"
           disabled={status === "saving"}
-          className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
+          className="peg-btn peg-btn--brass disabled:opacity-60"
         >
           {status === "saving" ? "Saving..." : "Save Profile"}
         </button>
 
         {message && (
-          <p className={status === "error" ? "text-sm text-red-600" : "text-sm text-green-600"}>
+          <p
+            className={
+              status === "error"
+                ? "text-sm text-[var(--error-on-felt)]"
+                : "text-sm text-[var(--success-on-felt)]"
+            }
+          >
             {message}
           </p>
         )}
       </form>
-
-      {/* Card back and table surface: a section of its own, with its own
-          Save (components/AppearanceSettings.tsx). */}
-      <AppearanceSettings />
-
-      <Link href="/" className="text-sm underline">
-        Back home
-      </Link>
-    </main>
+    </CardRoomFrame>
   );
 }

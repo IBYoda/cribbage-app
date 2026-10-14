@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { AuthCard } from "@/components/brand/AuthCard";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,10 +29,13 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Log In</h1>
-
-      <form onSubmit={handleSubmit} className="flex w-full max-w-sm flex-col gap-4">
+    <AuthCard
+      title="Log In"
+      switchPrompt={<>Don&apos;t have an account?</>}
+      switchHref="/signup"
+      switchLabel="Sign up"
+    >
+      <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className="flex flex-col gap-1">
           <label htmlFor="email" className="text-sm font-medium">
             Email
@@ -43,7 +46,7 @@ export default function LoginPage() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="felt-input"
           />
         </div>
 
@@ -57,27 +60,20 @@ export default function LoginPage() {
             required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="felt-input"
           />
         </div>
 
         <button
           type="submit"
           disabled={status === "loading"}
-          className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
+          className="peg-btn peg-btn--brass disabled:opacity-60"
         >
           {status === "loading" ? "Logging in..." : "Log In"}
         </button>
 
-        {message && <p className="text-sm text-red-600">{message}</p>}
+        {message && <p className="text-sm text-[var(--error-on-felt)]">{message}</p>}
       </form>
-
-      <p className="text-sm">
-        Don&apos;t have an account?{" "}
-        <Link href="/signup" className="underline">
-          Sign up
-        </Link>
-      </p>
-    </main>
+    </AuthCard>
   );
 }

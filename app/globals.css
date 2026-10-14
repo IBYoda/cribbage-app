@@ -655,6 +655,12 @@ html[data-appearance-surface="wood"] body:has(.table-loading),
 .surface-swatch[data-surface] {
   background-attachment: scroll;
 }
+/* Classic has no painted surface: the table shows the plain page. A Classic
+   swatch shows that page colour itself, so the Profile preview stays the
+   same on the felt panel as it was on the plain page. */
+.surface-swatch[data-surface="classic"] {
+  background-color: var(--background);
+}
 
 /* The Loading screen on a cached dark surface: light text, like the table. */
 html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-loading {
@@ -940,16 +946,123 @@ html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-lo
   background: rgb(0 0 0 / 0.6);
 }
 
+/* Messages on the felt: red-600 and green-600 sink into it, so the card room
+   uses light tints that keep 4.5:1 against the felt's lightest point. */
+:root {
+  --error-on-felt: #ffd3d3;
+  --success-on-felt: #c9f5d6;
+  --placeholder-on-felt: #d2c9b0;
+}
+
+/* A panel on the felt: the auth forms, "Your tables" notes. */
+.felt-panel {
+  border: 1px solid rgb(226 193 125 / 0.35);
+  border-radius: 16px;
+  background: rgb(0 0 0 / 0.28);
+  padding: 0.75rem 1rem;
+}
+section.felt-panel {
+  padding: 1.25rem;
+}
+
+/* Text fields on the felt. */
+.felt-input {
+  min-height: 48px;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--brass);
+  border-radius: 14px;
+  background: rgb(0 0 0 / 0.32);
+  color: var(--cream);
+}
+.felt-input::placeholder {
+  color: var(--placeholder-on-felt);
+  opacity: 1;
+}
+.felt-input:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+.felt-input[aria-invalid="true"] {
+  border-color: var(--error-on-felt);
+}
+/* The 4-digit code: big, centred, spaced like a card-table code. */
+.felt-input--code {
+  min-height: 52px;
+  text-align: center;
+  font-size: 1.5rem;
+  letter-spacing: 0.4em;
+}
+.felt-input--code::placeholder {
+  letter-spacing: normal;
+}
+
+/* "Your tables": one tappable row per table. */
+.table-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 60px;
+  padding: 0.5rem 1rem;
+  border: 1px solid rgb(226 193 125 / 0.4);
+  border-radius: 12px;
+  background: rgb(0 0 0 / 0.25);
+}
+.table-row:hover {
+  background: rgb(0 0 0 / 0.35);
+}
+.table-row:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+
+/* The Profile page's photo chooser: the native file input, its button drawn
+   as an outlined peg button and the file name in cream. */
+.felt-file {
+  max-width: 100%;
+  font-size: 0.875rem;
+  color: var(--cream);
+}
+.felt-file::file-selector-button {
+  min-height: 44px;
+  margin-right: 0.75rem;
+  padding: 0 1rem;
+  border: 2px solid var(--brass);
+  border-radius: 14px;
+  background: rgb(0 0 0 / 0.25);
+  color: var(--cream);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 3px 0 rgb(0 0 0 / 0.35);
+  transition:
+    transform 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+.felt-file:hover::file-selector-button,
+.felt-file:active::file-selector-button {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
+}
+.felt-file:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 3px;
+  border-radius: 14px;
+}
+
 /* Reduced motion: no deal-in, no peg drop, no fade. */
 @media (prefers-reduced-motion: reduce) {
   .hero-card {
     animation: none;
   }
-  .peg-btn {
+  .peg-btn,
+  .felt-file::file-selector-button {
     transition: none;
   }
   .peg-btn:hover,
-  .peg-btn:active {
+  .peg-btn:active,
+  .felt-file:hover::file-selector-button,
+  .felt-file:active::file-selector-button {
     transform: none;
   }
   .tagline {

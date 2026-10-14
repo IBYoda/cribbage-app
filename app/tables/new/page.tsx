@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -70,33 +71,31 @@ export default function NewTablePage() {
 
   if (loading) {
     return (
-      <main className="flex flex-1 items-center justify-center">
-        <p>Loading...</p>
-      </main>
+      <CardRoomFrame backHome={false}>
+        <p className="text-center">Loading...</p>
+      </CardRoomFrame>
     );
   }
 
   if (!session) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <CardRoomFrame backHome={false}>
         <p>You need to be logged in to start a table.</p>
-        <Link href="/login" className="underline">
+        <Link href="/login" className="peg-btn peg-btn--brass">
           Log in
         </Link>
-      </main>
+      </CardRoomFrame>
     );
   }
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Start a Table</h1>
-
+    <CardRoomFrame title="Start a Table">
       {/* Stays disabled once created, while the table page loads -- a second
           tap would open a second table. */}
       <button
         onClick={handleCreateTable}
         disabled={status === "creating" || status === "success"}
-        className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
+        className="peg-btn peg-btn--brass disabled:opacity-60"
       >
         {status === "creating"
           ? "Creating..."
@@ -105,11 +104,9 @@ export default function NewTablePage() {
             : "Start a Table"}
       </button>
 
-      {status === "error" && message && <p className="text-sm text-red-600">{message}</p>}
-
-      <Link href="/" className="text-sm underline">
-        Back home
-      </Link>
-    </main>
+      {status === "error" && message && (
+        <p className="text-sm text-[var(--error-on-felt)]">{message}</p>
+      )}
+    </CardRoomFrame>
   );
 }
