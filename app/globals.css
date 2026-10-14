@@ -354,6 +354,22 @@ body {
   text-align: center;
 }
 
+/* -- A host alone at the table (WaitingForPlayer): the message above the code
+      and Copy -- or side by side when the middle is flat. */
+.waiting-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+@container middle (max-height: 149px) {
+  .waiting-stage {
+    flex-direction: row;
+    gap: 16px;
+  }
+}
+
 /* -- The final board after a win: the hand's last run (none on his heels)
       above the result. The run has no status line, and
       its cards give up the height the result needs: the banner (~56px), the

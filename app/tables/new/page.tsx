@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 const UNIQUE_VIOLATION = "23505";
@@ -15,11 +16,11 @@ function generateCode() {
 }
 
 export default function NewTablePage() {
+  const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<"idle" | "creating" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
-  const [tableCode, setTableCode] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -44,8 +45,12 @@ export default function NewTablePage() {
         .single();
 
       if (!error) {
-        setTableCode(data.code);
+        // Straight to the table, where the creator joins and waits for the
+        // second player (the table page shows the code to send). replace, not
+        // push: Back from the table shouldn't land on this page, one tap away
+        // from opening a second table.
         setStatus("success");
+        router.replace(`/tables/${data.code}`);
         return;
       }
 
@@ -86,23 +91,19 @@ export default function NewTablePage() {
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
       <h1 className="text-2xl font-semibold">Start a Table</h1>
 
-      {tableCode ? (
-        <div className="flex flex-col items-center gap-2">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">Your table code is:</p>
-          <p className="text-5xl font-bold tracking-widest">{tableCode}</p>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Share this code with the players joining you.
-          </p>
-        </div>
-      ) : (
-        <button
-          onClick={handleCreateTable}
-          disabled={status === "creating"}
-          className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
-        >
-          {status === "creating" ? "Creating..." : "Start a Table"}
-        </button>
-      )}
+      {/* Stays disabled once created, while the table page loads -- a second
+          tap would open a second table. */}
+      <button
+        onClick={handleCreateTable}
+        disabled={status === "creating" || status === "success"}
+        className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50"
+      >
+        {status === "creating"
+          ? "Creating..."
+          : status === "success"
+            ? "Opening table..."
+            : "Start a Table"}
+      </button>
 
       {status === "error" && message && <p className="text-sm text-red-600">{message}</p>}
 
