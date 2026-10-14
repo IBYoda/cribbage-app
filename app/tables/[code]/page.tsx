@@ -13,6 +13,7 @@ import { OpponentBand, type OpponentSeat } from "@/components/table/OpponentBand
 import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
+import { useAppearance } from "@/components/AppearanceProvider";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
 import { countingView } from "@/components/table/countingView";
@@ -217,6 +218,9 @@ function displayName(member: Member | undefined) {
 export default function TablePage() {
   const params = useParams<{ code: string }>();
   const router = useRouter();
+  // MY card back and table surface (my screen only). The table isn't drawn
+  // until they're known, so it never appears in the wrong look first.
+  const appearance = useAppearance();
   const code = params.code;
 
   const [session, setSession] = useState<Session | null>(null);
@@ -1403,9 +1407,11 @@ export default function TablePage() {
     activeGameIdRef.current = activeGame?.id ?? null;
   }, [activeGame?.id]);
 
-  if (loading) {
+  // .table-loading: painted in this device's cached surface from the first
+  // paint (app/globals.css), so a refresh doesn't flash Classic.
+  if (loading || !appearance.ready) {
     return (
-      <main className="flex flex-1 items-center justify-center">
+      <main className="table-loading flex flex-1 items-center justify-center">
         <p>Loading...</p>
       </main>
     );
@@ -1636,9 +1642,9 @@ export default function TablePage() {
     pegView && activeGame
       ? goSayers(displayedRun(plays, activeGame.play_segment, onPegHold).events)
       : new Set<string>();
-  const goLabel = <span className="text-xs font-semibold text-amber-600 dark:text-amber-500">Go</span>;
+  const goLabel = <span className="text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>;
   const countingLabel = (
-    <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-500">Counting</span>
+    <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-500 surface:text-violet-200">Counting</span>
   );
 
   // Opponents across the top. Each seat's hand is drawn face-down from the
@@ -1695,7 +1701,7 @@ export default function TablePage() {
       right={
         <>
           {realtimeStatus === "disconnected" && (
-            <span className="text-xs text-amber-600 dark:text-amber-500">Reconnecting...</span>
+            <span className="text-xs text-amber-600 dark:text-amber-500 surface:text-amber-200">Reconnecting...</span>
           )}
           {leaveConfirming ? (
             <>
@@ -1872,7 +1878,7 @@ export default function TablePage() {
                 refreshTableState. Scores are read live from the roster, so
                 the winner's 121 shows even if its UPDATE lands after this. */}
             {finishedGame && (
-              <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 px-6 py-3 text-center">
+              <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 surface:border-violet-300 px-6 py-3 text-center">
                 <p className="text-lg font-semibold">
                   {finishedGame.winner_id === session.user.id
                     ? "You win!"
@@ -2046,6 +2052,8 @@ export default function TablePage() {
       // cut, which needs the space and has no hand to show.
       hand={isCutting ? null : hand}
       scores={<ScoreStrip plates={plates} />}
+      surface={appearance.surface}
+      back={appearance.back}
     />
   );
 }

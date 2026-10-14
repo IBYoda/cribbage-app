@@ -1,4 +1,11 @@
 import type { ReactNode } from "react";
+import {
+  DEFAULT_CARD_BACK,
+  DEFAULT_TABLE_SURFACE,
+  surfaceIsDark,
+  type CardBack,
+  type TableSurface,
+} from "@/lib/appearance";
 
 // The fixed-height table. Six regions, top to bottom, sized by .table-shell in
 // app/globals.css: exactly one screen tall, never scrolling, never wider than
@@ -14,6 +21,8 @@ export function TableShell({
   piles,
   hand,
   scores,
+  surface = DEFAULT_TABLE_SURFACE,
+  back = DEFAULT_CARD_BACK,
 }: {
   header: ReactNode;
   opponents: ReactNode;
@@ -23,9 +32,21 @@ export function TableShell({
   piles: ReactNode;
   hand: ReactNode;
   scores: ReactNode;
+  // THIS player's table surface (lib/appearance.ts). data-surface paints it
+  // (app/globals.css, "TABLE SURFACES"); data-scheme="dark" turns on the dark
+  // palette for the whole table on every surface but Classic.
+  surface?: TableSurface;
+  // THIS player's card back: every face-down card in the table uses it
+  // (app/globals.css, "CARD BACKS").
+  back?: CardBack;
 }) {
   return (
-    <main className="table-shell mx-auto w-full max-w-4xl gap-1">
+    <main
+      className="table-shell mx-auto w-full max-w-4xl gap-1"
+      data-surface={surface}
+      data-scheme={surfaceIsDark(surface) ? "dark" : undefined}
+      data-back={back}
+    >
       <div className="min-w-0">{header}</div>
       <div className="min-w-0">{opponents}</div>
       {/* table-middle: the size container the play area measures itself

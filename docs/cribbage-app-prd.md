@@ -2,9 +2,9 @@
 ## Cribbage App — "Shared Deck" Companion App
 
 **Owner:** Yoda
-**Status:** Draft — not yet started (Hello Fresh Helper app comes first, for practice)
-**Last updated:** September 26, 2026
-**Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8.
+**Status:** Phase 2 complete and live. Two people can play whole 2-player matches at https://cribbage-app.vercel.app. Phase 3 (3 and 4 players) has not started.
+**Last updated:** October 14, 2026
+**Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8. **October 2026:** Phase 2 finished and deployed (Section 5, Deployment). After live testing, the counting flow changed: every hand is face-up for everyone once pegging is over, and Show Hand / Show Crib left the screen (Section 6, item 8). New Game became a two-player ready gate and a win now leaves the final board on screen (Section 7).
 
 ---
 
@@ -37,7 +37,7 @@ The original plan (see revision history) included a fully virtual board with ani
 **Primary goals:**
 - Replace "everyone deals from their own deck" with one fair, shared virtual deck.
 - Show each player their own hand privately on their own phone.
-- Show cards to everyone as they're played during the pegging phase, and reveal each hand (then the crib) one at a time, in order, during counting.
+- Show cards to everyone as they're played during the pegging phase. Once pegging is over, put every hand face-up for everyone (and the crib when its count comes up) while the players count out loud.
 - Support 2, 3, and 4-player games, played remotely, alongside Zoom and physical boards.
 - Stay free and fully within your control (no subscriptions, no third-party app fees).
 
@@ -47,7 +47,7 @@ The original plan (see revision history) included a fully virtual board with ani
 
 **Non-goals (explicitly out of scope):**
 - A visual/animated cribbage board with pegs — you're keeping your physical boards for this. (A simple numeric score display is still in scope — see Section 6 — to help everyone's physical boards stay in sync.)
-- Board/visual theming or customization — no longer relevant now that there's no virtual board.
+- A virtual board with pegs, and any theming of one. (A personal look for the table surface and the card backs is a separate, small feature that IS in scope: Section 6, item 13.)
 - Public matchmaking / playing with strangers.
 - In-game voice/video chat (Zoom already handles this).
 - Monetization of any kind.
@@ -78,6 +78,14 @@ The original plan (see revision history) included a fully virtual board with ani
 
 **Future option, not a v1 decision:** Once the game works, the app can be turned into a PWA (Progressive Web App) — a lightweight config change that lets players "Add to Home Screen" so it opens full-screen with its own icon, feeling like a native app without the app-store overhead. A "Donate" button (Ko-fi, Buy Me a Coffee, Stripe, etc.) would work identically on the web app as it would in a native app, without Apple/Google's in-app-payment rules — so native isn't required to support donation-based monetization down the road, if you decide to pursue that later.
 
+### Deployment (live as of October 2026)
+
+- **Hosting:** Vercel (Hobby plan, personal account), project `cribbage-app`, Next.js preset. Every merge to `main` auto-deploys to production at **https://cribbage-app.vercel.app**. Deployment-specific URLs and preview deployments are login-protected by Vercel, so the production domain is the one to share with friends.
+- **Environment variables (Production and Preview):** `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` only. The service-role key never goes in Vercel or the client.
+- **Supabase auth config:** Site URL is the production domain. Allowed Redirect URLs: `https://cribbage-app.vercel.app/**` and `http://localhost:3000/**`.
+- **One Supabase project is shared** by local development, previews and production (free plan, spend cap on). Anything run locally touches the same data players see.
+- **Free-plan quirks:** the project pauses after about a week of inactivity (resume it from the Supabase dashboard), and the built-in sign-up email has a low rate limit, so a burst of sign-ups can get throttled.
+
 ---
 
 ## 6. Core Features (v1 scope)
@@ -86,18 +94,18 @@ The original plan (see revision history) included a fully virtual board with ani
 2. **Table code / rooms** — a logged-in player can tap **"Start a Table"** to create a table, which generates a unique **4-digit Table Code**. Other logged-in players enter that code to join. A table can host **multiple games back-to-back** — a **"New Game"** button lets the group start a fresh game (new deal, score reset) without leaving the table or getting a new code. Multiple separate tables can run at the same time (e.g., two tables of 4 all on one big Zoom call), each fully independent with its own code, players, and games. The table code stops working once the table itself is ended — not automatically when a single game finishes, since the group can just tap "New Game" and keep going. (See item 12 for who can end a table and how.)
 3. **Reconnection handling** — table/game state lives on the server (Supabase), not just in a player's browser. If someone's browser refreshes, their phone dies and comes back, or they lose connection, rejoining (same account, same table) drops them back into the current game exactly where it left off — hand, score, and turn all intact — rather than losing progress or restarting.
 4. **Shared virtual deck** — one deck, shuffled once per hand, dealt fairly to every player's phone.
-5. **Private hand display** — each player sees only their own cards on their own screen by default. No one else can see your hand unless you choose to play a card during pegging, or tap **"Show Hand"** — which is available to any player once counting begins (see item 8 for why it is not available earlier).
+5. **Private hand display** — each player sees only their own cards on their own screen by default. No one else can see your hand until you play a card during pegging, or until pegging is over and counting begins, when every hand is shown to the table (see item 8). Before counting the server refuses to reveal a hand, because showing it during the discard would let the table deduce the crib.
 6. **Real-time play reveal** — as each player plays a card during the pegging phase, it becomes visible to everyone (this is the shared "table" — just cards, not a board).
-7. **Sequenced counting-time reveal** — hands (and the crib) are revealed one at a time, controlled by each player, rather than all at once. Full flow detailed in item 8 below.
-8. **Hand scoring via "Show Hand" → "Confirm Count":**
-   - **"Show Hand" is available to any player once counting begins (the counting and done phases), and is not turn-gated.** *(Changed at the Phase 2 Batch 2 design checkpoint — this originally said "any time, any phase".)* Showing a hand during the discard would let the table deduce the crib discards, and during pegging it only hurts the player showing it, so the server refuses it before counting. Once counting starts, anyone can reveal their own hand whenever they want, including out of turn. Showing is one-way for the rest of the hand, purely voluntary, and has no effect on scoring or turn order by itself.
-   - The formal counting phase happens **one hand at a time, in player order** (non-dealer first, then the dealer's hand, then the crib). If a player has already shown their hand, the counting phase just picks up from wherever their hand's visibility already is.
-   - When it's a player's turn to count, they count their points out loud, then tap **"Confirm Count."** Confirming a hand **reveals it automatically**, so Show Hand first is optional. The server calculates the correct score from the four kept cards and the starter (the client never supplies a card or a point value), auto-adds it to the live score tracker (Section 6, item 11), and hands control to the next count in order. A zero-point hand still registers as "+0 — hand: nothing" so the table sees it was counted.
-   - Unlike Show Hand, **"Confirm Count" stays turn-gated** — only the player whose count is up can confirm, so scores get logged in a clear, one-at-a-time sequence. A duplicate tap (double-click, retry, second tab) after the count has already landed is ignored, never scored twice.
-   - **Winning ends the game on the spot.** The score is capped at 121, and the instant anyone reaches it, whether from pegging, his heels, or a hand or crib count, the game ends with that player as winner. Nothing after the winning point counts: if the pone wins on their hand, the dealer's hand and the crib are never counted. The winner sees "You win!", the other player sees "[name] wins!", and both banners say what scored the winning points.
-   - The **dealer goes last**, and after their own hand, they get one additional step: **"Show Crib"** (reveals the crib — theirs alone, see the note on 4-player teams below), then counts it out loud and taps **"Confirm Count"** the same way, which adds the crib's score and closes out the round. The crib stays face-down and unreadable to everyone, dealer included, until Show Crib is tapped, and Confirm Count is refused until then. After the crib is confirmed, everything stays face-up until the next hand is dealt.
-   - **4-player teams note:** partners do **not** automatically see each other's hands at any point — there's no built-in hand-sharing between teammates. If a partner wants to voluntarily Show Hand to their teammate (or the whole table) for help or fun, that's the same voluntary action any player can take; the app just doesn't do it for them automatically.
-   - **Full round sequence, for reference:** Deal → Discard to crib → Cut for starter card → Pegging/play phase (auto-scored, see item 9) → Counting phase (count out loud → Confirm Count, which reveals the hand; Show Hand is an optional earlier reveal; repeated in order, non-dealers first) → Dealer's hand (Show Hand → count → Confirm Count) → Dealer's crib (Show Crib → count → Confirm Count) → next round, deal passes to the left.
+7. **Counting-time reveal** — once pegging is over, all hands are face-up for everyone, and the crib flips face-up when its count comes up. *(Originally hands were revealed one at a time under each player's control; live play showed that was too slow, see item 8.)*
+8. **Counting: open hands, then "Confirm Count":** *(Changed in October 2026 after live play. The original Show Hand / Show Crib turn-by-turn reveal was too slow and is gone from the screen. The server functions still exist but the client no longer calls them.)*
+   - **"Count hands" is a per-screen pause.** When pegging ends, the game is already in counting, but each player's screen waits behind a **Count hands** button. Tapping it only flips that player's own screen and writes nothing to the server, so each player moves at their own speed and one screen can flip before the other. This is safe because all eight cards were already played face-up during pegging, so seeing the hands tells nobody anything new.
+   - **Every hand is face-up for the rest of the count.** Your own hand stays full size in your hand row, and the opponent's four cards sit face-up in the middle, labelled ("Counting: your hand", "[name]'s hand", "your crib", "[name]'s crib"). Only the crib is still a secret: it stays a face-down pile until the crib's count step, then it flips face-up for both players on its own. The database enforces both rules (hands readable only once pegging is over, crib only at its step).
+   - **The count still runs one at a time, in order:** the pone's hand, then the dealer's hand, then the crib (dealer's). The player whose count is up counts out loud, then taps **"Confirm Count."** The button just validates what was said aloud, and the points are not shown until it is tapped, so players get the chance to count before the app tells them. The server calculates the score from the four kept cards and the starter (the client never supplies a card or a point value), adds it to the live score tracker (Section 6, item 11), and hands control to the next count. A zero-point count still registers as "+0 — nothing" so the table sees it was counted. A duplicate tap (double-click, retry, second tab) is ignored, never scored twice.
+   - **"Confirm Count" stays turn-gated** — only the player whose count is up can confirm, so scores land in a clear, one-at-a-time sequence.
+   - **Winning ends the game on the spot.** The score is capped at 121, and the instant anyone reaches it, whether from pegging, his heels, or a hand or crib count, the game ends with that player as winner. Nothing after the winning point counts: if the pone wins on their hand, the dealer's hand and the crib are never counted. The winner sees "You win!", the other player sees "[name] wins!", and both banners say what scored the winning points. What stays on screen after a win is described in Section 7.
+   - **The dealer goes last,** and the crib is theirs alone (see the 4-player note below). The crib is unreadable to everyone, dealer included, until its step starts. At that step the screen flips it face-up automatically and the dealer counts it out loud and taps **"Confirm Count"**, which adds its score and closes out the round. After the crib is confirmed, everything stays face-up until the next hand is dealt.
+   - **4-player teams note (revisit in Phase 3):** the open-hands rule above means everyone sees every hand once pegging is over, so partners' hands are visible to the whole table at counting. Before that there is no hand-sharing between teammates. Decide in Phase 3 whether that is what we want for teams.
+   - **Full round sequence, for reference:** Deal → Discard to crib → Cut for starter card → Pegging/play phase (auto-scored, see item 9) → Count hands (each player's own screen) → pone's hand (count aloud → Confirm Count) → dealer's hand (count aloud → Confirm Count) → crib flips, dealer's crib (count aloud → Confirm Count) → both players tap Next Hand → next round, deal passes to the other player.
 9. **Auto-scored pegging (play phase):**
    - During the pegging round (playing cards up to 31), the app automatically calculates points as they happen — fifteens, pairs, runs, "go"/last card, and hitting 31 — and adds them straight to the live score tracker in real time.
    - This is a change from a "manual by default" approach: pegging math has to happen fast, in the middle of active play, which is exactly the situation most likely to cause disputes or mistakes — so this one is automatic out of the box rather than an opt-in toggle.
@@ -105,6 +113,7 @@ The original plan (see revision history) included a fully virtual board with ani
 10. **Support for 2, 3, and 4-player games** — including the different dealing/crib rules for each (detailed below).
 11. **Live score tracker (numbers only, not a visual board)** — a simple, real-time number for each player's current score (e.g., "Yoda: 42 — Sam: 37"), synced across everyone's screens as points are logged. This is not an animated board with pegs — just a running number — but it means everyone can glance at their phone and confirm their physical peg is in the right spot, so there's no confusion or arguing about the score, especially a few drinks in. No visual board rendering or theming beyond this (see 2.5).
 12. **Admin & table management (for you)** — your account gets an admin role that lets you see all active tables/games and force-end ("kill") any that have been abandoned, without needing to be a player in them. Every game also has a **hard 5-hour timeout** — after 5 hours, it auto-ends on its own, so a forgotten or abandoned session doesn't sit open forever even if no one manually cleans it up. Tables have their own outer limit too: a **hard 12-hour table timeout**, so a table nobody remembered to end (e.g., everyone logged off after a session) doesn't just sit open indefinitely, even across multiple back-to-back games.
+13. **Personal appearance (table surface and card back)** — on the Profile page, each player picks their own **table surface** (Classic, Black, Green Felt, Blue Felt, Wood) and **card back** (Classic, Modern Metallic Black, Vintage, Oktoberfish, Plain Black, Standard Red, Standard Blue), with a live preview and its own Save button. The choice is **seen only on that player's own screen** (your cards and the whole table, in your look), is saved to the account so it follows you across devices, and never reaches the other players: it lives in its own owner-only table, `user_appearance`, which is not in Realtime. **Classic is the default** and is exactly the look the app had before this feature (the page's light or dark background, red striped backs); a missing row means Classic. Every non-Classic surface is dark (white text), swaps the green accents for violet, and keeps text contrast at 4.5:1 or better. Face-up card designs, custom uploads and per-table themes are out of scope for now (Section 12).
 
 ---
 
@@ -150,6 +159,8 @@ This is here so the dealing/discard logic has one clear source of truth to build
 - **Winning is checked in the one place every point passes through,** so it is caught mid-pegging, on his heels, and mid-count alike. A game that ends on his heels is left with its phase as it was; the screen checks the game's status before its phase.
 - **Next hand (Batch 2b):** when every count is in (the `done` state), **both players must tap Next Hand** before the next hand is dealt: the first tap only marks that player ready (the other player sees "X is ready", the first sees "Waiting for X…"), and the tap that completes the set deals. The deal rotates to the other player every hand, scores and the tracker carry over, and the 5-hour session clock keeps measuring from the start of the match.
 - **Next match (Batch 2b):** New Game resets both scores and the tracker. After a **won** match between the same two players, the **loser deals first** and play starts at once with no cut. Any other ending (a player leaving, an admin ending the game, the 5-hour timeout, or a changed roster) means a **fresh cut for deal**.
+- **New Game is a ready gate (PR #20):** after a won match, the first player to tap New Game is only marked ready (the other screen shows "X is ready"), and the tap that completes the set deals. One tap can no longer start the next match by itself. Readiness is stored on the won game (`games.ready_by`) and persists indefinitely, which is accepted.
+- **The final board stays up after a win (PR #21):** a won game leaves the table on screen behind the banner: the starter, the last run of pegging cards, both hands and the crib, with the winning reason in the banner. A refresh rebuilds it from the database, and New Game clears it. Won-game reads are allowed to the players of that game only. A win on the dealer's hand or the crib has not yet been tested live.
 
 **Resolved:** the first built version of cut-for-deal computed the dealer AND dealt all cards atomically in one step, then revealed the cut result as a ceremony layered on top afterward. This was corrected in Phase 2 Slice 5 (the "cut-before-deal" rework) — nothing is dealt until the cut genuinely resolves, drawn one card at a time on demand from a face-down spread, with ties handled via mandatory dual-redraw (Slice 4b). After a won match between the same two players, the loser deals the next match with no re-cut; every other ending cuts for deal again (see the next-hand and next-match notes above).
 
@@ -159,7 +170,7 @@ This is here so the dealing/discard logic has one clear source of truth to build
 
 - Mobile-first, thumb-friendly layout — this is meant to be held and used casually, often one-handed, while also on a Zoom call.
 - Your own hand is always clearly visible and unmistakably private (no risk of accidentally showing your screen's contents to the room over Zoom screen-share, if that ever comes up — worth a design note but not a technical requirement).
-- **"Show Hand"** should be visible and tappable for every player once counting begins (it's a voluntary, no-consequence action, and it is not offered earlier — see Section 6, item 8). **"Confirm Count"** should be clearly visible but only actionable for whoever's turn it is in the counting order — these have different availability rules and the UI should make that obvious at a glance.
+- **"Count hands"** is the one tap that turns a player's own screen over to the count, and it is theirs alone. **"Confirm Count"** should be clearly visible but only actionable for whoever's turn it is in the counting order, and the UI should make that obvious at a glance (including a plain "[name] is counting" for the player who is waiting).
 - Auto-scored pegging points should appear on the live score tracker clearly enough that players can see *why* the number moved (e.g., briefly show "Sam +2 — pair" rather than just the number changing), so it doesn't feel like a mystery to whoever's watching their physical board.
 - Big, legible cards and buttons — remember, intended use case includes "too drunk to count properly."
 - No manual refresh needed — state changes appear instantly for all players.
@@ -198,9 +209,16 @@ Actual Phase 2 slice order, since it's drifted from the original plan once alrea
 8. **Batch 1 (merged, PR #16):** the scoring engines — pegging scoring (fifteens, pairs, runs, go, last card, 31), his heels, and the pure hand/crib scorer, with an exhaustively verified TypeScript mirror
 9. **Batch 2a (merged, PR #17):** the counting flow (Show Hand / Confirm Count / Show Crib, Section 6 item 8), crib scoring, the 121 cap, and winning the game at 121 — ending at a `done` state
 
-10. **Batch 2b (built and tested, pending merge):** Next Hand with the two-player ready gate (dealer rotation and the full per-hand reset), the match loop, New Game as a new match (scores and tracker reset, loser deals after a won match, cut for deal otherwise), and a hardened client that always re-reads the game after any realtime event. This completes Phase 2's server and game loop: two people can now play whole matches back to back.
+10. **Batch 2b (merged):** Next Hand with the two-player ready gate (dealer rotation and the full per-hand reset), the match loop, New Game as a new match (scores and tracker reset, loser deals after a won match, cut for deal otherwise), and a hardened client that always re-reads the game after any realtime event. Two people can play whole matches back to back.
+11. **UI polish stages 1–3 (merged):** fixed-height one-screen table at phone width (nothing scrolls, card sizes stay constant), reworked table regions, and the opponent band as a fixed strip (showing only the top half of the opponent's cards is accepted). Landscape is not done.
+12. **New Game ready gate (merged, PR #20):** both players must tap New Game after a win, plus a revoke of stray function grants (ten client-callable functions remain; the helper trigger from Supabase is left alone).
+13. **Final board after a win (merged, PR #21):** starter, last run, both hands and the crib stay on screen behind the win banner, rebuilt from the database on refresh (Section 7).
+14. **Deployment (done):** live on Vercel with Supabase auth redirects configured (Section 5, Deployment).
+15. **Create-table redirect and waiting block (merged, PR #22):** creating a table drops you straight into it with a "Waiting for a second player" block showing the table code and a Copy button.
+16. **Open hands in the count (merged, PR #23):** the redesigned counting flow in Section 6, item 8, with two new read policies and a rewritten counting view.
+17. **Personal appearance (merged with this update):** table surfaces and card backs, picked on the Profile page and saved per account (Section 6, item 13). Built in three stages: the CSS surfaces (Wood is a cedar photo under a dark scrim), the six card backs (5:7 WebP in `public/cards/backs/`), then saving (`user_appearance` table, `AppearanceProvider` with a per-device cache keyed by user id, a head script so a refresh never flashes Classic, and the Appearance section with its own Save). Verified with two accounts: each sees only their own look at the same table.
 
-**Next up:** the UI-polish pass (Section 11.5), then Phase 3 (3 and 4 players).
+**Next up:** a stress test with real friends on the live site (portrait phones), then the queue in Section 11.5, then Phase 3 (3 and 4 players).
 
 Update this list as slices land rather than trusting memory of the original plan — it's already been wrong once.)*
 - Shared deck + dealing logic
@@ -208,13 +226,15 @@ Update this list as slices land rather than trusting memory of the original plan
 - Real-time reveal of played cards during the pegging phase
 - Live score tracker (numeric only — Section 6, item 11)
 - Auto-scored pegging during the play phase (Section 6, item 9)
-- Counting-phase flow — Show Hand, count, Confirm Count, repeated in order, ending with the dealer's hand and Show Crib (Section 6, item 8)
+- Counting-phase flow — Count hands, every hand face-up, count aloud, Confirm Count, repeated in order, ending with the crib (Section 6, item 8)
 - Goal: two people can log into a shared table and play a full, correctly-scored 2-player game start to finish, with cards, pegging points, and hand scores all handled by the app, and physical boards kept accurately in sync
 
 **Phase 3 — 3 and 4 player support:**
 - Extend dealing/discard logic for 5-card hands + dealer's extra draw (3p) and shared crib (4p teams)
 - Extend real-time sync, auto-scored pegging, and the Show Hand / Confirm Count counting flow to more players
 - Confirm 4-player team hand-visibility behavior in practice (no auto-sharing between partners — see Section 6, item 8)
+- Players are stored in join order, not seating order. Phase 3 needs real seating (left, right, top) behind the layout convention in Section 8
+- 4 players: decide between teams and individual play (an option on the table), with score plates per team or per player; layout stage 5 covers the 3 and 4 seat screens
 
 *(Note: what was "Phase 3 — Assist features" in an earlier draft has been folded into Phase 2, since Confirm Count and auto-scored pegging are no longer optional extras — they're how the score tracker gets its numbers at all. There's no longer a distinct "assist" phase.)*
 
@@ -229,10 +249,11 @@ We'll consider v1 "done" when:
 - [ ] A player who refreshes their browser or loses connection can rejoin the same table and pick up exactly where the current game left off — hand, score, and turn intact.
 - [ ] Two players in different locations can play a complete 2-player game in real time, with the app fairly dealing and displaying cards, and hand/pegging scores calculated and logged automatically via Confirm Count and auto-scored pegging.
 - [ ] 3-player and 4-player modes work with correct dealing/crib rules.
-- [ ] "Show Hand" is available to any player once counting begins and works purely as a voluntary reveal; "Confirm Count" remains turn-gated and correctly calculates, logs, and advances scoring in order — ending with the dealer's hand and Show Crib.
+- [ ] After pegging every hand is face-up for both players, and "Confirm Count" (turn-gated) correctly calculates, logs, and advances scoring in order — ending with the crib.
 - [ ] Pegging points (fifteens, pairs, runs, go/last card, 31) are calculated and added to the live score tracker automatically and correctly during play, with illegal plays (going over 31) flagged.
 - [ ] As the admin, you can view all active tables/games and force-end an abandoned one; any game left running for 5 hours auto-ends, and any table left open for 12 hours auto-ends, on their own.
 - [ ] The app works comfortably on a phone browser held in one hand during a Zoom call.
+- [x] Each player can pick their own card back and table surface on the Profile page, sees it only on their own screen, and it follows them across devices (verified with two accounts, October 2026).
 - [ ] You understand *how* the core pieces work (deck logic, realtime sync, scoring) well enough to explain them back, not just that they work.
 
 ---
@@ -247,16 +268,30 @@ We'll consider v1 "done" when:
 
 Small UI/UX adjustments observed while actually playing, logged here so they aren't forgotten — not urgent, not scope changes, just real feedback waiting for a convenient slice to address:
 
-- **TOP PRIORITY — the table must never outgrow the screen (layout rule for the whole polish pass):** this is mainly a shared deck and table space, used on a phone, so screen space is at a premium. Currently, when pegging starts a second row of played cards, the card sizes change and the page grows taller, forcing the player to scroll to reach their hand, the count or the scores. Rule: the whole table (both hands, the play area, the crib, the starter, the count and both scores) fits one screen with no scrolling, at phone width, even in the worst case of a full pegging round. The play area has a fixed height; more played cards overlap or fan out like a physical table instead of wrapping to a new row, and card size stays constant. Noticed while playing on a laptop during Batch 2b testing. Related to "Played cards should render in front of each player" below.
+- **DONE (polish stages 1–3; landscape still open) — the table must never outgrow the screen (layout rule for the whole polish pass):** this is mainly a shared deck and table space, used on a phone, so screen space is at a premium. Currently, when pegging starts a second row of played cards, the card sizes change and the page grows taller, forcing the player to scroll to reach their hand, the count or the scores. Rule: the whole table (both hands, the play area, the crib, the starter, the count and both scores) fits one screen with no scrolling, at phone width, even in the worst case of a full pegging round. The play area has a fixed height; more played cards overlap or fan out like a physical table instead of wrapping to a new row, and card size stays constant. Noticed while playing on a laptop during Batch 2b testing. Related to "Played cards should render in front of each player" below.
 - **"Hand N" label (small):** show the hand number from `games.hand_no` as a tiny label near the table code, with no extra space taken. Optional.
 - **Crib pile positioning:** currently rendered dead-center of the table. Preference is to move it off to the side — near/offset from the dealer's hand, not centered. Purely a layout change, no data/logic impact.
-- **"Start a Table" should skip the extra step:** currently, creating a table requires then separately joining it, even though you're the creator. Preference: creating a table should immediately drop the creator into the table's waiting screen (same as if they'd joined), rather than requiring a manual join step for a table they just made. The table code is already visible in the corner for sharing with the other player — no need to make the creator copy/paste/re-enter it themselves.
-- **After a win, keep the final board visible:** currently the play area is wiped when a game ends and only the win banner shows. A win on his heels in particular feels abrupt, because nobody can see the jack that caused it. Preference: keep the starter, the crib and the last cards played visible behind or beside the banner so the winning moment is readable. (The banner already says why the game ended, e.g. "fifteen (+2)" or "his heels (+2)".) Noticed during Batch 2a testing.
+- **DONE (PR #22) — "Start a Table" should skip the extra step:** currently, creating a table requires then separately joining it, even though you're the creator. Preference: creating a table should immediately drop the creator into the table's waiting screen (same as if they'd joined), rather than requiring a manual join step for a table they just made. The table code is already visible in the corner for sharing with the other player — no need to make the creator copy/paste/re-enter it themselves.
+- **DONE (PR #21) — after a win, keep the final board visible:** currently the play area is wiped when a game ends and only the win banner shows. A win on his heels in particular feels abrupt, because nobody can see the jack that caused it. Preference: keep the starter, the crib and the last cards played visible behind or beside the banner so the winning moment is readable. (The banner already says why the game ended, e.g. "fifteen (+2)" or "his heels (+2)".) Noticed during Batch 2a testing.
 - **An opponent's shown hand appears in a different card order than its owner sees:** cosmetic, noticed during Batch 2a testing. Shown hands should use one consistent order on both screens.
-- **Possible repeated GO chips (unverified):** from reading the code, a player who is stuck while the other keeps playing may collect a GO chip on every play. Not yet seen in testing; log it here if it shows up, and correct the "exactly one go event" wording in Section 7 if so.
+- **Repeated GO rows (confirmed, harmless):** duplicate `go` rows can be logged for a player who is stuck while the other keeps playing. Turns, the running count and scoring are all correct. Clean the rows up in the manual Go batch below. Section 7's "exactly one go event" wording describes the intended design, not guaranteed behavior.
 - **Remove the "[Name] said go" message during pegging (done in Batch 1):** noticed during Slice 7 testing that this message caused confusion around the deadlock/double-go case (only one player's go gets an explicit event logged — see Section 7's pegging notes — so the message reads as if the second stuck player's go was "missed" when the turn/count outcome is actually correct). The underlying `game_plays` go events stay recorded and functional either way; this is purely about removing a UI message that misleads more than it helps.
 - **Sort button intermittently stuck (seen once, not reproduced):** after Next Hand in Batch 2b testing, one screen's Sort button did not work until a manual refresh. It did not recur in later runs. The same root cause as a separate bug (a screen sitting on an out-of-date snapshot of the game, after the page missed a realtime update) was fixed in Batch 2b by re-reading the game after every event, so this may already be fixed. Re-log here if it comes back.
-- **Played cards should render in front of each player, not in a shared centered stack:** currently, pegging play renders all played cards together in one shared row/area in the middle of the table. Preference: each player's own played cards should appear in front of their own position instead, matching how a physical table actually looks. Noticed during Slice 7 testing; also contributing to a graphical layout glitch when a new segment starts a new row.
+- **Played cards stay in one shared play area (decided):** the earlier idea of putting each player's played cards in front of their own seat is dropped. The shared play area stays, and the "cards in front of each player" wording is retired.
+
+**Queue (from live testing and review, October 2026):**
+
+- **Manual, server-validated Go button:** its own batch. Includes cleaning up duplicate go rows.
+- **Landscape layout (polish stage 4)** and **3 and 4 seat layout (stage 5, teams or individual, score plates per team or player).**
+- **Duplicate waiting text:** the top band still says "Waiting for another player to join..." above the new WaitingForPlayer block. Remove the band text.
+- **Opponent band shows only the top half of the cards:** accepted for now.
+- **Count hands is per screen:** one player's screen can flip before the other's. Decided to keep, since each player controls when they look.
+- **Optional idea:** tap-to-flip reveal of the opponent's hand.
+- **Housekeeping:** delete the unused PlayerScore file; check the login page against `viewport-fit=cover`; update the handoff doc's function table (`start_game_with_deal` now lives in its own SQL file, the revoke is done, ten grants plus the Supabase `rls_auto_enable` trigger).
+- **Contrast, existing and out of scope of the appearance work:** the white "D" on the amber dealer chip (about 2.1:1) and the "Your turn" pill (about 3.2:1 on Classic's green) are below 4.5:1. The pill passes in violet on the non-Classic surfaces. Fix both in one small pass.
+- **Appearance ideas, later:** face-up card designs, more surfaces, custom uploads, a "Preview on a real table" button on the Profile page. Adding a back or a surface means changing `lib/appearance.ts`, its CSS, AND the CHECK on `user_appearance` (drop and re-add the named constraint).
+- **Test live:** a win on the dealer's hand and a win on the crib (the pone's count win and the pegging wins have been tested).
+- **Friend-testing risks:** Supabase free-plan pause after about a week of inactivity, and the sign-up email rate limit.
 
 ---
 
@@ -272,6 +307,7 @@ Small UI/UX adjustments observed while actually playing, logged here so they are
 
   **Database note (decided):** hand-level logging won't be added in Phase 1/2 — it'll be built alongside the stats screen itself, whenever that happens. That means "19" tracking (and any other stat needing per-hand data) only starts counting from that point forward, not retroactively for games played before it existed. That's a fine, deliberate tradeoff — just noting it here so it's a known consequence, not a surprise later.
 - Chat within the app (you're using Zoom)
+- Face-up card designs, custom uploaded card backs, per-table themes, and showing your look to the other players (appearance v2; see Section 6, item 13)
 - Spectator mode
 - Native mobile app (iOS/Android app store install)
 - Virtual board / animated peg tracking / visual theming (cut in this revision — see 2.5; a simple numeric score display remains in scope, see Section 6)

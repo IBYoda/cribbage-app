@@ -10,16 +10,15 @@ const CARD_LOOK = "rounded-lg border shadow-sm select-none transition-transform"
 // instead of flexing within a row.
 const DEFAULT_SIZING = "flex-1 min-w-0 aspect-[5/7]";
 
+// The back is the player's choice (lib/appearance.ts): .card-back is painted
+// by app/globals.css ("CARD BACKS") from data-back on an ancestor -- the table
+// shell, or the Profile preview. Classic -- no choice, or "classic" -- is the
+// original look: red with diagonal stripes, so a face-down card reads as "a
+// card" at a glance rather than a plain coloured rectangle.
 export function FaceDownCard({ sizing = DEFAULT_SIZING }: { sizing?: string }) {
   return (
     <div
-      className={`${sizing} ${CARD_LOOK} border-red-900/40 bg-red-900`}
-      // Diagonal stripes so a face-down card reads as "a card" at a glance
-      // rather than a plain coloured rectangle.
-      style={{
-        backgroundImage:
-          "repeating-linear-gradient(45deg, rgba(255,255,255,0.16) 0 4px, transparent 4px 8px)",
-      }}
+      className={`${sizing} ${CARD_LOOK} card-back border-red-900/40 bg-red-900`}
       aria-label="Face-down card"
     />
   );

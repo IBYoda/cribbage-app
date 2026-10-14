@@ -25,6 +25,29 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* The dark: variant. Tailwind's default follows only the device's setting;
+   this keeps that, and ALSO turns it on inside anything marked
+   data-scheme="dark" -- the table, on every surface but Classic (see TABLE
+   SURFACES below). With no such attribute, it's exactly the default. */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    @slot;
+  }
+  &:where([data-scheme="dark"], [data-scheme="dark"] *) {
+    @slot;
+  }
+}
+
+/* surface: -- only on a non-Classic table surface; Classic, in either mode,
+   never sees it. Declared after dark: so it wins over it. Used for:
+     - the coloured labels (Go, Reconnecting) whose dark-mode shade sinks
+       into felt or wood;
+     - THE ACCENT: Classic's green becomes violet on every surface (green
+       loses contrast on Green Felt), one family everywhere -- violet-600
+       fills ("Your turn", the score flash), violet-300 borders (the win
+       banner), violet-200 text (the Counting marker). */
+@custom-variant surface (&:where([data-scheme="dark"] *));
+
 /* The "+2 — pair" flash on the score tracker. Done as a pure CSS animation
    rather than a timer in React on purpose: re-running it is just a matter of
    remounting the element (the component keys it on last_awarded_at), so there
@@ -551,4 +574,185 @@ body {
     min-width: 0;
     max-width: 50%;
   }
+}
+
+/* ===========================================================================
+   TABLE SURFACES -- each player's own choice, for their own screen only
+   (lib/appearance.ts; data-surface on .table-shell, set by TableShell).
+
+   Classic paints nothing: the page keeps its own light/dark background, so
+   the table looks exactly as it did before. Every other surface is dark, so
+   the shell also carries data-scheme="dark": the dark palette (white text,
+   every dark: variant) applies to the whole table whatever the device's mode.
+
+   Black and the two felts are CSS only (gradients plus a fine grain); Wood
+   is a photo (public/textures/wood-cedar.webp) under a scrim, with the same
+   grain on top. A real texture can replace any of them by swapping that one
+   surface's background; nothing else changes.
+
+   The surface is painted on <body> (via :has), not just the shell, so the
+   sides of a wide window and the strips under a notch are table too.
+   =========================================================================== */
+:root {
+  /* A fine grain over every surface: SVG noise, mostly transparent. */
+  --surface-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.28 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+}
+
+/* Each surface is ONE rule that paints in three places, so they can never
+   drift apart:
+     - body:has(.table-shell[...])  the body behind the table;
+     - html[data-appearance-surface=...] body:has(.table-loading)
+                                    the table page's "Loading..." screen,
+                                    from this device's cached choice (set on
+                                    <html> by the inline script in
+                                    app/layout.tsx before first paint), so a
+                                    refresh never flashes Classic;
+     - .surface-swatch[...]         the Profile page's preview and swatches. */
+body:has(.table-shell[data-surface="black"]),
+html[data-appearance-surface="black"] body:has(.table-loading),
+.surface-swatch[data-surface="black"] {
+  background:
+    var(--surface-grain),
+    radial-gradient(ellipse at 50% 40%, #1d1d21 0%, #0c0c0e 70%) fixed;
+  background-color: #0c0c0e;
+}
+body:has(.table-shell[data-surface="green-felt"]),
+html[data-appearance-surface="green-felt"] body:has(.table-loading),
+.surface-swatch[data-surface="green-felt"] {
+  background:
+    var(--surface-grain),
+    radial-gradient(ellipse at 50% 40%, #276b43 0%, #1b5232 55%, #123a23 100%) fixed;
+  background-color: #1b5232;
+}
+body:has(.table-shell[data-surface="blue-felt"]),
+html[data-appearance-surface="blue-felt"] body:has(.table-loading),
+.surface-swatch[data-surface="blue-felt"] {
+  background:
+    var(--surface-grain),
+    radial-gradient(ellipse at 50% 40%, #275a8b 0%, #1b4469 55%, #112b47 100%) fixed;
+  background-color: #1b4469;
+}
+/* Wood is a real photo (bright cedar, vertical grain) under a dark scrim --
+   as light as it can be while every line of text on the table stays at
+   4.5:1 or better against the LIGHTEST pixel behind it. */
+body:has(.table-shell[data-surface="wood"]),
+html[data-appearance-surface="wood"] body:has(.table-loading),
+.surface-swatch[data-surface="wood"] {
+  --wood-scrim: 0.6;
+  background:
+    var(--surface-grain),
+    linear-gradient(rgb(0 0 0 / var(--wood-scrim)), rgb(0 0 0 / var(--wood-scrim))),
+    url("/textures/wood-cedar.webp") center / cover no-repeat;
+  background-color: #3a2414;
+}
+
+/* A swatch is a small box, not the viewport: its gradients belong to it
+   rather than to the window (the table's are "fixed"). Same specificity as
+   the surface rules above and later in the file, so it wins. */
+.surface-swatch[data-surface] {
+  background-attachment: scroll;
+}
+
+/* The Loading screen on a cached dark surface: light text, like the table. */
+html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-loading {
+  color: #ededed;
+}
+
+/* The dark palette on a dark surface. --background/--foreground are what
+   bg-background / text-foreground (buttons, overlays) and the page text use;
+   the shell sets its own colour because body's was computed outside it. */
+.table-shell[data-scheme="dark"],
+.surface-swatch[data-scheme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  color: var(--foreground);
+  /* Muted text, lifted: the zinc greys used for hints, labels and "X is
+     counting" are tuned for a near-black page and sink into felt and wood.
+     Remapped here, inside the table only, so every one of those lines stays
+     readable on all four surfaces without touching each component. */
+  --color-zinc-300: #e4e4e7;
+  --color-zinc-400: #e4e4e7;
+  --color-zinc-500: #dadadf;
+}
+
+/* The cut for deal draws its own dark panel on Classic; on a surface, the
+   surface shows through, with a faint shade to keep the panel's shape. */
+.table-shell[data-scheme="dark"] .cut-view {
+  background-color: rgb(0 0 0 / 0.18);
+}
+
+/* ===========================================================================
+   CARD BACKS -- each player's own choice, for their own screen only
+   (lib/appearance.ts; data-back on an ancestor of the card -- the table
+   shell, or the Profile preview -- and .card-back on FaceDownCard).
+
+   Classic is the original back, unchanged: red-900 with these diagonal
+   stripes (moved here from an inline style, so a chosen back can replace
+   them; the border and the red come from FaceDownCard's own classes).
+
+   Every other back is 5:7 WebP art. It is only REFERENCED by the rule for
+   the chosen back, so the browser fetches that one file and no other; and
+   Classic fetches nothing.
+   =========================================================================== */
+.card-back {
+  background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.16) 0 4px, transparent 4px 8px);
+}
+
+[data-back="metallic-black"] {
+  --card-back-image: url("/cards/backs/metallic-black.webp");
+  --card-back-color: #2b2b2f;
+}
+[data-back="vintage"] {
+  --card-back-image: url("/cards/backs/vintage.webp");
+  --card-back-color: #ecdfbf;
+}
+[data-back="oktoberfish"] {
+  --card-back-image: url("/cards/backs/oktoberfish.webp");
+  --card-back-color: #3a2a1b;
+}
+[data-back="plain-black"] {
+  --card-back-image: url("/cards/backs/plain-black.webp");
+  --card-back-color: #141414;
+}
+[data-back="standard-red"] {
+  --card-back-image: url("/cards/backs/standard-red.webp");
+  --card-back-color: #c4232b;
+}
+[data-back="standard-blue"] {
+  --card-back-image: url("/cards/backs/standard-blue.webp");
+  --card-back-color: #1f3a78;
+}
+
+/* The art: cover the card, centred, clipped by its rounded corners (a
+   background follows border-radius). The solid colour, close to the art,
+   shows until the image arrives, so there's no blank flash.
+
+   A thin translucent outline on every non-Classic back, so a dark back stays
+   outlined on a dark surface even at 32px -- light on a dark table, and a
+   dark hairline on Classic's white page in light mode (where a light line
+   would vanish, and the cream Vintage back would blur into the page). */
+[data-back]:not([data-back="classic"]) .card-back {
+  background-color: var(--card-back-color);
+  background-image: var(--card-back-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-color: rgb(0 0 0 / 0.28);
+}
+@media (prefers-color-scheme: dark) {
+  [data-back]:not([data-back="classic"]) .card-back {
+    border-color: rgb(255 255 255 / 0.45);
+  }
+}
+[data-scheme="dark"][data-back]:not([data-back="classic"]) .card-back,
+[data-scheme="dark"] [data-back]:not([data-back="classic"]) .card-back {
+  border-color: rgb(255 255 255 / 0.45);
+}
+
+/* The cut-for-deal fan: each sliver is a button (with Classic's red and
+   border) holding a .card-back. With a chosen back, the button takes the
+   same outline as every other back instead of the red one. */
+[data-back]:not([data-back="classic"]) .cut-fan-card {
+  background-color: var(--card-back-color);
+  border-color: rgb(255 255 255 / 0.45);
 }
