@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { HomeMenu, type YourTable, type YourTablesState } from "@/components/brand/HomeMenu";
+import { loadJoinableTables, loadMyTables, type JoinableTable, type MyTable } from "@/lib/openTables";
+import { HomeMenu, type OpenTablesState } from "@/components/brand/HomeMenu";
 
-const LIVE_GAME_STATUSES = ["cutting", "active"];
+const REFRESH_MS = 15_000;
 
 // THE SIGNED-IN HOME: reads what the main menu shows, then renders HomeMenu.
 // Read-only, through the existing RLS, and each part can fail on its own:
 //   * the profile (nickname, avatar) -- falls back to the email's name;
 //   * admin_users, the player's own row only -- the Admin link shows only if
 //     that read succeeds and finds the row;
-//   * "Your tables": the open tables the player is seated at
-//     (table_members + tables), with who else is there (table_members +
-//     profiles) and whether a game is live (games).
+//   * "Open Tables" (lib/openTables.ts): the open tables the player is
+//     seated at, and the public tables they could join -- two independent
+//     reads, refreshed every 15 seconds while the tab is visible.
 // Nothing here touches the Appearance settings or the game tables' data.
 export function HomeView({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const userId = session.user.id;
@@ -23,7 +24,6 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
   const [nickname, setNickname] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [tables, setTables] = useState<YourTablesState>({ status: "loading" });
 
   useEffect(() => {
     let cancelled = false;
@@ -48,63 +48,95 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
         if (!cancelled) setIsAdmin(!error && !!data);
       });
 
-    loadYourTables(userId).then((state) => {
-      if (!cancelled) setTables(state);
-    });
-
     return () => {
       cancelled = true;
     };
   }, [userId]);
+
+  const openTables = useOpenTables(userId);
 
   return (
     <HomeMenu
       name={nickname ?? emailName}
       avatarUrl={avatarUrl}
       isAdmin={isAdmin}
-      tables={tables}
+      openTables={openTables}
       onLogout={onLogout}
     />
   );
 }
 
-async function loadYourTables(userId: string): Promise<YourTablesState> {
-  // The open tables this player is seated at, newest seat first.
-  const { data: seats, error } = await supabase
-    .from("table_members")
-    .select("table_id, joined_at, tables!inner(id, code, status)")
-    .eq("user_id", userId)
-    .eq("tables.status", "open")
-    .order("joined_at", { ascending: false });
-  if (error) return { status: "error" };
+// The Open Tables list's data. Every 15 seconds while the tab is visible,
+// paused while it's hidden, at once when it comes back; one refresh at a
+// time; each read keeps its last good rows if it fails, so nothing already
+// on screen is wiped or flickers.
+function useOpenTables(userId: string): OpenTablesState {
+  const [mine, setMine] = useState<MyTable[] | null>(null);
+  const [joinable, setJoinable] = useState<JoinableTable[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [readAt, setReadAt] = useState(0);
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
 
-  const open = (seats ?? []).flatMap((s) => {
-    const t = s.tables as unknown as { id: string; code: string } | { id: string; code: string }[] | null;
-    const table = Array.isArray(t) ? t[0] : t;
-    return table ? [{ id: table.id, code: table.code }] : [];
-  });
-  if (open.length === 0) return { status: "ready", tables: [] };
-  const ids = open.map((t) => t.id);
+  // Starts a refresh; state changes only when its answers arrive (in the
+  // promise callback), so this can run straight from the effect below. A
+  // thrown error counts as a failed read, so inFlight can't get stuck.
+  const refresh = useCallback(() => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    Promise.all([
+      loadMyTables(userId).catch(() => null),
+      loadJoinableTables(userId).catch(() => null),
+    ]).then(([nextMine, nextJoinable]) => {
+      inFlight.current = false;
+      if (!mounted.current) return;
+      setRefreshing(false);
+      if (nextMine) setMine(nextMine);
+      if (nextJoinable) {
+        setJoinable(nextJoinable);
+        setReadAt(Date.now());
+      }
+      setFailed(nextMine === null || nextJoinable === null);
+    });
+  }, [userId]);
 
-  // Who else is seated, and whether a game is live. If either read fails, the
-  // rows still show -- just without those labels.
-  const [{ data: members }, { data: games }] = await Promise.all([
-    supabase.from("table_members").select("table_id, user_id").in("table_id", ids).neq("user_id", userId),
-    supabase.from("games").select("table_id").in("table_id", ids).in("status", LIVE_GAME_STATUSES),
-  ]);
-  const otherIds = [...new Set((members ?? []).map((m) => m.user_id))];
-  const { data: profiles } = otherIds.length
-    ? await supabase.from("profiles").select("id, nickname").in("id", otherIds)
-    : { data: [] as { id: string; nickname: string | null }[] };
-  const nameOf = new Map((profiles ?? []).map((p) => [p.id, p.nickname?.trim() || "A player"]));
-  const live = new Set((games ?? []).map((g) => g.table_id));
+  // The Refresh button: "Refreshing..." until the answer. Ignored while a
+  // refresh (timed or not) is already running.
+  const onRefresh = useCallback(() => {
+    if (inFlight.current) return;
+    setRefreshing(true);
+    refresh();
+  }, [refresh]);
 
-  const rows: YourTable[] = open.map((t) => ({
-    code: t.code,
-    others: (members ?? [])
-      .filter((m) => m.table_id === t.id)
-      .map((m) => nameOf.get(m.user_id) ?? "A player"),
-    gameLive: live.has(t.id),
-  }));
-  return { status: "ready", tables: rows };
+  useEffect(() => {
+    mounted.current = true;
+    let timer: number | null = null;
+    const start = () => {
+      if (timer === null) timer = window.setInterval(refresh, REFRESH_MS);
+    };
+    const stop = () => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    refresh();
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      mounted.current = false;
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [refresh]);
+
+  return { mine, joinable, failed, refreshing, readAt, onRefresh };
 }
