@@ -1050,6 +1050,31 @@ section.felt-panel {
   border-radius: 14px;
 }
 
+/* A destructive action on the felt (the admin's Force-End buttons): light
+   red on a dark red fill, so it reads at a glance as different from the
+   brass and outlined buttons, and its text keeps 4.5:1. */
+.danger-btn {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 0.25rem 0.75rem;
+  border: 2px solid #ff9d9d;
+  border-radius: 10px;
+  background: rgb(70 0 0 / 0.6);
+  color: var(--error-on-felt);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.danger-btn:hover {
+  background: rgb(110 0 0 / 0.7);
+}
+.danger-btn:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+.danger-btn:disabled {
+  opacity: 0.6;
+}
+
 /* Reduced motion: no deal-in, no peg drop, no fade. */
 @media (prefers-reduced-motion: reduce) {
   .hero-card {

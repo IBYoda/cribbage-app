@@ -4,8 +4,8 @@
 **Owner:** Yoda
 **Name:** the app is called **Nobs!** (shipped in PR #25). The repo, the URL and internal names stay `cribbage-app`.
 **Status:** Phase 2 complete and live. Two people can play whole 2-player matches at https://cribbage-app.vercel.app. Phase 3 (3 and 4 players) has not started.
-**Last updated:** October 14, 2026
-**Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8. **October 2026:** Phase 2 finished and deployed (Section 5, Deployment). After live testing, the counting flow changed: every hand is face-up for everyone once pegging is over, and Show Hand / Show Crib left the screen (Section 6, item 8). New Game became a two-player ready gate and a win now leaves the final board on screen (Section 7). The app was renamed **Nobs!** and got a landing page, a signed-in main menu and a matching "card room" look on its simple pages (Section 6, item 14; PR #25).
+**Last updated:** October 17, 2026
+**Revision note:** Pivoted from "full virtual table" concept to a lighter "shared deck + hand display" companion app that keeps physical boards/pegging. See Section 2.5 for why. Platform confirmed as responsive web app (not native mobile) — see Section 5. Scoring flow confirmed — see Section 6, item 8. **October 2026:** Phase 2 finished and deployed (Section 5, Deployment). After live testing, the counting flow changed: every hand is face-up for everyone once pegging is over, and Show Hand / Show Crib left the screen (Section 6, item 8). New Game became a two-player ready gate and a win now leaves the final board on screen (Section 7). The app was renamed **Nobs!** and got a landing page, a signed-in main menu and a matching "card room" look on its simple pages (Section 6, item 14; PR #25). The first friends test ran on October 15: friends signed up and played, and email confirmation is off for now (Section 5, Deployment).
 
 ---
 
@@ -86,6 +86,7 @@ The original plan (see revision history) included a fully virtual board with ani
 - **Supabase auth config:** Site URL is the production domain. Allowed Redirect URLs: `https://cribbage-app.vercel.app/**` and `http://localhost:3000/**`.
 - **One Supabase project is shared** by local development, previews and production (free plan, spend cap on). Anything run locally touches the same data players see.
 - **Free-plan quirks:** the project pauses after about a week of inactivity (resume it from the Supabase dashboard), and the built-in sign-up email has a low rate limit, so a burst of sign-ups can get throttled.
+- **Email and the friends test (October 15, 2026):** friends signed up and played on the live site. Finding: Supabase's built-in email sender allows **2 emails per hour for the whole project**, and Supabase has announced it may only deliver to addresses in the project's organization, so confirmation emails can't work for friends. **"Confirm email" is OFF** for the test: a new account is logged in straight away (Section 9, item 19). **Before a public or app-store release:** set up custom SMTP (or social sign-in) and turn confirmation back on.
 
 ---
 
@@ -224,8 +225,14 @@ Actual Phase 2 slice order, since it's drifted from the original plan once alrea
 16. **Open hands in the count (merged, PR #23):** the redesigned counting flow in Section 6, item 8, with two new read policies and a rewritten counting view.
 17. **Personal appearance (merged with this update):** table surfaces and card backs, picked on the Profile page and saved per account (Section 6, item 13). Built in three stages: the CSS surfaces (Wood is a cedar photo under a dark scrim), the six card backs (5:7 WebP in `public/cards/backs/`), then saving (`user_appearance` table, `AppearanceProvider` with a per-device cache keyed by user id, a head script so a refresh never flashes Classic, and the Appearance section with its own Save). Verified with two accounts: each sees only their own look at the same table.
 18. **Landing page and main menu — DONE (PR #25, merged to main as 86f9ff4):** the Nobs! name, the signed-out landing page, the signed-in main menu with "Your tables", and the card-room restyle of Log In, Sign Up, Start a Table, Join a Table and Profile (Section 6, item 14). No database changes.
+19. **Sign-up fix and plain pages — DONE (merged to main with this branch):** with "Confirm email" off, sign-up now returns a logged-in session, so the Sign Up page says "Account created. Taking you in..." and goes home after about a second, with a Continue link in case that is slow. If no session comes back (confirmation turned back on), it still shows the "check your email" message. Log In and Sign Up have autocomplete attributes (`email`, `current-password`, `new-password`) for password managers. The last plain pages moved to the card-room look: a 404 page (`app/not-found.tsx`), the table page's "not logged in" and "table not found / load failed" screens (Retry and "Try a different code" unchanged), and every Admin screen, with the Force-End buttons in light red on dark red so they read clearly and stay distinct from the normal buttons. The table's Loading screen and waiting view still follow the player's Appearance surface. Accounts are created and logged in exactly as before (the page only reacts to what Supabase returns), and there are no database changes.
+20. **Table options on creation — NOT STARTED:** a screen when starting a table with all three groups always visible, each marked "Coming soon" until it is built: (a) Public / Private, (b) Muggins mode, (c) Players 2 / 3 / 4, with Team or Solo for 4 players.
+21. **Available tables list (lobby) and the Public / Private toggle — NOT STARTED:** a list of tables people can join, plus the Public / Private toggle (default Private, so codes stay private). Built together with tightening the broad read access already in the queue (Section 11.5): people can see only listed (public) tables or their own. Needs a reviewed SQL change.
+22. **Muggins mode — NOT STARTED:** a toggle on table creation, like Public / Private. It turns the score strip off entirely, with no hand counting and no auto-scoring: players settle points on the Zoom call, and the app stays a shared deck of cards. The bottom bar becomes two buttons, **New Game** (with an "are you sure" confirm) and **Change Dealer** (moves the deal to the next player). To settle in that branch: how a hand ends and the next one starts without the counting step.
+23. **Phase 3: 3 and 4 players — NOT STARTED:** with Team or Solo for 4 players (see Phase 3 below).
+24. **Game-available notifications (low priority) — NOT STARTED:** a Profile toggle to be notified when a game is available. Needs a delivery method first: browser push (awkward on iPhone) or email (which needs the email sender in Section 5, Deployment).
 
-**Next up:** a stress test with real friends on the live site (portrait phones), then the queue in Section 11.5, then Phase 3 (3 and 4 players).
+**Next up:** the sign-up fix and plain pages (item 19), then table options with Public / Private and the lobby (items 20 and 21), then muggins mode (item 22), then Phase 3 (item 23), then notifications (item 24). Muggins mode comes before Phase 3 because it is small and Phase 3 is large.
 
 Update this list as slices land rather than trusting memory of the original plan — it's already been wrong once.)*
 - Shared deck + dealing logic
@@ -289,9 +296,7 @@ Small UI/UX adjustments observed while actually playing, logged here so they are
 **Queue (from live testing and review, October 2026):**
 
 - **Manual, server-validated Go button:** its own batch. Includes cleaning up duplicate go rows.
-- **Plain pages still in the old look:** `/admin`, the 404 page (there is no `app/not-found.tsx`), and the table page's "table not found / load failed" and "not logged in" screens. The last two matter for friends who mistype a code. Plan: one small follow-up branch. The table's waiting view and Loading screen intentionally follow the player's Appearance surface, so leave them.
 - **Broad read access (existing):** any signed-in user can read `tables`, `table_members` and `games`. Tighten to members only. This needs a design first, because joining by code means looking a table up by its code before you are a member. Do it as its own reviewed SQL change.
-- **Login and Sign Up have no autocomplete attributes** (`email`, `current-password`, `new-password`). A small password-manager win.
 - **`/tables/join` is now redundant** with the Join field on the home page. Decide whether to keep it as a fallback or remove it.
 - **Landscape layout (polish stage 4)** and **3 and 4 seat layout (stage 5, teams or individual, score plates per team or player).**
 - **Duplicate waiting text:** the top band still says "Waiting for another player to join..." above the new WaitingForPlayer block. Remove the band text.
@@ -302,7 +307,7 @@ Small UI/UX adjustments observed while actually playing, logged here so they are
 - **Contrast, existing and out of scope of the appearance work:** the white "D" on the amber dealer chip (about 2.1:1) and the "Your turn" pill (about 3.2:1 on Classic's green) are below 4.5:1. The pill passes in violet on the non-Classic surfaces. Fix both in one small pass. Also noted: the border of an unselected swatch in the Profile page's Appearance section is only 2.01:1. That is acceptable, since the selection is shown by the ring and the bold label.
 - **Appearance ideas, later:** face-up card designs, more surfaces, custom uploads, a "Preview on a real table" button on the Profile page. Adding a back or a surface means changing `lib/appearance.ts`, its CSS, AND the CHECK on `user_appearance` (drop and re-add the named constraint).
 - **Test live:** a win on the dealer's hand and a win on the crib (the pone's count win and the pegging wins have been tested).
-- **Friend-testing risks (friends stress test):** the Supabase free-plan project pauses after about a week of inactivity, and the sign-up email rate limit can block several friends signing up in a short window. Check both before inviting people.
+- **Friend-testing risks:** the first friends test ran on October 15, and the email finding is recorded in Section 5, Deployment. The remaining risk is that the Supabase free-plan project pauses after about a week of inactivity.
 
 ---
 

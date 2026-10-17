@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 
 // A game is "live" while it is either cutting for deal or being played. Both
 // occupy the table's one-live-game slot, so both must be listed and killable.
@@ -164,73 +165,68 @@ export default function AdminPage() {
 
   if (loading || (session && isAdmin === null)) {
     return (
-      <main className="flex flex-1 items-center justify-center">
-        <p>Loading...</p>
-      </main>
+      <CardRoomFrame backHome={false}>
+        <p className="text-center">Loading...</p>
+      </CardRoomFrame>
     );
   }
 
   if (!session) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <CardRoomFrame backHome={false}>
         <p>You need to be logged in to view this page.</p>
-        <Link href="/login" className="underline">
+        <Link href="/login" className="peg-btn peg-btn--brass">
           Log in
         </Link>
-      </main>
+      </CardRoomFrame>
     );
   }
 
   if (!isAdmin) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <CardRoomFrame>
         <p>You are not authorized to view this page.</p>
-        <Link href="/" className="underline">
-          Back home
-        </Link>
-      </main>
+      </CardRoomFrame>
     );
   }
 
   return (
-    <main className="flex flex-1 flex-col items-center gap-6 p-8">
-      <h1 className="text-2xl font-semibold">Admin: Active Tables</h1>
-
-      {error && <p className="text-sm text-red-600">{error}</p>}
+    <CardRoomFrame title="Admin: Active Tables">
+      {error && <p className="text-sm text-[var(--error-on-felt)]">{error}</p>}
 
       {tables.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">No open tables right now.</p>
+        <p className="text-sm">No open tables right now.</p>
       ) : (
-        <ul className="flex w-full max-w-lg flex-col gap-3">
+        <ul className="flex w-full flex-col gap-3">
           {tables.map((t) => (
             <li
               key={t.id}
-              className="flex flex-col gap-2 rounded border border-zinc-300 p-4 dark:border-zinc-700"
+              className="flex flex-col gap-2 rounded-xl border border-[rgb(226_193_125/0.4)] bg-black/25 p-4"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-xl font-bold tracking-widest">{t.code}</span>
                 <button
                   onClick={() => handleForceEndTable(t.id)}
                   disabled={actionInFlight === t.id}
-                  className="rounded border border-red-600 px-3 py-1 text-sm text-red-600 disabled:opacity-50"
+                  className="danger-btn"
                 >
                   {actionInFlight === t.id ? "Ending..." : "Force-End Table"}
                 </button>
               </div>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              <p className="text-sm">
                 {t.memberCount} member{t.memberCount === 1 ? "" : "s"} · created{" "}
                 {new Date(t.created_at).toLocaleString()}
               </p>
               {t.activeGame && (
-                <div className="flex items-center justify-between rounded bg-zinc-100 px-3 py-2 dark:bg-zinc-800">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-black/30 px-3 py-2">
                   {/* A cutting game has no cards dealt yet -- worth
                       distinguishing, since "abandoned mid-cut" is a likely
                       reason to be killing one from here. */}
                   <span
                     className={
                       t.activeGame.status === "cutting"
-                        ? "text-sm text-amber-700 dark:text-amber-500"
-                        : "text-sm text-green-700 dark:text-green-500"
+                        ? "text-sm text-[var(--brass-light)]"
+                        : "text-sm text-[var(--success-on-felt)]"
                     }
                   >
                     {t.activeGame.status === "cutting"
@@ -241,7 +237,7 @@ export default function AdminPage() {
                   <button
                     onClick={() => handleForceEndGame(t.id, t.activeGame!.id)}
                     disabled={actionInFlight === t.activeGame.id}
-                    className="rounded border border-red-600 px-3 py-1 text-sm text-red-600 disabled:opacity-50"
+                    className="danger-btn"
                   >
                     {actionInFlight === t.activeGame.id ? "Ending..." : "Force-End Game"}
                   </button>
@@ -251,10 +247,6 @@ export default function AdminPage() {
           ))}
         </ul>
       )}
-
-      <Link href="/" className="text-sm underline">
-        Back home
-      </Link>
-    </main>
+    </CardRoomFrame>
   );
 }
