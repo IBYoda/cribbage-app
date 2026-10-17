@@ -1,25 +1,52 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { AuthCard } from "@/components/brand/AuthCard";
 
+// How long "Taking you in..." shows before going home.
+const REDIRECT_DELAY_MS = 1000;
+
 export default function SignUpPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
+  // Signed in straight away (email confirmation is off): show the way home.
+  const [signedIn, setSignedIn] = useState(false);
+  const redirectTimer = useRef<number | null>(null);
+
+  // No redirect after the page is gone.
+  useEffect(() => {
+    return () => {
+      if (redirectTimer.current !== null) window.clearTimeout(redirectTimer.current);
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("loading");
     setMessage(null);
 
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({ email, password });
 
     if (error) {
       setStatus("error");
       setMessage(error.message);
+      return;
+    }
+
+    // A session means the account is already logged in (email confirmation
+    // is off in Supabase): straight home after a beat. No session means a
+    // confirmation email is on its way.
+    if (data.session) {
+      setStatus("success");
+      setSignedIn(true);
+      setMessage("Account created. Taking you in...");
+      redirectTimer.current = window.setTimeout(() => router.push("/"), REDIRECT_DELAY_MS);
       return;
     }
 
@@ -44,6 +71,7 @@ export default function SignUpPage() {
           <input
             id="email"
             type="email"
+            autoComplete="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -58,6 +86,7 @@ export default function SignUpPage() {
           <input
             id="password"
             type="password"
+            autoComplete="new-password"
             required
             minLength={6}
             value={password}
@@ -84,6 +113,12 @@ export default function SignUpPage() {
           >
             {message}
           </p>
+        )}
+
+        {signedIn && (
+          <Link href="/" className="footer-link self-center">
+            Continue
+          </Link>
         )}
       </form>
     </AuthCard>

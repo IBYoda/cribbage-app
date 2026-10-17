@@ -14,6 +14,7 @@ import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { useAppearance } from "@/components/AppearanceProvider";
+import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
 import { countingView } from "@/components/table/countingView";
@@ -1417,36 +1418,35 @@ export default function TablePage() {
     );
   }
 
+  // Not logged in, and table not found / load failed: the card-room look
+  // (CardRoomFrame), not the player's table surface -- there is no table here.
   if (!session) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <CardRoomFrame backHome={false}>
         <p>You need to be logged in to join a table.</p>
-        <Link href="/login" className="underline">
+        <Link href="/login" className="peg-btn peg-btn--brass">
           Log in
         </Link>
-      </main>
+      </CardRoomFrame>
     );
   }
 
   if (error) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
-        <p className="text-red-600">{error}</p>
-        <div className="flex gap-4">
+      <CardRoomFrame backHome={false}>
+        <p className="text-[var(--error-on-felt)]">{error}</p>
+        <div className="flex flex-col gap-2.5">
           <button
             onClick={() => setRetryKey((k) => k + 1)}
-            className="rounded bg-foreground px-4 py-2 text-background"
+            className="peg-btn peg-btn--brass"
           >
             Retry
           </button>
-          <Link
-            href="/tables/join"
-            className="rounded border border-zinc-300 px-4 py-2 dark:border-zinc-700"
-          >
+          <Link href="/tables/join" className="peg-btn peg-btn--ghost">
             Try a different code
           </Link>
         </div>
-      </main>
+      </CardRoomFrame>
     );
   }
 
