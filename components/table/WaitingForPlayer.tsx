@@ -5,7 +5,17 @@ import { useEffect, useState } from "react";
 // A host alone at the table: what they're waiting for, and the code to send
 // a friend, big, with a Copy button. Sized for the middle region (see
 // .waiting-stage in app/globals.css): stacked, or one row in a flat window.
-export function WaitingForPlayer({ code }: { code: string }) {
+// A 2-player table waits for "a second player", as always; a 3- or 4-player
+// table says how many are here ("Waiting for players (2 of 4)").
+export function WaitingForPlayer({
+  code,
+  seated = 1,
+  capacity = 2,
+}: {
+  code: string;
+  seated?: number;
+  capacity?: number;
+}) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   // The confirmation reverts after a moment.
@@ -22,7 +32,9 @@ export function WaitingForPlayer({ code }: { code: string }) {
   return (
     <div className="waiting-stage">
       <div className="flex flex-col items-center leading-tight">
-        <p className="text-lg font-semibold">Waiting for a second player</p>
+        <p className="text-lg font-semibold">
+          {capacity === 2 ? "Waiting for a second player" : `Waiting for players (${seated} of ${capacity})`}
+        </p>
         <p className="text-sm text-zinc-500">Send them this table code:</p>
       </div>
       <div className="flex items-center gap-3">

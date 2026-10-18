@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
+import { PHASE3_TABLES } from "@/lib/featureFlags";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -35,6 +36,10 @@ export default function NewTablePage() {
   // The Muggins confirmation (MugginsNotice). Only its "Start Muggins table"
   // creates the table; a Regular table never sees it.
   const [mugginsNoticeOpen, setMugginsNoticeOpen] = useState(false);
+  // How many players: 2, or 3 and 4 behind the Phase 3 flag. Muggins is
+  // 2-player only (the database refuses anything else too), so each greys
+  // out the other. Always sent; 4 players play Teams.
+  const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -54,13 +59,20 @@ export default function NewTablePage() {
 
       const { data, error } = await supabase
         .from("tables")
-        .insert({ code, created_by: session.user.id, is_public: isPublic, is_muggins: isMuggins })
+        .insert({
+          code,
+          created_by: session.user.id,
+          is_public: isPublic,
+          is_muggins: isMuggins,
+          max_players: maxPlayers,
+          ...(maxPlayers === 4 ? { team_mode: "teams" } : {}),
+        })
         .select("code")
         .single();
 
       if (!error) {
         // Straight to the table, where the creator joins and waits for the
-        // second player (the table page shows the code to send). replace, not
+        // other players (the table page shows the code to send). replace, not
         // push: Back from the table shouldn't land on this page, one tap away
         // from opening a second table.
         setStatus("success");
@@ -108,6 +120,8 @@ export default function NewTablePage() {
         onVisibilityChange={setIsPublic}
         isMuggins={isMuggins}
         onMugginsChange={setIsMuggins}
+        maxPlayers={maxPlayers}
+        onMaxPlayersChange={setMaxPlayers}
       />
 
       {/* Stays disabled once created, while the table page loads -- a second
@@ -143,21 +157,34 @@ export default function NewTablePage() {
   );
 }
 
-// THE TABLE OPTIONS: three groups, always all visible. Visibility and
-// Scoring are live; Players is shown so players know it's coming, as real
-// disabled controls (skipped by Tab and arrow keys, announced as
-// unavailable). Nothing is sent for it -- that column doesn't exist yet.
+// THE TABLE OPTIONS: three groups, always all visible. Visibility, Scoring
+// and Players are all live and sent (tables.is_public, is_muggins,
+// max_players). With the Phase 3 flag off (lib/featureFlags.ts), 3 and 4
+// players are real disabled controls marked "Coming soon" (skipped by Tab
+// and arrow keys, announced as unavailable), exactly as before. With it on
+// they can be picked -- except with Muggins, which is 2-player only, so
+// each greys out the other. 4 players play Teams: Team is shown checked
+// and fixed, and Solo is still "Coming soon".
 function TableOptions({
   isPublic,
   onVisibilityChange,
   isMuggins,
   onMugginsChange,
+  maxPlayers,
+  onMaxPlayersChange,
 }: {
   isPublic: boolean;
   onVisibilityChange: (isPublic: boolean) => void;
   isMuggins: boolean;
   onMugginsChange: (isMuggins: boolean) => void;
+  maxPlayers: 2 | 3 | 4;
+  onMaxPlayersChange: (maxPlayers: 2 | 3 | 4) => void;
 }) {
+  // Muggins is 2-player only.
+  const mugginsBlocked = maxPlayers !== 2;
+  // 3 or 4: only behind the flag, and never with Muggins.
+  const morePlayersNote = !PHASE3_TABLES ? undefined : isMuggins ? "Not with Muggins" : null;
+  const morePlayersDisabled = !PHASE3_TABLES || isMuggins;
   return (
     <div className="flex flex-col gap-5">
       <fieldset className="flex flex-col gap-2" aria-describedby="visibility-help">
@@ -199,6 +226,8 @@ function TableOptions({
             label="Muggins play"
             checked={isMuggins}
             onChange={() => onMugginsChange(true)}
+            disabled={mugginsBlocked}
+            note={mugginsBlocked ? "2 players only" : null}
           />
         </div>
         <p id="scoring-help" className="text-sm">
@@ -206,45 +235,83 @@ function TableOptions({
         </p>
       </fieldset>
 
-      <fieldset className="flex flex-col gap-2">
+      <fieldset className="flex flex-col gap-2" aria-describedby={PHASE3_TABLES ? "players-help" : undefined}>
         <legend className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
           Players
         </legend>
         <div className="grid grid-cols-3 gap-2">
-          <OptionCard name="players" label="2" checked onChange={() => {}} />
-          <OptionCard name="players" label="3" checked={false} disabled />
-          <OptionCard name="players" label="4" checked={false} disabled />
+          <OptionCard name="players" label="2" checked={maxPlayers === 2} onChange={() => onMaxPlayersChange(2)} />
+          <OptionCard
+            name="players"
+            label="3"
+            checked={maxPlayers === 3}
+            onChange={() => onMaxPlayersChange(3)}
+            disabled={morePlayersDisabled}
+            note={morePlayersNote}
+          />
+          <OptionCard
+            name="players"
+            label="4"
+            checked={maxPlayers === 4}
+            onChange={() => onMaxPlayersChange(4)}
+            disabled={morePlayersDisabled}
+            note={morePlayersNote}
+          />
         </div>
-        <fieldset className="flex flex-col gap-2 pl-3" disabled>
-          <legend className="mb-1 text-sm">
-            With 4 players: Team or Solo <span className="coming-soon">Coming soon</span>
-          </legend>
-          <div className="grid grid-cols-2 gap-2">
-            <OptionCard name="four-player-mode" label="Team" checked={false} disabled />
-            <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
-          </div>
-        </fieldset>
+        {PHASE3_TABLES ? (
+          <>
+            <fieldset className="flex flex-col gap-2 pl-3" disabled={maxPlayers !== 4}>
+              <legend className="mb-1 text-sm">With 4 players: Team or Solo</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {/* Fixed: the only 4-player mode for now. */}
+                <OptionCard name="four-player-mode" label="Team" checked={maxPlayers === 4} />
+                <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
+              </div>
+            </fieldset>
+            <p id="players-help" className="text-sm">
+              {maxPlayers === 4
+                ? "Two teams: partners sit opposite and share one score"
+                : maxPlayers === 3
+                  ? "Everyone plays for themselves"
+                  : "Head to head"}
+            </p>
+          </>
+        ) : (
+          <fieldset className="flex flex-col gap-2 pl-3" disabled>
+            <legend className="mb-1 text-sm">
+              With 4 players: Team or Solo <span className="coming-soon">Coming soon</span>
+            </legend>
+            <div className="grid grid-cols-2 gap-2">
+              <OptionCard name="four-player-mode" label="Team" checked={false} disabled />
+              <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
+            </div>
+          </fieldset>
+        )}
       </fieldset>
     </div>
   );
 }
 
 // One choice: a real radio inside its label (see .option-card in
-// app/globals.css). A disabled one says "Coming soon" -- part of its label,
-// so a screen reader hears it too.
+// app/globals.css). A disabled one says why -- "Coming soon" unless a note
+// says otherwise ("2 players only") -- as part of its label, so a screen
+// reader hears it too. note={null} shows nothing.
 function OptionCard({
   name,
   label,
   checked,
   onChange,
   disabled = false,
+  note,
 }: {
   name: string;
   label: string;
   checked: boolean;
   onChange?: () => void;
   disabled?: boolean;
+  note?: string | null;
 }) {
+  const reason = disabled ? (note === undefined ? "Coming soon" : note) : null;
   return (
     <label className="option-card">
       <input
@@ -260,7 +327,7 @@ function OptionCard({
       <span className="option-dot" aria-hidden="true" />
       <span className="flex flex-col leading-tight">
         <span className="font-semibold">{label}</span>
-        {disabled && <span className="coming-soon">Coming soon</span>}
+        {reason && <span className="coming-soon">{reason}</span>}
       </span>
     </label>
   );
