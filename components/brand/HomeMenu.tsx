@@ -209,6 +209,9 @@ function OpenTables({
                     <span className="text-sm">
                       {t.isMuggins && <MugginsLead />}
                       {timeAgo(t.createdAt, readAt)}
+                      {/* How full it is, for 3 and 4 players only: a
+                          listed 2-player table always has 1 of 2. */}
+                      {t.capacity !== 2 && ` · ${t.seated}/${t.capacity} seated`}
                     </span>
                   </span>
                 </span>
@@ -247,13 +250,17 @@ function MugginsLead() {
 }
 
 // "Game in progress" / "Between games · with Elsa" / "Waiting for a second
-// player" -- the same lines the old "Your tables" list used.
+// player" -- the same lines the old "Your tables" list used. A 3- or
+// 4-player table that isn't full yet says "Waiting for players (2 of 4)".
 function myTableStatus(t: MyTable) {
+  const seated = t.others.length + 1;
   const base = t.gameLive
     ? "Game in progress"
-    : t.others.length > 0
-      ? "Between games"
-      : "Waiting for a second player";
+    : t.capacity !== 2 && seated < t.capacity
+      ? `Waiting for players (${seated} of ${t.capacity})`
+      : t.others.length > 0
+        ? "Between games"
+        : "Waiting for a second player";
   return t.others.length > 0 ? `${base} · with ${t.others.join(", ")}` : base;
 }
 

@@ -36,6 +36,10 @@ type TableRow = {
   // Who created it: the creator never sees the joiner's Muggins notice (they
   // saw it when creating).
   created_by: string;
+  // TABLE SIZE (Phase 3, chosen at creation): 2, 3 or 4 seats, and for 4
+  // whether partners play as teams. Every table before Phase 3 is 2 / teams.
+  max_players: number;
+  team_mode: string;
 };
 
 type Member = {
@@ -216,6 +220,9 @@ function revealKey(row: {
 // client, the admin view, leave-table and the timeout sweep.
 const LIVE_GAME_STATUSES = ["cutting", "active"];
 
+// The 2-player game this screen still plays: the discard, the crib and the
+// count. How many seats a table has is tables.max_players (see capacity
+// below); 3- and 4-player play arrives with app stages A2 to A4.
 const REQUIRED_PLAYERS = 2;
 const CARDS_DEALT = 6;
 const CARDS_TO_DISCARD = 2;
@@ -873,7 +880,7 @@ export default function TablePage() {
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status, ended_reason, is_muggins, created_by")
+        .select("id, code, status, ended_reason, is_muggins, created_by, max_players, team_mode")
         .eq("code", code)
         .maybeSingle();
 
@@ -895,10 +902,10 @@ export default function TablePage() {
       // THE JOINER'S MUGGINS NOTICE. A Muggins table asks a new player to
       // agree before they are seated: not the creator (they agreed when
       // creating), not a player already seated (a refresh, Rejoin), and not
-      // a full table, which goes on exactly as before (there is no seat
-      // limit on the server: a third player is seated and told the table
-      // needs exactly 2). If the seats can't be read, ask anyway -- never
-      // seat without agreement.
+      // a full table (all max_players seats taken), which goes on exactly as
+      // before: the seat is refused by the server ("This table is full.").
+      // If the seats can't be read, ask anyway -- never seat without
+      // agreement.
       if (tableRow.is_muggins && tableRow.created_by !== session!.user.id) {
         const { data: seats, error: seatsError } = await supabase
           .from("table_members")
@@ -907,7 +914,7 @@ export default function TablePage() {
         if (cancelled) return;
         const seated = (seats ?? []).map((m) => m.user_id);
         const isMember = !seatsError && seated.includes(session!.user.id);
-        const isFull = !seatsError && seated.length >= REQUIRED_PLAYERS;
+        const isFull = !seatsError && seated.length >= (tableRow.max_players ?? 2);
         if (!isMember && !isFull) {
           setPendingJoin(tableRow);
           return;
@@ -1811,11 +1818,17 @@ export default function TablePage() {
   // array rather than a single hardcoded opponent so 3- and 4-player tables
   // (Phase 3) slot in without restructuring the layout.
   const opponents = members.filter((m) => m.user_id !== session.user.id);
-  const canStartGame = members.length === REQUIRED_PLAYERS;
+  // THE TABLE'S SIZE: tables.max_players, 2 for every table before Phase 3.
+  // This screen plays 2-player games only, so a 3- or 4-player table waits
+  // to fill and then holds (see the holding message below): no working New
+  // Game until the waiting room (stage A2).
+  const capacity = table?.max_players ?? 2;
+  const isTwoPlayerTable = capacity === 2;
+  const canStartGame = isTwoPlayerTable && members.length === capacity;
   // Alone at the table with no game and no result on screen. Only once the
   // roster has loaded -- an empty roster before then isn't "alone".
   const waitingAlone =
-    membersLoaded && !activeGame && !finishedGame && members.length < REQUIRED_PLAYERS;
+    membersLoaded && !activeGame && !finishedGame && members.length < capacity;
 
   const phase = activeGame?.phase ?? "discard";
   // STATUS BEFORE PHASE: every phase flag requires a live, dealt game first.
@@ -2227,10 +2240,10 @@ export default function TablePage() {
           </>
         )
       ) : waitingAlone ? (
-        // A host alone at the table, with no result to show: what they are
-        // waiting for, and the code to send. New Game needs two players, so
-        // its disabled button is left out here.
-        <WaitingForPlayer code={code} />
+        // A host waiting for the table to fill, with no result to show: what
+        // they are waiting for, and the code to send. New Game needs a full
+        // table, so its disabled button is left out here.
+        <WaitingForPlayer code={code} seated={members.length} capacity={capacity} />
       ) : (
         <div className="final-board">
           {/* THE FINAL BOARD: the hand's last run as it stood, with its
@@ -2279,34 +2292,43 @@ export default function TablePage() {
                 player's tap shows above the button; mine greys it out, with
                 who we're waiting for below. A repeat tap is quiet server-side
                 too. Leave stays available throughout. */}
-            <div className="result-stage__actions">
-              {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
-                <p className="text-sm font-medium">
-                  {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
-                  {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
-                </p>
-              )}
-              <button
-                onClick={handleStartNewGame}
-                disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
-                className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
-              >
-                {gameStatus === "creating"
-                  ? newGameGated && othersNotReadyForNewGame.length > 0
-                    ? "Sending..."
-                    : "Dealing..."
-                  : "New Game"}
-              </button>
-              {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
-                <p className="text-sm text-zinc-500">
-                  Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
-                </p>
-              )}
-            </div>
-            {!canStartGame && (
+            {!isTwoPlayerTable ? (
+              // A full 3- or 4-player table: nothing to start yet (stage A2).
               <p className="text-sm text-zinc-500">
-                Needs exactly {REQUIRED_PLAYERS} players ({members.length} here).
+                {members.length} of {capacity} seated. Starting 3- and 4-player games is coming soon.
               </p>
+            ) : (
+              <>
+                <div className="result-stage__actions">
+                  {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
+                    <p className="text-sm font-medium">
+                      {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
+                      {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
+                    </p>
+                  )}
+                  <button
+                    onClick={handleStartNewGame}
+                    disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
+                    className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
+                  >
+                    {gameStatus === "creating"
+                      ? newGameGated && othersNotReadyForNewGame.length > 0
+                        ? "Sending..."
+                        : "Dealing..."
+                      : "New Game"}
+                  </button>
+                  {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
+                    <p className="text-sm text-zinc-500">
+                      Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+                    </p>
+                  )}
+                </div>
+                {!canStartGame && (
+                  <p className="text-sm text-zinc-500">
+                    Needs exactly {capacity} players ({members.length} here).
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>
