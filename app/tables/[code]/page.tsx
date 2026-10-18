@@ -15,7 +15,7 @@ import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { PHASE3_TABLES } from "@/lib/featureFlags";
-import { buildPlates, cribCountDuringDiscard, handSizes, seatOrderFrom, seatPlaces } from "@/lib/phase3";
+import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, seatOrderFrom, seatPlaces } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
@@ -1898,12 +1898,10 @@ export default function TablePage() {
   const isHost = hostId === session.user.id;
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
-  // The waiting room: no game and no result on screen. After the discard,
-  // the holding state: the starter is turned but this screen can't play the
-  // hand yet (stage A4). The discard itself is played (stage A3).
+  // The waiting room: no game and no result on screen. (The holding state
+  // after pegging, inPhase3Holding, is defined below with the hold it
+  // follows.)
   const inWaitingRoom = isPhase3Table && !activeGame && !finishedGame;
-  const inPhase3Holding =
-    isPhase3Table && !!activeGame && activeGame.status === "active" && (activeGame.phase ?? "discard") !== "discard";
   // The game's players (seat order) and how many: hand sizes, the crib, the
   // seats and the plates follow them. 2 for every 2-player table, and for
   // every table with the Phase 3 flag off (as before Phase 3).
@@ -1948,6 +1946,11 @@ export default function TablePage() {
     isActive && (phase === "counting" || phase === "done") && pegHoldKey === currentHandKey;
   // The pegging layout is on screen: during play, or holding after it.
   const pegView = isPlaying || onPegHold;
+  // PHASE 3 COUNTING HOLDING (3 and 4 players, flag on): the discard and
+  // pegging are played; once the hand reaches counting -- and this screen
+  // has left the hold that shows the last run -- it holds until the counting
+  // view (stage A5). Never on a 2-player table.
+  const inPhase3Holding = isPhase3Table && isActive && (phase === "counting" || phase === "done") && !onPegHold;
 
   // game_hands.cards is the immutable four-card hand; what you still HOLD is
   // that minus what you've already played.
@@ -2028,7 +2031,7 @@ export default function TablePage() {
   // layout mock calls too. 2-player: the one opponent.
   const countOpp = opponents[0];
   const view =
-    isCountingOrDone && activeGame?.dealer_id && countOpp
+    isCountingOrDone && activeGame?.dealer_id && countOpp && !inPhase3Holding
       ? countingView({
           myId: session.user.id,
           dealerId: activeGame.dealer_id,
@@ -2080,8 +2083,7 @@ export default function TablePage() {
       // Derived from the public play log -- how many of their four they've
       // laid down. Reveals nothing: which cards they've played is already
       // public, and hand sizes are visible in a real game anyway.
-      const played = plays.filter((p) => p.kind === "play" && p.user_id === opponentId).length;
-      return Math.max(sizes.kept - played, 0);
+      return cardsLeft(sizes.kept, plays, opponentId);
     }
     if (isCountingOrDone) return sizes.kept;
     return discardedBy.includes(opponentId) ? sizes.kept : sizes.dealt;
@@ -2263,12 +2265,12 @@ export default function TablePage() {
           onAcknowledge={handleAcknowledgeCut}
         />
       ) : inPhase3Holding ? (
-        // PHASE 3 HOLDING: everyone has discarded and the starter is turned,
-        // but this screen can't play a 3- or 4-player hand yet (A4). My hand
-        // is in the hand row, read-only; Leave (which ends the match) is in
-        // the header.
+        // PHASE 3 HOLDING: the hand is pegged and on to counting, but this
+        // screen can't count a 3- or 4-player hand yet (A5). My hand is in
+        // the hand row, read-only; Leave (which ends the match) is in the
+        // header.
         <div className="phase3-holding">
-          <p className="text-base font-medium">Play is coming soon.</p>
+          <p className="text-base font-medium">Counting is coming soon.</p>
           <p className="text-sm text-zinc-500">Your hand and the starter are below. Leave ends the match for everyone.</p>
         </div>
       ) : activeGame ? (

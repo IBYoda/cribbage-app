@@ -21,6 +21,14 @@ export function cribCountDuringDiscard(playerCount: number, discardedCount: numb
   return discardedCount * handSizes(playerCount).discard + (playerCount === 3 ? 1 : 0);
 }
 
+// CARDS STILL HELD during pegging, from the public play log: the kept four
+// minus the cards this player has played (never below 0). The same for 2, 3
+// and 4 players -- go rows are not cards.
+export function cardsLeft(kept: number, plays: { user_id: string; kind: string }[], userId: string) {
+  const played = plays.filter((p) => p.kind === "play" && p.user_id === userId).length;
+  return Math.max(kept - played, 0);
+}
+
 // SEAT ORDER: games.players is a snapshot in seat order (clockwise). From my
 // point of view the table starts with me and goes clockwise. A viewer who
 // isn't a player sees the list as it is.
