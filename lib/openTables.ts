@@ -12,6 +12,7 @@ const MAX_PLAYERS = 2;
 // An open table the viewer is seated at (any visibility).
 export type MyTable = {
   code: string;
+  isMuggins: boolean; // a Muggins table: listed with the "Muggins · no scoring" tag
   others: string[]; // the other players' names
   gameLive: boolean; // a game is being cut for or played
 };
@@ -19,6 +20,7 @@ export type MyTable = {
 // A public table the viewer could join.
 export type JoinableTable = {
   code: string;
+  isMuggins: boolean; // likewise
   hostName: string; // the one seated player
   hostAvatar: string | null;
   createdAt: string;
@@ -30,16 +32,17 @@ export type JoinableTable = {
 export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
   const { data: seats, error } = await supabase
     .from("table_members")
-    .select("table_id, joined_at, tables!inner(id, code, status)")
+    .select("table_id, joined_at, tables!inner(id, code, status, is_muggins)")
     .eq("user_id", userId)
     .eq("tables.status", "open")
     .order("joined_at", { ascending: false });
   if (error) return null;
 
   const open = (seats ?? []).flatMap((s) => {
-    const t = s.tables as unknown as { id: string; code: string } | { id: string; code: string }[] | null;
+    type Row = { id: string; code: string; is_muggins: boolean | null };
+    const t = s.tables as unknown as Row | Row[] | null;
     const table = Array.isArray(t) ? t[0] : t;
-    return table ? [{ id: table.id, code: table.code }] : [];
+    return table ? [{ id: table.id, code: table.code, isMuggins: table.is_muggins === true }] : [];
   });
   if (open.length === 0) return [];
   const ids = open.map((t) => t.id);
@@ -57,6 +60,7 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
 
   return open.map((t) => ({
     code: t.code,
+    isMuggins: t.isMuggins,
     others: (members ?? [])
       .filter((m) => m.table_id === t.id)
       .map((m) => nameOf.get(m.user_id) ?? "A player"),
@@ -77,7 +81,7 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
 export async function loadJoinableTables(userId: string): Promise<JoinableTable[] | null> {
   const { data, error } = await supabase
     .from("tables")
-    .select("code, status, is_public, created_at, table_members(user_id)")
+    .select("code, status, is_public, is_muggins, created_at, table_members(user_id)")
     .eq("status", "open")
     .eq("is_public", true)
     .order("created_at", { ascending: false });
@@ -92,7 +96,7 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
       seated.length >= 1 &&
       seated.length < MAX_PLAYERS;
     if (!listed) return [];
-    return [{ code: t.code, createdAt: t.created_at, host: seated[0] }];
+    return [{ code: t.code, isMuggins: t.is_muggins === true, createdAt: t.created_at, host: seated[0] }];
   });
   if (joinable.length === 0) return [];
 
@@ -107,6 +111,7 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
     const host = byId.get(t.host);
     return {
       code: t.code,
+      isMuggins: t.isMuggins,
       hostName: host?.nickname?.trim() || "A player",
       hostAvatar: host?.avatar_url ?? null,
       createdAt: t.createdAt,

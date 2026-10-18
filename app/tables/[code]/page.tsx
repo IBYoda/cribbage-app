@@ -27,6 +27,10 @@ type TableRow = {
   id: string;
   code: string;
   status: string;
+  // MUGGINS (chosen at creation, never changed): the app keeps no visible
+  // score -- no score strip, no score flash, no count numbers, no score in
+  // the result -- and the players keep their own.
+  is_muggins: boolean;
 };
 
 type Member = {
@@ -105,13 +109,17 @@ type Game = {
   // "ready / waiting" state is derived from this, never from local state, so
   // a refresh shows exactly what the server knows.
   ready_by: string[];
+  // MUGGINS: who has claimed the win of this live match, waiting for the
+  // other player to confirm it (claim_win / confirm_win). Always null on a
+  // normal table. Carried here, not read yet.
+  win_claim_by: string | null;
 };
 
 // Must stay a single string LITERAL, not a concatenation: supabase-js infers
 // the returned row shape from this exact literal type, and "a" + "b" widens to
 // plain `string`, which silently collapses the result type to an error type.
 const GAME_COLUMNS =
-  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id, hand_no, ready_by";
+  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id, hand_no, ready_by, win_claim_by";
 
 // The last game to end in a win, kept after the live game is gone so the
 // result stays on screen (and survives a reload) until the next game starts.
@@ -224,17 +232,19 @@ export default function TablePage() {
   // MY card back and table surface (my screen only). The table isn't drawn
   // until they're known, so it never appears in the wrong look first.
   const appearance = useAppearance();
-  // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
-  // hand and crib count numbers on this screen (the recap, count flashes, a
-  // count win's breakdown). Today it is just this player's Hide counts
-  // setting; a later table option can OR into it here. The score strip is
-  // never affected.
-  const hideCountNumbers = appearance.hideCounts;
   const code = params.code;
 
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [table, setTable] = useState<TableRow | null>(null);
+  // MUGGINS: no visible scoring on this table, for everyone (see TableRow).
+  const isMuggins = table?.is_muggins === true;
+  // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
+  // hand and crib count numbers on this screen (the recap, count flashes, a
+  // count win's breakdown): this player's Hide counts setting, or a Muggins
+  // table, whatever the setting. The score strip is never affected by the
+  // setting (a Muggins table has none at all).
+  const hideCountNumbers = appearance.hideCounts || isMuggins;
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeGame, setActiveGame] = useState<Game | null>(null);
@@ -681,7 +691,7 @@ export default function TablePage() {
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status, ended_reason")
+        .select("id, code, status, ended_reason, is_muggins")
         .eq("code", code)
         .maybeSingle();
 
@@ -1136,6 +1146,7 @@ export default function TablePage() {
             winner_id: string | null;
             hand_no: number | null;
             ready_by: string[] | null;
+            win_claim_by: string | null;
           };
           // A new game arrives as EITHER 'cutting' (no decisive previous
           // result -- first game, a non-win ending, a changed roster: cut for
@@ -1177,6 +1188,7 @@ export default function TablePage() {
               winner_id: newGame.winner_id,
               hand_no: newGame.hand_no ?? 1,
               ready_by: newGame.ready_by ?? [],
+              win_claim_by: newGame.win_claim_by ?? null,
             });
             // Set NOW, not one render later: the UPDATEs that follow (a
             // discard, a cut card) are matched against this, and can arrive
@@ -1229,6 +1241,7 @@ export default function TablePage() {
             winner_id: string | null;
             hand_no: number | null;
             ready_by: string[] | null;
+            win_claim_by: string | null;
           };
           // THE WON GAME ON SCREEN: its only change after it ends is a New
           // Game tap (ready_by). Merge that and nothing else -- a union, so an
@@ -1361,6 +1374,7 @@ export default function TablePage() {
                   winner_id: updatedGame.winner_id,
                   hand_no: updatedGame.hand_no ?? current.hand_no,
                   ready_by: updatedGame.ready_by ?? [],
+                  win_claim_by: updatedGame.win_claim_by ?? null,
                 }
               : current
           );
@@ -1707,13 +1721,16 @@ export default function TablePage() {
     <TableHeader
       code={code}
       handNo={isActive ? (activeGame?.hand_no ?? null) : null}
+      muggins={isMuggins}
       right={
         <>
           {/* Hide counts, saved at once. Not while Leave is asking to
               confirm, so the header's right side never grows past one
-              line. */}
+              line. On a Muggins table it is locked: nothing to show, so
+              nothing to hide, and nothing is saved. */}
           {appearance.ready && !leaveConfirming && (
             <CountsToggle
+              locked={isMuggins}
               hidden={appearance.hideCounts}
               onSave={(nextHidden) =>
                 appearance.save({
@@ -1909,7 +1926,8 @@ export default function TablePage() {
                     : `${winner ? displayName(winner) : "A player who has left"} wins!`}
                   {/* How it ended: the winner's last award IS the winning one,
                       since nothing can score after the game ends. */}
-                  {winner && (
+                  {/* Not on a Muggins table: it shows no score anywhere. */}
+                  {winner && !isMuggins && (
                     <>
                       {" "}
                       {winner.score}
@@ -1965,7 +1983,9 @@ export default function TablePage() {
   // The score flash, between the piles, above Sort. Not mounted until the
   // roster has loaded: see ScoreFlash. The same element in both pile rows
   // below, so the winning point's flash carries over onto the final board.
-  const scoreFlash = membersLoaded ? (
+  // Never on a Muggins table (pegging's Go and last-card labels are not part
+  // of it, and stay).
+  const scoreFlash = membersLoaded && !isMuggins ? (
     <ScoreFlash plates={plates} hideCountAwards={hideCountNumbers} />
   ) : null;
 
@@ -2080,7 +2100,11 @@ export default function TablePage() {
       // so the table doesn't jump when cards are dealt -- except during the
       // cut, which needs the space and has no hand to show.
       hand={isCutting ? null : hand}
-      scores={<ScoreStrip plates={plates} />}
+      // A Muggins table has no score strip: the row is left empty, which
+      // takes no height.
+      // ===== MUGGINS STAGE 3: the "I win" / "Confirm loss" buttons go here,
+      // in place of the strip (claim_win / clear_win_claim / confirm_win). =====
+      scores={isMuggins ? null : <ScoreStrip plates={plates} />}
       surface={appearance.surface}
       back={appearance.back}
     />

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { MugginsTag } from "@/components/MugginsTag";
 import {
   DEFAULT_CARD_BACK,
   DEFAULT_TABLE_SURFACE,
@@ -71,14 +72,17 @@ export function TableShell({
 export function TableHeader({
   code,
   handNo,
+  muggins = false,
   right,
 }: {
   code: string;
   handNo: number | null;
+  // A Muggins table: the "Muggins · no scoring" tag under the header line.
+  muggins?: boolean;
   right: ReactNode;
 }) {
-  return (
-    <header className="flex h-6 items-center justify-between gap-2 text-sm">
+  const line = (
+    <>
       <h1 className="truncate font-semibold">
         Table {code}
         {handNo != null && (
@@ -86,6 +90,21 @@ export function TableHeader({
         )}
       </h1>
       <div className="flex shrink-0 items-center gap-3">{right}</div>
+    </>
+  );
+  if (!muggins) {
+    return <header className="flex h-6 items-center justify-between gap-2 text-sm">{line}</header>;
+  }
+  // A Muggins table: the tag gets a short line of its own under the header
+  // line -- there is no room beside the code and the header buttons on a
+  // phone. It costs ~20px, well inside the score strip's height, which a
+  // Muggins table doesn't have.
+  return (
+    <header className="flex flex-col gap-0.5 text-sm">
+      <div className="flex h-6 items-center justify-between gap-2">{line}</div>
+      <div className="flex">
+        <MugginsTag />
+      </div>
     </header>
   );
 }

@@ -16,12 +16,18 @@ import { useEffect, useState } from "react";
 //
 // The note is positioned under the header, so neither it nor the button
 // adds any height to the table.
+//
+// LOCKED (a Muggins table): a disabled button reading "Muggins: scoring is
+// off". It never calls onSave, so nothing is saved -- the player's own
+// setting is left exactly as it was, for their other tables.
 export function CountsToggle({
   hidden,
   onSave,
+  locked = false,
 }: {
   hidden: boolean;
   onSave: (nextHidden: boolean) => Promise<string | null>;
+  locked?: boolean;
 }) {
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -44,6 +50,18 @@ export function CountsToggle({
     }
     setSaving(false);
     if (error) setFailed(true);
+  }
+
+  if (locked) {
+    return (
+      <button
+        type="button"
+        disabled
+        className="tap-40 whitespace-nowrap px-1 text-xs text-zinc-600 dark:text-zinc-400"
+      >
+        Muggins: scoring is off
+      </button>
+    );
   }
 
   return (
