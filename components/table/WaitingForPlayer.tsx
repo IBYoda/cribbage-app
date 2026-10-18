@@ -55,7 +55,7 @@ export function WaitingForPlayer({
 // The Clipboard API only exists on secure origins (https, or localhost) -- a
 // phone testing the dev server over the LAN by IP has none. The old
 // execCommand route still works there.
-async function copyText(text: string) {
+export async function copyText(text: string) {
   try {
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(text);

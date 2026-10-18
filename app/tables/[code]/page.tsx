@@ -13,6 +13,8 @@ import { OpponentBand, type OpponentSeat } from "@/components/table/OpponentBand
 import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
+import { WaitingRoom } from "@/components/table/WaitingRoom";
+import { PHASE3_TABLES } from "@/lib/featureFlags";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
@@ -48,6 +50,10 @@ type Member = {
   // For the score plate. Optional on the profile; plates fall back to an initial.
   avatar_url: string | null;
   joined_at: string;
+  // Seat 1 to max_players (Phase 3, E1): clockwise order, given on joining
+  // and moved only by the host before a game (set_seat). Null only for a
+  // row the server hasn't seated (never, after E1).
+  seat: number | null;
   // The running score, and the last award that moved it. Lives on
   // table_members because that table is already keyed (table_id, user_id) --
   // exactly the grain a per-player running total needs.
@@ -58,7 +64,7 @@ type Member = {
 };
 
 const MEMBER_COLUMNS =
-  "user_id, joined_at, score, last_points, last_reason, last_awarded_at";
+  "user_id, joined_at, seat, score, last_points, last_reason, last_awarded_at";
 
 // Cards cut for the deal. deal_cut is the full history -- an array of rounds,
 // filled progressively as players tap the deck. The round in progress is always
@@ -258,6 +264,8 @@ function membersDiff(shown: Member[], fresh: Member[]) {
       !sameTime(s.last_awarded_at, m.last_awarded_at)
     )
       out.push(`score ${m.user_id}`);
+    // A missed seat move (set_seat) -- the waiting room's order.
+    if (s && s.seat !== m.seat) out.push(`seat ${m.user_id}`);
   }
   for (const s of shown) if (!fresh.some((m) => m.user_id === s.user_id)) out.push(`left ${s.user_id}`);
   return out;
@@ -304,6 +312,12 @@ export default function TablePage() {
   const [activeGame, setActiveGame] = useState<Game | null>(null);
   const [gameStatus, setGameStatus] = useState<"idle" | "creating" | "error">("idle");
   const [gameMessage, setGameMessage] = useState<string | null>(null);
+  // THE WAITING ROOM's move control (3 and 4 players, host only): the player
+  // picked to move, and the last set_seat call's outcome (its error is
+  // shown word for word in the error overlay).
+  const [seatPick, setSeatPick] = useState<string | null>(null);
+  const [seatStatus, setSeatStatus] = useState<"idle" | "sending" | "error">("idle");
+  const [seatMessage, setSeatMessage] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "disconnected">(
     "connecting"
@@ -677,6 +691,8 @@ export default function TablePage() {
         .from("table_members")
         .select(MEMBER_COLUMNS)
         .eq("table_id", tableId)
+        // Seat order (clockwise); join order breaks a tie, as before.
+        .order("seat", { ascending: true, nullsFirst: false })
         .order("joined_at", { ascending: true });
       if (membersError) return membersError.message;
 
@@ -702,6 +718,7 @@ export default function TablePage() {
         return {
           user_id: m.user_id,
           joined_at: m.joined_at,
+          seat: m.seat ?? null,
           nickname: profile?.nickname ?? null,
           avatar_url: profile?.avatar_url ?? null,
           score: m.score ?? 0,
@@ -982,6 +999,37 @@ export default function TablePage() {
     setGameStatus("idle");
   }
 
+  // THE WAITING ROOM's move (3 and 4 players, the host only): the picked
+  // player goes to the tapped seat -- an empty seat moves them, an occupied
+  // one swaps the two (set_seat does either in one call). The pick clears
+  // after the call whether it worked or not; a refusal is shown word for
+  // word. The roster is re-read either way, so the screen matches the
+  // server even if a realtime event is missed (the poll would also repair
+  // it).
+  async function handleSeatMove(seat: number) {
+    if (!table || !seatPick || seatStatus === "sending") return;
+    const userId = seatPick;
+    setSeatStatus("sending");
+    setSeatMessage(null);
+
+    const { error: rpcError } = await trackAction(
+      supabase.rpc("set_seat", {
+        p_table_id: table.id,
+        p_user_id: userId,
+        p_seat: seat,
+      })
+    );
+
+    setSeatPick(null);
+    if (rpcError) {
+      setSeatStatus("error");
+      setSeatMessage(rpcError.message);
+    } else {
+      setSeatStatus("idle");
+    }
+    await loadMembers(table.id);
+  }
+
   async function handleLeave() {
     if (!table) return;
 
@@ -1217,6 +1265,7 @@ export default function TablePage() {
           const newRow = payload.new as {
             user_id: string;
             joined_at: string;
+            seat: number | null;
             score: number | null;
           };
 
@@ -1229,6 +1278,7 @@ export default function TablePage() {
               {
                 user_id: newRow.user_id,
                 joined_at: newRow.joined_at,
+                seat: newRow.seat ?? null,
                 nickname: null,
                 avatar_url: null,
                 // A joining player starts at 0 with nothing to explain yet.
@@ -1274,8 +1324,11 @@ export default function TablePage() {
           //
           // table_members has been in the realtime publication since Slice 4
           // with UPDATE already enabled, so this listener needed no SQL at all.
+          // A seat move (set_seat, before a game) arrives here too: the seat
+          // is merged, and the score columns come back unchanged.
           const updated = payload.new as {
             user_id: string;
+            seat?: number | null;
             score: number | null;
             last_points: number | null;
             last_reason: string | null;
@@ -1287,6 +1340,7 @@ export default function TablePage() {
               m.user_id === updated.user_id
                 ? {
                     ...m,
+                    seat: updated.seat !== undefined ? updated.seat : m.seat,
                     score: updated.score ?? m.score,
                     last_points: updated.last_points,
                     last_reason: updated.last_reason,
@@ -1819,9 +1873,9 @@ export default function TablePage() {
   // (Phase 3) slot in without restructuring the layout.
   const opponents = members.filter((m) => m.user_id !== session.user.id);
   // THE TABLE'S SIZE: tables.max_players, 2 for every table before Phase 3.
-  // This screen plays 2-player games only, so a 3- or 4-player table waits
-  // to fill and then holds (see the holding message below): no working New
-  // Game until the waiting room (stage A2).
+  // This screen plays 2-player games only. A 3- or 4-player table, with the
+  // Phase 3 flag off, waits to fill and then holds (A1's holding message);
+  // with it on, it has the waiting room and the host's Start (stage A2).
   const capacity = table?.max_players ?? 2;
   const isTwoPlayerTable = capacity === 2;
   const canStartGame = isTwoPlayerTable && members.length === capacity;
@@ -1829,6 +1883,25 @@ export default function TablePage() {
   // roster has loaded -- an empty roster before then isn't "alone".
   const waitingAlone =
     membersLoaded && !activeGame && !finishedGame && members.length < capacity;
+
+  // PHASE 3 (A2), 3- and 4-player tables behind the flag only. Nothing here
+  // applies to a 2-player table.
+  const isPhase3Table = PHASE3_TABLES && !isTwoPlayerTable;
+  // THE HOST, worked out exactly as the server's table_host(): the creator
+  // while seated, otherwise the player in the lowest seat.
+  const seatedBySeat = [...members].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
+  const hostId =
+    table && members.some((m) => m.user_id === table.created_by)
+      ? table.created_by
+      : (seatedBySeat[0]?.user_id ?? null);
+  const isHost = hostId === session.user.id;
+  // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
+  const isTeams = capacity === 4 && table?.team_mode === "teams";
+  // The waiting room: no game and no result on screen. After the cut, the
+  // holding state: the hand is dealt but this screen can't play it yet
+  // (stages A3 and A4).
+  const inWaitingRoom = isPhase3Table && !activeGame && !finishedGame;
+  const inPhase3Holding = isPhase3Table && !!activeGame && activeGame.status === "active";
 
   const phase = activeGame?.phase ?? "discard";
   // STATUS BEFORE PHASE: every phase flag requires a live, dealt game first.
@@ -1892,7 +1965,9 @@ export default function TablePage() {
   const cribComplete = discardedBy.length >= REQUIRED_PLAYERS;
   const iAmDealer = activeGame?.dealer_id === session.user.id;
   const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
-  const canDiscard = Boolean(activeGame) && !iHaveDiscarded && myHand.length === CARDS_DEALT;
+  // (Never in the Phase 3 holding state: its hand is shown read-only.)
+  const canDiscard =
+    Boolean(activeGame) && !iHaveDiscarded && myHand.length === CARDS_DEALT && !inPhase3Holding;
 
   // The cut phase. Only the table's FIRST game cuts -- later games alternate
   // the deal, are created straight into 'active', and never enter this.
@@ -2062,6 +2137,7 @@ export default function TablePage() {
     (discardStatus === "error" && discardMessage) ||
     (playStatus === "error" && playMessage) ||
     (gameStatus === "error" && gameMessage) ||
+    (seatStatus === "error" && seatMessage) ||
     null;
 
   const header = (
@@ -2152,6 +2228,14 @@ export default function TablePage() {
           onDraw={handleDrawCutCard}
           onAcknowledge={handleAcknowledgeCut}
         />
+      ) : inPhase3Holding ? (
+        // PHASE 3 HOLDING (A2): a 3- or 4-player hand is dealt, but this
+        // screen can't play it yet (A3, A4). The player's own hand is in the
+        // hand row, read-only; Leave (which ends the match) is in the header.
+        <div className="phase3-holding">
+          <p className="text-base font-medium">3- and 4-player play is coming soon.</p>
+          <p className="text-sm text-zinc-500">Your hand is dealt below. Leave ends the match for everyone.</p>
+        </div>
       ) : activeGame ? (
         !cribComplete ? (
           iHaveDiscarded ? (
@@ -2239,6 +2323,33 @@ export default function TablePage() {
             )}
           </>
         )
+      ) : inWaitingRoom ? (
+        // THE WAITING ROOM (A2): the seats, the host's moves and Start.
+        <WaitingRoom
+          code={code}
+          capacity={capacity}
+          seats={Array.from({ length: capacity }, (_, i) => {
+            const m = members.find((x) => x.seat === i + 1);
+            return {
+              seat: i + 1,
+              player: m ? { userId: m.user_id, name: displayName(m), avatarUrl: m.avatar_url } : null,
+            };
+          })}
+          myId={session.user.id}
+          hostId={hostId}
+          hostName={hostId ? nameOf(hostId) : null}
+          isTeams={isTeams}
+          picked={seatPick}
+          busy={seatStatus === "sending"}
+          onPick={(userId) => {
+            setSeatStatus((s) => (s === "error" ? "idle" : s));
+            setSeatPick((current) => (current === userId ? null : userId));
+          }}
+          onMove={handleSeatMove}
+          canStart={isHost && members.length === capacity}
+          starting={gameStatus === "creating"}
+          onStart={handleStartNewGame}
+        />
       ) : waitingAlone ? (
         // A host waiting for the table to fill, with no result to show: what
         // they are waiting for, and the code to send. New Game needs a full
@@ -2477,17 +2588,23 @@ export default function TablePage() {
   return (
     <TableShell
       header={header}
-      opponents={isCutting ? null : <OpponentBand seats={seats} />}
+      // Phase 3 (3 and 4 players, flag on): the waiting room and the holding
+      // state leave out the opponents band, the piles and the scores, which
+      // are still 2-player (A3); the waiting room the hand row too, to give
+      // the seats the room. A 2-player table is never either.
+      opponents={isCutting || inWaitingRoom || inPhase3Holding ? null : <OpponentBand seats={seats} />}
       middle={middle}
-      piles={isCutting ? null : piles}
+      piles={isCutting || inWaitingRoom || inPhase3Holding ? null : piles}
       // The hand row reserves its full height even when empty (no game yet),
       // so the table doesn't jump when cards are dealt -- except during the
       // cut, which needs the space and has no hand to show.
-      hand={isCutting ? null : hand}
+      hand={isCutting || inWaitingRoom ? null : hand}
       // A Muggins table has no score strip: the win bar takes its place (see
       // mugginsWinBar), and nothing at all -- no height -- while no game is
       // dealt.
-      scores={isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />}
+      scores={
+        inWaitingRoom || inPhase3Holding ? null : isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />
+      }
       surface={appearance.surface}
       back={appearance.back}
     />
