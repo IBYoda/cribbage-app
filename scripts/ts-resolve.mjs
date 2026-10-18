@@ -21,9 +21,23 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const EXTENSIONS = [".ts", ".tsx", ".mts"];
+// The app's "@/..." alias (tsconfig "paths") is the project root.
+const ROOT = new URL("../", import.meta.url);
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    // "@/lib/scoring" -> <root>/lib/scoring.ts, the way the bundler maps it,
+    // so modules that use the alias can be tested too.
+    if (specifier.startsWith("@/")) {
+      const base = new URL(specifier.slice(2), ROOT);
+      if (/\.[a-z0-9]+$/i.test(specifier)) return nextResolve(base.href, context);
+      for (const extension of EXTENSIONS) {
+        const candidate = new URL(base.href + extension);
+        if (existsSync(fileURLToPath(candidate))) {
+          return nextResolve(candidate.href, context);
+        }
+      }
+    }
     // Only bare relative specifiers, and only when they have no extension of
     // their own. Anything else is passed straight through.
     if (specifier.startsWith(".") && !/\.[a-z0-9]+$/i.test(specifier)) {

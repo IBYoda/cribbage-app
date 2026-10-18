@@ -29,6 +29,15 @@ export function cardsLeft(kept: number, plays: { user_id: string; kind: string }
   return Math.max(kept - played, 0);
 }
 
+// THE NEXT SEAT clockwise after a player (wrapping from the last seat to the
+// first) -- e.g. who deals the next hand (next_hand decides it on the
+// server; this is for display). Null if the player isn't in the list.
+export function nextSeat(players: string[], userId: string | null | undefined): string | null {
+  const i = userId ? players.indexOf(userId) : -1;
+  if (i < 0) return null;
+  return players[(i + 1) % players.length];
+}
+
 // SEAT ORDER: games.players is a snapshot in seat order (clockwise). From my
 // point of view the table starts with me and goes clockwise. A viewer who
 // isn't a player sees the list as it is.

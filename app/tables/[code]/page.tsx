@@ -15,7 +15,7 @@ import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { PHASE3_TABLES } from "@/lib/featureFlags";
-import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, seatOrderFrom, seatPlaces } from "@/lib/phase3";
+import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
@@ -24,7 +24,8 @@ import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
-import { countingView } from "@/components/table/countingView";
+import { countingView, type CountingView } from "@/components/table/countingView";
+import { countingViewN } from "@/lib/countingN";
 import { CountStage, SlotCards } from "@/components/table/CountStage";
 import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
 
@@ -206,19 +207,26 @@ function unionIds(a: string[], b: string[]) {
   return [...a, ...b.filter((id) => !a.includes(id))];
 }
 
+// THE CRIB'S STEP in the count: after every hand, so step N for N players
+// (phase3-e4-counting.sql) -- 2 for every 2-player table, and for every
+// table with the Phase 3 flag off (as before Phase 3).
+const cribStepFor = (players: string[] | null | undefined) =>
+  PHASE3_TABLES ? (players?.length ?? 2) : 2;
+
 // The key for "has visibility changed?" -- compared on every games UPDATE so
 // hands and the crib are refetched only when what's readable can have
 // changed, not on every unrelated broadcast: a reveal (revealed_by,
 // crib_revealed), or the count reaching a point where the read policies open
-// up (phase2-open-hands-in-count.sql) -- counting starts (both hands), and
-// count_step 2 or 'done' (the crib).
+// up (phase2-open-hands-in-count.sql) -- counting starts (every hand), and
+// the crib's step or 'done' (the crib).
 function revealKey(row: {
   revealed_by: string[] | null | undefined;
   crib_revealed: boolean | null | undefined;
   phase: string | null | undefined;
   count_step: number | null | undefined;
+  players?: string[] | null;
 }) {
-  const cribUp = row.phase === "done" || (row.count_step ?? 0) >= 2;
+  const cribUp = row.phase === "done" || (row.count_step ?? 0) >= cribStepFor(row.players);
   return `${(row.revealed_by ?? []).join(",")}|${row.crib_revealed ? 1 : 0}|${row.phase}|${cribUp ? 1 : 0}`;
 }
 
@@ -1169,16 +1177,18 @@ export default function TablePage() {
   // past it (a double tap, a second tab) the call returns quietly instead of
   // scoring twice; a step ahead of the server is rejected.
   //
-  // THE CRIB (step 2): there's no Show Crib tap -- the crib is already
-  // face-up on both screens (the read policy opens it at step 2) -- but
-  // confirm_count still requires crib_revealed (its Guard 9), so the dealer's
-  // Confirm sets it first. show_crib is a quiet no-op if it's already set;
-  // if confirm_count then fails, the crib was face-up anyway.
+  // THE CRIB (step 2 with 2 players, step N with N): there's no Show Crib
+  // tap -- the crib is already face-up on every screen (the read policy opens
+  // it at its step) -- but confirm_count still requires crib_revealed (its
+  // Guard 9), so the dealer's Confirm sets it first. show_crib is a quiet
+  // no-op if it's already set; if confirm_count then fails, the crib was
+  // face-up anyway.
   function handleConfirmCount(step: number) {
     if (!activeGame) return;
     const gameId = activeGame.id;
+    const cribStep = cribStepFor(activeGame.players);
     return runCountAction(async () => {
-      if (step === 2) {
+      if (step === cribStep) {
         const shown = await supabase.rpc("show_crib", { p_game_id: gameId });
         if (shown.error) return shown;
       }
@@ -1898,9 +1908,7 @@ export default function TablePage() {
   const isHost = hostId === session.user.id;
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
-  // The waiting room: no game and no result on screen. (The holding state
-  // after pegging, inPhase3Holding, is defined below with the hold it
-  // follows.)
+  // The waiting room: no game and no result on screen.
   const inWaitingRoom = isPhase3Table && !activeGame && !finishedGame;
   // The game's players (seat order) and how many: hand sizes, the crib, the
   // seats and the plates follow them. 2 for every 2-player table, and for
@@ -1946,11 +1954,6 @@ export default function TablePage() {
     isActive && (phase === "counting" || phase === "done") && pegHoldKey === currentHandKey;
   // The pegging layout is on screen: during play, or holding after it.
   const pegView = isPlaying || onPegHold;
-  // PHASE 3 COUNTING HOLDING (3 and 4 players, flag on): the discard and
-  // pegging are played; once the hand reaches counting -- and this screen
-  // has left the hold that shows the last run -- it holds until the counting
-  // view (stage A5). Never on a 2-player table.
-  const inPhase3Holding = isPhase3Table && isActive && (phase === "counting" || phase === "done") && !onPegHold;
 
   // game_hands.cards is the immutable four-card hand; what you still HOLD is
   // that minus what you've already played.
@@ -1983,9 +1986,8 @@ export default function TablePage() {
   const cribComplete = discardedBy.length >= playerCount;
   const iAmDealer = activeGame?.dealer_id === session.user.id;
   const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
-  // (Never in the Phase 3 holding state: its hand is shown read-only.)
   const canDiscard =
-    Boolean(activeGame) && !iHaveDiscarded && myHand.length === sizes.dealt && !inPhase3Holding;
+    Boolean(activeGame) && !iHaveDiscarded && myHand.length === sizes.dealt;
 
   // The cut phase. Only the table's FIRST game cuts -- later games alternate
   // the deal, are created straight into 'active', and never enter this.
@@ -1997,8 +1999,11 @@ export default function TablePage() {
   const isDone = isActive && phase === "done";
   // Who deals the next hand: the current pone -- the player who isn't
   // dealing now. Display only; next_hand decides it on the server (the
-  // player after the dealer, which in 2-player is the same person).
-  const nextDealerId = activeGame?.players?.find((p) => p !== activeGame?.dealer_id) ?? null;
+  // player after the dealer, which in 2-player is the same person). With 3
+  // and 4 players: the next seat clockwise from the dealer (nextSeat).
+  const nextDealerId = isPhase3Table
+    ? nextSeat(activeGame?.players ?? [], activeGame?.dealer_id)
+    : (activeGame?.players?.find((p) => p !== activeGame?.dealer_id) ?? null);
   const nextDealerName =
     nextDealerId === session.user.id
       ? "you"
@@ -2030,8 +2035,8 @@ export default function TablePage() {
   // decided in one pure function (components/table/countingView.ts) that the
   // layout mock calls too. 2-player: the one opponent.
   const countOpp = opponents[0];
-  const view =
-    isCountingOrDone && activeGame?.dealer_id && countOpp && !inPhase3Holding
+  const view2 =
+    !isPhase3Table && isCountingOrDone && activeGame?.dealer_id && countOpp
       ? countingView({
           myId: session.user.id,
           dealerId: activeGame.dealer_id,
@@ -2047,6 +2052,46 @@ export default function TablePage() {
           hideNumbers: hideCountNumbers,
         })
       : null;
+  // 3 and 4 players (Phase 3, A5a): countingViewN (lib/countingN.ts) -- the
+  // hand being counted in the middle, every other hand face-up on its seat,
+  // the crib at step N, N+1 recap lines.
+  const viewN =
+    isPhase3Table && isCountingOrDone && activeGame?.dealer_id && gamePlayers
+      ? countingViewN({
+          players: gamePlayers,
+          myId: session.user.id,
+          dealerId: activeGame.dealer_id,
+          names: Object.fromEntries(members.map((m) => [m.user_id, displayName(m)])),
+          phase: isDone ? "done" : "counting",
+          step: countStep,
+          myHand: sortHand(myHand),
+          hands: Object.fromEntries(
+            gamePlayers
+              .filter((id) => id !== session.user.id)
+              .map((id) => [id, revealedHands[id] ? sortHand(revealedHands[id]) : null])
+          ),
+          cribCards: cribCards ? sortHand(cribCards) : null,
+          starter: starterCard,
+          hideNumbers: hideCountNumbers,
+        })
+      : null;
+  // One view for the screen: the N-player one in the 2-player shape, so the
+  // middle, the pile row and my hand row read it the same way.
+  const view: CountingView | null = viewN
+    ? {
+        myTurn: viewN.myTurn,
+        myRow: viewN.myRow,
+        myRowCounting: viewN.myRowCounting,
+        middle: viewN.middle,
+        middleLabel: viewN.middleLabel ?? "",
+        cribFan: viewN.cribFan,
+        headline: viewN.headline,
+        hint: viewN.hint,
+        waitingOn: viewN.waitingOn,
+        canConfirm: viewN.canConfirm,
+        recap: viewN.recap.map((r) => r.text),
+      }
+    : view2;
 
   const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
   // THE FINAL BOARD: the won game's result, while no game is live.
@@ -2122,14 +2167,18 @@ export default function TablePage() {
       // The final board: the hand face-up when readable, else face-down.
       cardCount: finalBoard
         ? sizes.kept
-        : view
-          ? 0
-          : opponentCardCount(opponent.user_id),
+        : viewN
+          ? (viewN.seatCards[opponent.user_id]?.count ?? sizes.kept)
+          : view
+            ? 0
+            : opponentCardCount(opponent.user_id),
       shownCards: finalBoard
         ? finalBoard.board.hands[opponent.user_id]
           ? sortHand(finalBoard.board.hands[opponent.user_id])
           : undefined
-        : undefined,
+        : viewN
+          ? (viewN.seatCards[opponent.user_id]?.shown ?? undefined)
+          : undefined,
       saidGo: goBy.has(opponent.user_id),
     };
   };
@@ -2264,15 +2313,6 @@ export default function TablePage() {
           onDraw={handleDrawCutCard}
           onAcknowledge={handleAcknowledgeCut}
         />
-      ) : inPhase3Holding ? (
-        // PHASE 3 HOLDING: the hand is pegged and on to counting, but this
-        // screen can't count a 3- or 4-player hand yet (A5). My hand is in
-        // the hand row, read-only; Leave (which ends the match) is in the
-        // header.
-        <div className="phase3-holding">
-          <p className="text-base font-medium">Counting is coming soon.</p>
-          <p className="text-sm text-zinc-500">Your hand and the starter are below. Leave ends the match for everyone.</p>
-        </div>
       ) : activeGame ? (
         !cribComplete ? (
           iHaveDiscarded ? (
@@ -2326,6 +2366,8 @@ export default function TablePage() {
                 subject={view.middle}
                 subjectLabel={view.middleLabel}
                 recap={view.recap}
+                recapKeys={viewN ? viewN.recap.map((r) => r.key) : undefined}
+                variant={viewN ? "n" : undefined}
                 error={countStatus === "error" ? countMessage : null}
                 actions={
                   isDone ? (
@@ -2520,9 +2562,11 @@ export default function TablePage() {
       crib={
         view
           ? // Counting: a face-down pile until the crib's count is up, then
-            // the face-up fan (as on the final board), through 'done'.
+            // the face-up fan (as on the final board), through 'done'. With 3
+            // and 4 players the crib is in the middle at its step, so its pile
+            // is an empty slot meanwhile (viewN.cribPile).
             {
-              faceDownCount: sizes.kept,
+              faceDownCount: viewN?.cribPile === "empty" ? 0 : sizes.kept,
               shownCards: view.cribFan,
               dealerIsMe: handDealerId === session.user.id,
             }
@@ -2595,14 +2639,14 @@ export default function TablePage() {
           // turn, or it would take the count past 31. Visible-but-inert
           // beats hiding it, since "why can't I play my king?" has an
           // answer the player should be able to see.
-          dimmed={isPlaying && !inPhase3Holding && !canPlayCard(card)}
+          dimmed={isPlaying && !canPlayCard(card)}
           // One handler, two phases. Omitted entirely when no action is
           // available, which also renders the card as a plain div with
           // nothing to click or tab to.
           onSelect={
             canDiscard
               ? () => toggleCardSelection(card)
-              : isPlaying && !inPhase3Holding && canPlayCard(card) && playStatus !== "sending"
+              : isPlaying && canPlayCard(card) && playStatus !== "sending"
                 ? () => handlePlayCard(card)
                 : undefined
           }

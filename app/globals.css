@@ -358,6 +358,11 @@ body {
   font-size: 12px;
   line-height: 1.35;
 }
+/* Phase 3 (3 and 4 players): up to five recap lines (N hands and the crib)
+   instead of three, so the card in the middle leaves about 40px more. */
+.count-stage--n .count-stage__card {
+  width: max(32px, min(var(--hand-w), calc((100cqh - 180px) / 1.4)));
+}
 
 /* -- The result: the win banner and New Game. */
 .result-stage {
@@ -556,16 +561,6 @@ body {
   aspect-ratio: 5 / 7;
 }
 
-/* -- Phase 3 holding (3 and 4 players, after the cut): one short message
-      above the read-only hand. */
-.phase3-holding {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  text-align: center;
-}
-
 /* -- The final board after a win: the hand's last run (none on his heels)
       above the result. The run has no status line, and
       its cards give up the height the result needs: the banner (~56px), the
@@ -671,7 +666,8 @@ body {
   .count-stage__text {
     align-items: flex-start;
   }
-  .count-stage__card {
+  .count-stage__card,
+  .count-stage--n .count-stage__card {
     width: max(32px, min(var(--hand-w), calc((100cqh - 8px) / 1.4)));
   }
   .count-stage__actions {

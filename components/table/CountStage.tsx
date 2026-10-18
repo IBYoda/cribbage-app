@@ -16,7 +16,9 @@ export function CountStage({
   subjectLabel,
   actions,
   recap,
+  recapKeys,
   error,
+  variant,
 }: {
   headline: string;
   hint?: string;
@@ -24,10 +26,15 @@ export function CountStage({
   subjectLabel: string | null;
   actions?: ReactNode;
   recap: string[];
+  // Phase 3 (3 and 4 players): a key per recap line (by player), so two lines
+  // with the same text never share one. Absent: each line is its own key.
+  recapKeys?: string[];
   error?: string | null;
+  // Phase 3: "n" makes room for up to five recap lines (.count-stage--n).
+  variant?: "n";
 }) {
   return (
-    <div className="count-stage">
+    <div className={variant === "n" ? "count-stage count-stage--n" : "count-stage"}>
       <div className="count-stage__text">
         <p className="text-sm font-medium">{headline}</p>
         {hint && <p className="text-xs text-zinc-500">{hint}</p>}
@@ -53,8 +60,8 @@ export function CountStage({
 
       {recap.length > 0 && (
         <div className="count-stage__recap text-zinc-500">
-          {recap.map((line) => (
-            <span key={line}>{line}</span>
+          {recap.map((line, i) => (
+            <span key={recapKeys?.[i] ?? line}>{line}</span>
           ))}
         </div>
       )}

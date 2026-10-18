@@ -11,11 +11,14 @@
 
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
+import { countingOrder, countingViewN } from "../lib/countingN";
+import { countingView } from "../components/table/countingView";
 import {
   buildPlates,
   cardsLeft,
   cribCountDuringDiscard,
   handSizes,
+  nextSeat,
   seatOrderFrom,
   seatPlaces,
   teamOfPosition,
@@ -210,6 +213,139 @@ check("4 players: three go rows in one run, then the last card's run", () => {
   deepStrictEqual([...goSayers(displayedRun(run4, 1, false).events)], []);
   // The hold after the last card shows the newest run with any plays.
   deepStrictEqual(displayedRun(run4, 1, true).events.map((p) => p.seq), [run4.at(-1)!.seq]);
+});
+
+// ---- Counting (A5a) and the next dealer ------------------------------------------
+check("nextSeat: clockwise, wrapping; null for a stranger", () => {
+  deepStrictEqual(["a", "b"].map((d) => nextSeat(["a", "b"], d)), ["b", "a"]);
+  deepStrictEqual(["a", "b", "c"].map((d) => nextSeat(["a", "b", "c"], d)), ["b", "c", "a"]);
+  deepStrictEqual(P4.map((d) => nextSeat(P4, d)), ["s2", "s3", "s4", "s1"]);
+  strictEqual(nextSeat(P4, "x"), null);
+  strictEqual(nextSeat(P4, null), null);
+  // 2 players: the same person as the old rule (the player who isn't dealing).
+  for (const d of ["a", "b"]) strictEqual(nextSeat(["a", "b"], d), ["a", "b"].find((p) => p !== d));
+});
+
+const NAMES: Record<string, string> = { a: "Ann", b: "Bob", c: "Cy", d: "Dee" };
+const HANDS: Record<string, string[]> = {
+  a: ["5S", "5C", "JH", "KD"], b: ["2S", "3S", "6S", "QS"], c: ["7D", "8D", "8C", "AD"], d: ["9S", "TC", "JC", "3H"],
+};
+const CRIB = ["2H", "6H", "8H", "KH"];
+const STARTER = "4H";
+function viewFor(players: string[], dealer: string, me: string, step: number, done = false, hideNumbers = false) {
+  return countingViewN({
+    players, myId: me, dealerId: dealer, names: NAMES,
+    phase: done ? "done" : "counting", step,
+    myHand: HANDS[me],
+    hands: Object.fromEntries(players.filter((p) => p !== me).map((p) => [p, HANDS[p]])),
+    cribCards: CRIB, starter: STARTER, hideNumbers,
+  });
+}
+
+for (const players of [["a", "b", "c"], ["a", "b", "c", "d"]]) {
+  const n = players.length;
+  check(`${n} players: the counting order from every dealer (left first, the dealer last)`, () => {
+    for (let di = 0; di < n; di++) {
+      const dealer = players[di];
+      const order = countingOrder(players, dealer);
+      deepStrictEqual(order, Array.from({ length: n }, (_, k) => players[(di + 1 + k) % n]));
+      strictEqual(order[n - 1], dealer); // the dealer counts their own hand at step N-1
+    }
+  });
+  check(`${n} players: whose count it is, every dealer, every step, every viewer`, () => {
+    for (const dealer of players) {
+      const order = countingOrder(players, dealer);
+      for (let step = 0; step <= n; step++) {
+        const counter = step < n ? order[step] : dealer; // the crib is the dealer's
+        for (const me of players) {
+          const v = viewFor(players, dealer, me, step);
+          strictEqual(v.counterId, counter);
+          strictEqual(v.myTurn, me === counter);
+          strictEqual(v.canConfirm, me === counter);
+          strictEqual(v.isCribStep, step === n);
+          strictEqual(v.myRowCounting, me === counter && step < n);
+          strictEqual(v.waitingOn, me === counter ? null : `${NAMES[counter]} is counting`);
+          // The middle: the hand being counted by someone else, or the crib at N.
+          if (step === n) {
+            deepStrictEqual(v.middle, { kind: "full", cards: CRIB });
+            strictEqual(v.middleLabel, me === dealer ? "Your crib" : `${NAMES[dealer]}'s crib`);
+          } else if (counter === me) {
+            deepStrictEqual(v.middle, { kind: "none" });
+          } else {
+            deepStrictEqual(v.middle, { kind: "full", cards: HANDS[counter] });
+            strictEqual(v.middleLabel, `${NAMES[counter]}'s hand`);
+          }
+          // Seats: the counted hand's seat is empty while it's in the middle.
+          for (const p of players.filter((x) => x !== me)) {
+            const inMiddle = step < n && p === counter;
+            deepStrictEqual(v.seatCards[p], inMiddle ? { shown: null, count: 0 } : { shown: HANDS[p], count: 4 });
+          }
+          // The crib fans in the pile row only once everything is counted;
+          // its pile is face-down until step N, an empty slot at step N
+          // (the crib is in the middle).
+          strictEqual(v.cribFan, null);
+          strictEqual(v.cribPile, step === n ? "empty" : "faceDown");
+          // Recap: one line per confirmed count, in order.
+          deepStrictEqual(v.recap.map((r) => r.key), order.slice(0, Math.min(step, n)).map((p) => `hand-${p}`));
+        }
+      }
+    }
+  });
+  check(`${n} players: done -- N+1 recap lines, the crib last and the dealer's`, () => {
+    for (const dealer of players) {
+      const me = players[0];
+      const v = viewFor(players, dealer, me, n, true);
+      strictEqual(v.counterId, null);
+      strictEqual(v.myTurn, false);
+      strictEqual(v.waitingOn, null);
+      strictEqual(v.headline, "Every hand and the crib are counted.");
+      deepStrictEqual(v.cribFan, CRIB);
+      strictEqual(v.cribPile, "fan");
+      strictEqual(v.recap.length, n + 1);
+      deepStrictEqual(v.recap.map((r) => r.key), [...countingOrder(players, dealer).map((p) => `hand-${p}`), "crib"]);
+      const cribLine = v.recap[n].text;
+      strictEqual(cribLine.startsWith(dealer === me ? "Your crib: " : `${NAMES[dealer]}'s crib: `), true);
+      // Each hand's line: "Your hand" for mine, "<name>'s hand" otherwise.
+      for (const [i, p] of countingOrder(players, dealer).entries()) {
+        strictEqual(v.recap[i].text.startsWith(p === me ? "Your hand: " : `${NAMES[p]}'s hand: `), true);
+      }
+    }
+  });
+  check(`${n} players: hidden numbers say only "<label> counted"`, () => {
+    const v = viewFor(players, players[n - 1], players[0], n, true, true);
+    strictEqual(v.recap.length, n + 1);
+    strictEqual(v.recap.every((r) => /^(Your|[A-Z][a-z]+'s) (hand|crib) counted$/.test(r.text)), true);
+  });
+}
+check("headlines: my hand, someone's hand, the crib", () => {
+  const P = ["a", "b", "c"];
+  strictEqual(viewFor(P, "c", "a", 0).headline, "Counting: your hand");
+  strictEqual(viewFor(P, "c", "b", 0).headline, "Counting: Ann's hand");
+  strictEqual(viewFor(P, "c", "c", 3).headline, "Counting: your crib");
+  strictEqual(viewFor(P, "c", "a", 3).headline, "Counting: Cy's crib");
+  strictEqual(viewFor(P, "c", "a", 0).hint, "Count it out loud, then Confirm Count.");
+  strictEqual(viewFor(P, "c", "b", 0).hint, "");
+});
+check("2 players: countingViewN says what countingView says (turn, headline, hint, waiting, recap)", () => {
+  const P = ["a", "b"];
+  for (const dealer of P) {
+    for (const me of P) {
+      const opp = P.find((p) => p !== me)!;
+      for (const [step, done] of [[0, false], [1, false], [2, false], [2, true]] as const) {
+        for (const hideNumbers of [false, true]) {
+          const n2 = viewFor(P, dealer, me, step, done, hideNumbers);
+          const old = countingView({
+            myId: me, dealerId: dealer, oppName: NAMES[opp], phase: done ? "done" : "counting", step,
+            myHand: HANDS[me], oppCards: HANDS[opp], cribCards: CRIB, starter: STARTER, hideNumbers,
+          });
+          deepStrictEqual(
+            [n2.myTurn, n2.canConfirm, n2.myRowCounting, n2.headline, n2.hint, n2.waitingOn, n2.recap.map((r) => r.text)],
+            [old.myTurn, old.canConfirm, old.myRowCounting, old.headline, old.hint, old.waitingOn, old.recap]
+          );
+        }
+      }
+    }
+  }
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
