@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { MugginsNotice } from "@/components/brand/MugginsNotice";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -31,9 +32,9 @@ export default function NewTablePage() {
   // Defaults to Regular and is always sent; the database default is false
   // too. Fixed once the table exists.
   const [isMuggins, setIsMuggins] = useState(false);
-  // The Muggins confirmation. Only its "Start Muggins table" creates the
-  // table; a Regular table never sees it.
-  const mugginsDialogRef = useRef<HTMLDialogElement>(null);
+  // The Muggins confirmation (MugginsNotice). Only its "Start Muggins table"
+  // creates the table; a Regular table never sees it.
+  const [mugginsNoticeOpen, setMugginsNoticeOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -112,7 +113,7 @@ export default function NewTablePage() {
       {/* Stays disabled once created, while the table page loads -- a second
           tap would open a second table. A Muggins table asks first. */}
       <button
-        onClick={() => (isMuggins ? mugginsDialogRef.current?.showModal() : handleCreateTable())}
+        onClick={() => (isMuggins ? setMugginsNoticeOpen(true) : handleCreateTable())}
         disabled={status === "creating" || status === "success"}
         className="peg-btn peg-btn--brass disabled:opacity-60"
       >
@@ -127,49 +128,17 @@ export default function NewTablePage() {
         <p className="text-sm text-[var(--error-on-felt)]">{message}</p>
       )}
 
-      {/* THE MUGGINS CONFIRMATION: a native <dialog>, like About. Escape and
-          a click on the backdrop are "Go back"; focus starts on Go back, so
-          Enter never creates the table by accident. */}
-      <dialog
-        ref={mugginsDialogRef}
-        className="about-dialog"
-        aria-labelledby="muggins-title"
-        aria-describedby="muggins-body"
-        onClick={(e) => {
-          // A click on the backdrop lands on the <dialog> itself.
-          if (e.target === mugginsDialogRef.current) mugginsDialogRef.current.close();
+      {/* THE MUGGINS CONFIRMATION -- the same notice a joiner sees (see
+          MugginsNotice). Go back, Escape and the backdrop just close it. */}
+      <MugginsNotice
+        open={mugginsNoticeOpen}
+        mode="create"
+        onCancel={() => setMugginsNoticeOpen(false)}
+        onConfirm={() => {
+          setMugginsNoticeOpen(false);
+          handleCreateTable();
         }}
-      >
-        <div className="flex flex-col gap-3">
-          <h2 id="muggins-title" className="font-display text-2xl font-bold italic">
-            Muggins mode
-          </h2>
-          <p id="muggins-body">
-            All scoring is turned off. The app only deals the cards, so you will NEED to keep your own
-            score, on a physical board or a tracker of your choice.
-          </p>
-          <div className="mt-2 flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => mugginsDialogRef.current?.close()}
-              className="peg-btn peg-btn--ghost"
-              autoFocus
-            >
-              Go back
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                mugginsDialogRef.current?.close();
-                handleCreateTable();
-              }}
-              className="peg-btn peg-btn--brass"
-            >
-              Start Muggins table
-            </button>
-          </div>
-        </div>
-      </dialog>
+      />
     </CardRoomFrame>
   );
 }

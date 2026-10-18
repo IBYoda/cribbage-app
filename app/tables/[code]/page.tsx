@@ -15,6 +15,7 @@ import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { isCountReason } from "@/components/table/countingView";
@@ -32,6 +33,9 @@ type TableRow = {
   // score -- no score strip, no score flash, no count numbers, no score in
   // the result -- and the players keep their own.
   is_muggins: boolean;
+  // Who created it: the creator never sees the joiner's Muggins notice (they
+  // saw it when creating).
+  created_by: string;
 };
 
 type Member = {
@@ -276,6 +280,10 @@ export default function TablePage() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [table, setTable] = useState<TableRow | null>(null);
+  // THE JOINER'S MUGGINS NOTICE: a Muggins table this player is not yet
+  // seated at, waiting for "Join Muggins table". Nothing about the table is
+  // loaded or shown, and no seat exists, until they agree.
+  const [pendingJoin, setPendingJoin] = useState<TableRow | null>(null);
   // MUGGINS: no visible scoring on this table, for everyone (see TableRow).
   const isMuggins = table?.is_muggins === true;
   // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
@@ -828,6 +836,30 @@ export default function TablePage() {
     [readTableState]
   );
 
+  // Takes my seat at the table (idempotent) and loads it. setTable first, as
+  // before: it starts the realtime subscription while the seat is written.
+  const takeSeat = useCallback(
+    async (row: TableRow, isCancelled: () => boolean) => {
+      setTable(row);
+
+      const { error: joinError } = await supabase
+        .from("table_members")
+        .upsert(
+          { table_id: row.id, user_id: session!.user.id },
+          { onConflict: "table_id,user_id", ignoreDuplicates: true }
+        );
+
+      if (isCancelled()) return;
+      if (joinError) {
+        setError(joinError.message);
+        return;
+      }
+
+      await refreshTableState(row.id);
+    },
+    [session, refreshTableState]
+  );
+
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
   useEffect(() => {
@@ -837,10 +869,11 @@ export default function TablePage() {
 
     async function setup() {
       setError(null);
+      setPendingJoin(null);
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status, ended_reason, is_muggins")
+        .select("id, code, status, ended_reason, is_muggins, created_by")
         .eq("code", code)
         .maybeSingle();
 
@@ -859,22 +892,29 @@ export default function TablePage() {
         return;
       }
 
-      setTable(tableRow);
-
-      const { error: joinError } = await supabase
-        .from("table_members")
-        .upsert(
-          { table_id: tableRow.id, user_id: session!.user.id },
-          { onConflict: "table_id,user_id", ignoreDuplicates: true }
-        );
-
-      if (cancelled) return;
-      if (joinError) {
-        setError(joinError.message);
-        return;
+      // THE JOINER'S MUGGINS NOTICE. A Muggins table asks a new player to
+      // agree before they are seated: not the creator (they agreed when
+      // creating), not a player already seated (a refresh, Rejoin), and not
+      // a full table, which goes on exactly as before (there is no seat
+      // limit on the server: a third player is seated and told the table
+      // needs exactly 2). If the seats can't be read, ask anyway -- never
+      // seat without agreement.
+      if (tableRow.is_muggins && tableRow.created_by !== session!.user.id) {
+        const { data: seats, error: seatsError } = await supabase
+          .from("table_members")
+          .select("user_id")
+          .eq("table_id", tableRow.id);
+        if (cancelled) return;
+        const seated = (seats ?? []).map((m) => m.user_id);
+        const isMember = !seatsError && seated.includes(session!.user.id);
+        const isFull = !seatsError && seated.length >= REQUIRED_PLAYERS;
+        if (!isMember && !isFull) {
+          setPendingJoin(tableRow);
+          return;
+        }
       }
 
-      await refreshTableState(tableRow.id);
+      await takeSeat(tableRow, () => cancelled);
     }
 
     setup();
@@ -882,7 +922,7 @@ export default function TablePage() {
     return () => {
       cancelled = true;
     };
-  }, [session, code, retryKey, refreshTableState]);
+  }, [session, code, retryKey, takeSeat]);
 
   // Creating the game and dealing are one atomic server-side action now. The
   // shuffle happens inside Postgres, so no browser ever receives the full deck
@@ -1745,6 +1785,27 @@ export default function TablePage() {
     );
   }
 
+  // THE JOINER'S MUGGINS NOTICE, before any seat or table content. "Join
+  // Muggins table" takes the seat and loads the table; Go back (or Escape,
+  // or the backdrop) goes home without one.
+  if (pendingJoin) {
+    return (
+      <CardRoomFrame backHome={false}>
+        <p>Table {pendingJoin.code} is a Muggins table.</p>
+        <MugginsNotice
+          open
+          mode="join"
+          onCancel={() => router.replace("/")}
+          onConfirm={() => {
+            const row = pendingJoin;
+            setPendingJoin(null);
+            takeSeat(row, () => false);
+          }}
+        />
+      </CardRoomFrame>
+    );
+  }
+
   const me = members.find((m) => m.user_id === session.user.id);
   // Seating: everyone who isn't you sits across the top. Rendered from an
   // array rather than a single hardcoded opponent so 3- and 4-player tables
@@ -2271,6 +2332,7 @@ export default function TablePage() {
       crib={{
         faceDownCount: CARDS_AFTER_DISCARD,
         shownCards: finalBoard.board.crib ? sortHand(finalBoard.board.crib) : null,
+        dealerIsMe: handDealerId === session.user.id,
       }}
       starter={finalBoard.starter_card ? { card: finalBoard.starter_card } : null}
       flash={scoreFlash}
@@ -2281,10 +2343,15 @@ export default function TablePage() {
         view
           ? // Counting: a face-down pile until the crib's count is up, then
             // the face-up fan (as on the final board), through 'done'.
-            { faceDownCount: CARDS_AFTER_DISCARD, shownCards: view.cribFan }
+            {
+              faceDownCount: CARDS_AFTER_DISCARD,
+              shownCards: view.cribFan,
+              dealerIsMe: handDealerId === session.user.id,
+            }
           : {
               faceDownCount: discardedBy.length * CARDS_TO_DISCARD,
               shownCards: null,
+              dealerIsMe: handDealerId === session.user.id,
             }
       }
       starter={{ card: starterCard }}
