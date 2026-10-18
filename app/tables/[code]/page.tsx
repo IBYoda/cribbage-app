@@ -208,6 +208,43 @@ const CARDS_DEALT = 6;
 const CARDS_TO_DISCARD = 2;
 const CARDS_AFTER_DISCARD = CARDS_DEALT - CARDS_TO_DISCARD;
 
+// TABLE SYNC: what the safety poll (see the poll effect) compares, to say
+// exactly what a missed realtime event had left wrong on screen.
+const GAME_SYNC_FIELDS = [
+  "status", "players", "dealer_id", "discarded_by", "deal_cut", "deal_cut_ack_by",
+  "starter_card", "phase", "current_player", "play_count", "play_segment",
+  "count_step", "revealed_by", "crib_revealed", "winner_id", "hand_no", "ready_by",
+] as const;
+
+function gameDiff(shown: Game, fresh: Game) {
+  return GAME_SYNC_FIELDS.filter((k) => JSON.stringify(shown[k]) !== JSON.stringify(fresh[k]));
+}
+
+// Award times compared as times: a REST read and a realtime payload can
+// format the same timestamp differently.
+const sameTime = (a: string | null, b: string | null) =>
+  (a ? Date.parse(a) : 0) === (b ? Date.parse(b) : 0);
+
+function membersDiff(shown: Member[], fresh: Member[]) {
+  const out: string[] = [];
+  for (const m of fresh) {
+    const s = shown.find((x) => x.user_id === m.user_id);
+    if (!s) out.push(`joined ${m.user_id}`);
+    else if (
+      s.score !== m.score ||
+      s.last_points !== m.last_points ||
+      s.last_reason !== m.last_reason ||
+      !sameTime(s.last_awarded_at, m.last_awarded_at)
+    )
+      out.push(`score ${m.user_id}`);
+  }
+  for (const s of shown) if (!fresh.some((m) => m.user_id === s.user_id)) out.push(`left ${s.user_id}`);
+  return out;
+}
+
+// Every 12 seconds while the tab is visible -- see the poll effect.
+const SAFETY_POLL_MS = 12_000;
+
 function tableEndedMessage(endedReason: string | null | undefined) {
   return endedReason === "timeout"
     ? "This table was automatically ended after being open for 12 hours."
@@ -346,6 +383,43 @@ export default function TablePage() {
   const reconcileInFlightRef = useRef(false);
   const reconcileAgainRef = useRef(false);
   const reconcileTargetRef = useRef<string | null>(null);
+  // TABLE SYNC (fix/table-sync).
+  // HAND READ ORDERING: every read of my hand takes a ticket when issued, and
+  // is applied only if no later-issued read (or a clear) has been applied --
+  // so an older hand can never overwrite a newer one.
+  const handReadSeqRef = useRef(0);
+  const handAppliedSeqRef = useRef(0);
+  // MEMBERS READ GUARD: the same tickets for the roster read, plus a count of
+  // roster realtime events. A read during which an event arrived may be older
+  // than the screen, so it is read again, and if still racing, MERGED by
+  // user_id -- it can never remove a player an INSERT just added.
+  const membersReadSeqRef = useRef(0);
+  const membersAppliedSeqRef = useRef(0);
+  const membersEventSeqRef = useRef(0);
+  // games INSERT/UPDATE events seen; a poll read during which one arrived is
+  // not compared (realtime is clearly alive, and the screen may be newer).
+  const gameEventSeqRef = useRef(0);
+  // My own actions (RPCs) and full refreshes in flight: the poll waits.
+  const actionsInFlightRef = useRef(0);
+  const refreshesInFlightRef = useRef(0);
+  // The roster, game and error as last rendered, for the poll.
+  const membersRef = useRef<Member[]>([]);
+  const activeGameRef = useRef<Game | null>(null);
+  const errorRef = useRef<string | null>(null);
+  useEffect(() => {
+    membersRef.current = members;
+    activeGameRef.current = activeGame;
+    errorRef.current = error;
+  }, [members, activeGame, error]);
+  // Marks one of my RPCs as in flight for its duration (the poll waits).
+  const trackAction = useCallback(async <T,>(call: PromiseLike<T>): Promise<T> => {
+    actionsInFlightRef.current++;
+    try {
+      return await call;
+    } finally {
+      actionsInFlightRef.current--;
+    }
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -365,12 +439,18 @@ export default function TablePage() {
     const myId = auth.session?.user.id;
     if (!myId) return;
 
+    const ticket = ++handReadSeqRef.current;
     const { data } = await supabase
       .from("game_hands")
       .select("cards")
       .eq("game_id", gameId)
       .eq("user_id", myId)
       .maybeSingle();
+
+    // A later-issued read (or a clear) has already been applied: this one is
+    // older, so it must not replace it.
+    if (ticket < handAppliedSeqRef.current) return;
+    handAppliedSeqRef.current = ticket;
 
     // NOTE: from the discard onwards this array is IMMUTABLE -- it is the four
     // cards that get counted after play. Cards you've played are tracked
@@ -423,6 +503,7 @@ export default function TablePage() {
   // table_members, and next_hand doesn't change them.
   const resetHandState = useCallback(() => {
     setPlays([]);
+    handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
     setMyHand([]);
     setSelectedCards([]);
     setHandSorted(false);
@@ -444,6 +525,7 @@ export default function TablePage() {
         revealed_by: string[] | null;
         crib_revealed: boolean | null;
         count_step: number | null;
+        discarded_by: string[] | null;
       },
       previousStatus: string | null
     ) => {
@@ -469,6 +551,21 @@ export default function TablePage() {
       // cutting -> active in the same statement that deals).
       if (previousStatus === "cutting" && row.status === "active") {
         setHandSorted(false); // freshly dealt -- show it as dealt
+        fetchMyHand(row.id);
+        return;
+      }
+
+      // TABLE SYNC: the row says I have discarded, but the screen still holds
+      // the six dealt cards -- the post-discard read was lost (see
+      // handleDiscard). Fetch the four kept cards. Ticketed, so harmless if a
+      // read is already on its way.
+      const mine = myHandRef.current;
+      if (
+        row.status === "active" &&
+        mine &&
+        (row.discarded_by ?? []).includes(mine.userId) &&
+        mine.cards.length === CARDS_DEALT
+      ) {
         fetchMyHand(row.id);
       }
     },
@@ -535,11 +632,71 @@ export default function TablePage() {
     [afterGameChange]
   );
 
+  // MEMBERS READ (with the guard above): reads the roster and its profiles
+  // and applies them -- replacing the roster, or merging by user_id if a
+  // roster event arrived during the read. Returns an error message, or null.
+  // poll: compare with the screen first, apply only a difference, and log it;
+  // profiles are read only for players not already on screen.
+  const loadMembers = useCallback(async (tableId: string, poll = false): Promise<string | null> => {
+    for (let attempt = 0; ; attempt++) {
+      const ticket = ++membersReadSeqRef.current;
+      const eventsAtIssue = membersEventSeqRef.current;
+      const { data: memberRows, error: membersError } = await supabase
+        .from("table_members")
+        .select(MEMBER_COLUMNS)
+        .eq("table_id", tableId)
+        .order("joined_at", { ascending: true });
+      if (membersError) return membersError.message;
+
+      const rows = memberRows ?? [];
+      const shownById = new Map(membersRef.current.map((m) => [m.user_id, m]));
+      const profileIds = rows.map((m) => m.user_id).filter((id) => !poll || !shownById.has(id));
+      const { data: profileRows } = profileIds.length
+        ? await supabase.from("profiles").select("id, nickname, avatar_url").in("id", profileIds)
+        : { data: [] as { id: string; nickname: string | null; avatar_url: string | null }[] };
+      const profileById = new Map((profileRows ?? []).map((p) => [p.id, p]));
+
+      // A later-issued read has already been applied: this one is older.
+      if (ticket < membersAppliedSeqRef.current) return null;
+      // A roster event arrived during this read: read again (twice at most),
+      // then fall back to a merge that can't remove anyone. A poll just
+      // stops -- realtime is clearly alive.
+      const raced = membersEventSeqRef.current !== eventsAtIssue;
+      if (raced && poll) return null;
+      if (raced && attempt < 2) continue;
+
+      const fresh: Member[] = rows.map((m) => {
+        const profile = profileById.get(m.user_id) ?? shownById.get(m.user_id);
+        return {
+          user_id: m.user_id,
+          joined_at: m.joined_at,
+          nickname: profile?.nickname ?? null,
+          avatar_url: profile?.avatar_url ?? null,
+          score: m.score ?? 0,
+          last_points: m.last_points,
+          last_reason: m.last_reason,
+          last_awarded_at: m.last_awarded_at,
+        };
+      });
+      if (poll) {
+        const diff = membersDiff(membersRef.current, fresh);
+        if (diff.length === 0) return null;
+        console.warn("[table-sync] poll repaired:", { members: diff });
+      }
+      membersAppliedSeqRef.current = ticket;
+      setMembers((current) =>
+        raced ? [...current, ...fresh.filter((m) => !current.some((c) => c.user_id === m.user_id))] : fresh
+      );
+      setMembersLoaded(true);
+      return null;
+    }
+  }, []);
+
   // Fetches the current active game + full roster for a table. Used both for
   // the initial load and to "catch up" after the realtime connection drops
   // and reconnects, since postgres_changes only streams events that happen
   // while connected -- anything missed during a disconnect has to be re-fetched.
-  const refreshTableState = useCallback(async (tableId: string) => {
+  const readTableState = useCallback(async (tableId: string) => {
     // Must find cutting games too, or a game mid-cut reads as "no game" and
     // the client would offer "New Game" for a table that already has one.
     const ticket = ++gameReadSeqRef.current;
@@ -583,6 +740,7 @@ export default function TablePage() {
         await fetchMyHand(existingGame.id);
         await fetchPlays(existingGame.id);
       } else {
+        handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
         setMyHand([]);
         setPlays([]);
       }
@@ -635,39 +793,23 @@ export default function TablePage() {
       }
     }
 
-    const { data: memberRows, error: membersError } = await supabase
-      .from("table_members")
-      .select(MEMBER_COLUMNS)
-      .eq("table_id", tableId)
-      .order("joined_at", { ascending: true });
+    // The roster, through the members read guard (loadMembers).
+    const membersError = await loadMembers(tableId);
+    if (membersError) setError(membersError);
+  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers]);
 
-    if (membersError) {
-      setError(membersError.message);
-      return;
-    }
-
-    const userIds = (memberRows ?? []).map((m) => m.user_id);
-    const { data: profileRows } = await supabase
-      .from("profiles")
-      .select("id, nickname, avatar_url")
-      .in("id", userIds.length > 0 ? userIds : [""]);
-
-    const profileById = new Map((profileRows ?? []).map((p) => [p.id, p]));
-
-    setMembers(
-      (memberRows ?? []).map((m) => ({
-        user_id: m.user_id,
-        joined_at: m.joined_at,
-        nickname: profileById.get(m.user_id)?.nickname ?? null,
-        avatar_url: profileById.get(m.user_id)?.avatar_url ?? null,
-        score: m.score ?? 0,
-        last_points: m.last_points,
-        last_reason: m.last_reason,
-        last_awarded_at: m.last_awarded_at,
-      }))
-    );
-    setMembersLoaded(true);
-  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame]);
+  // Counted while in flight, so the safety poll waits for it.
+  const refreshTableState = useCallback(
+    async (tableId: string) => {
+      refreshesInFlightRef.current++;
+      try {
+        await readTableState(tableId);
+      } finally {
+        refreshesInFlightRef.current--;
+      }
+    },
+    [readTableState]
+  );
 
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
@@ -738,9 +880,11 @@ export default function TablePage() {
     // recorded (the ready gate), and the result stays up while we wait. It
     // goes when the new game arrives -- the re-read below, or its INSERT.
 
-    const { data: newGameId, error: rpcError } = await supabase.rpc("start_game_with_deal", {
-      p_table_id: table.id,
-    });
+    const { data: newGameId, error: rpcError } = await trackAction(
+      supabase.rpc("start_game_with_deal", {
+        p_table_id: table.id,
+      })
+    );
 
     if (rpcError) {
       // The function's own guards (not a member, table closed, wrong player
@@ -780,9 +924,11 @@ export default function TablePage() {
     setLeaveStatus("leaving");
     setLeaveMessage(null);
 
-    const { error: rpcError } = await supabase.rpc("leave_table", {
-      p_table_id: table.id,
-    });
+    const { error: rpcError } = await trackAction(
+      supabase.rpc("leave_table", {
+        p_table_id: table.id,
+      })
+    );
 
     if (rpcError) {
       setLeaveStatus("error");
@@ -803,9 +949,11 @@ export default function TablePage() {
   async function handleDrawCutCard(): Promise<string | null> {
     if (!activeGame) return "No active game.";
 
-    const { error: rpcError } = await supabase.rpc("draw_cut_card", {
-      p_game_id: activeGame.id,
-    });
+    const { error: rpcError } = await trackAction(
+      supabase.rpc("draw_cut_card", {
+        p_game_id: activeGame.id,
+      })
+    );
 
     if (rpcError) return rpcError.message;
 
@@ -822,9 +970,11 @@ export default function TablePage() {
   async function handleAcknowledgeCut(): Promise<string | null> {
     if (!activeGame) return "No active game.";
 
-    const { error: rpcError } = await supabase.rpc("acknowledge_deal_cut", {
-      p_game_id: activeGame.id,
-    });
+    const { error: rpcError } = await trackAction(
+      supabase.rpc("acknowledge_deal_cut", {
+        p_game_id: activeGame.id,
+      })
+    );
 
     if (rpcError) return rpcError.message;
 
@@ -841,10 +991,12 @@ export default function TablePage() {
     setPlayStatus("sending");
     setPlayMessage(null);
 
-    const { error: rpcError } = await supabase.rpc("play_card", {
-      p_game_id: activeGame.id,
-      p_card: card,
-    });
+    const { error: rpcError } = await trackAction(
+      supabase.rpc("play_card", {
+        p_game_id: activeGame.id,
+        p_card: card,
+      })
+    );
 
     if (rpcError) {
       // The function's guards (not your turn, not your card, over 31) surface
@@ -866,7 +1018,7 @@ export default function TablePage() {
     setCountStatus("sending");
     setCountMessage(null);
 
-    const { error: rpcError } = await rpc();
+    const { error: rpcError } = await trackAction(rpc());
 
     if (rpcError) {
       setCountStatus("error");
@@ -931,10 +1083,13 @@ export default function TablePage() {
     setDiscardStatus("sending");
     setDiscardMessage(null);
 
-    const { error: rpcError } = await supabase.rpc("discard_to_crib", {
-      p_game_id: activeGame.id,
-      p_cards: selectedCards,
-    });
+    const gameId = activeGame.id;
+    const { error: rpcError } = await trackAction(
+      supabase.rpc("discard_to_crib", {
+        p_game_id: gameId,
+        p_cards: selectedCards,
+      })
+    );
 
     if (rpcError) {
       // The function's guards (already discarded, not your card, game no longer
@@ -943,6 +1098,12 @@ export default function TablePage() {
       setDiscardMessage(rpcError.message);
       return;
     }
+
+    // TABLE SYNC: my four kept cards, read directly. The re-read below skips
+    // its hand read when a newer games read (a reconcile after this discard's
+    // own broadcasts) lands first -- which left the six dealt cards on
+    // screen. This read is ordered by the hand tickets, not the game ones.
+    fetchMyHand(gameId);
 
     // Re-read for the same reason as above: the hand and discarded_by are both
     // server-owned now. The opponent learns about this via the games UPDATE
@@ -955,11 +1116,6 @@ export default function TablePage() {
   useEffect(() => {
     if (!table) return;
 
-    // Tracks whether we've seen the channel go down, so we only resync on a
-    // genuine reconnect -- not on the very first successful subscribe (the
-    // setup effect above already fetched fresh state for that case).
-    let wasDisconnected = false;
-
     const channel = supabase
       .channel(`table-members-${table.id}`)
       .on(
@@ -971,6 +1127,7 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         async (payload) => {
+          membersEventSeqRef.current++; // see the members read guard
           const newRow = payload.new as {
             user_id: string;
             joined_at: string;
@@ -1023,6 +1180,7 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
+          membersEventSeqRef.current++; // see the members read guard
           // The score tracker's live channel. award_points() is the only thing
           // that writes these columns, so in practice every event here is a
           // score change -- the number moves on both screens at once, and the
@@ -1062,6 +1220,7 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
+          membersEventSeqRef.current++; // see the members read guard
           // DELETE payloads only carry the row's replica identity columns,
           // which defaults to the primary key -- here (table_id, user_id).
           // That's exactly what's needed: table_id for the filter above,
@@ -1116,6 +1275,7 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
+          gameEventSeqRef.current++; // see the safety poll
           const newGame = payload.new as {
             id: string;
             created_at: string;
@@ -1209,6 +1369,7 @@ export default function TablePage() {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
+          gameEventSeqRef.current++; // see the safety poll
           const updatedGame = payload.new as {
             id: string;
             status: string;
@@ -1275,6 +1436,7 @@ export default function TablePage() {
           if (!LIVE_GAME_STATUSES.includes(updatedGame.status)) {
             setActiveGame(null);
             activeGameIdRef.current = null;
+            handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
             setMyHand([]);
             setSelectedCards([]);
             clearRevealed();
@@ -1391,16 +1553,15 @@ export default function TablePage() {
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
           setRealtimeStatus("connected");
-          if (wasDisconnected) {
-            wasDisconnected = false;
-            // We were disconnected and just reconnected -- postgres_changes
-            // only streams events that happen while connected, so anything
-            // that changed while we were down (a join, a new game, a
-            // nickname edit) was missed. Re-fetch to catch up.
-            refreshTableState(table.id);
-          }
+          // CATCH UP on EVERY subscribe, the first one included.
+          // postgres_changes only streams events that happen while
+          // subscribed: after a reconnect anything that changed while we were
+          // down (a join, a new game, a nickname edit) was missed -- and on
+          // the FIRST subscribe, anything between the setup effect's reads
+          // and this moment was too (TABLE SYNC, gap A). The read tickets
+          // keep this from rolling anything back.
+          refreshTableState(table.id);
         } else if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
-          wasDisconnected = true;
           setRealtimeStatus("disconnected");
         }
       });
@@ -1409,6 +1570,89 @@ export default function TablePage() {
       supabase.removeChannel(channel);
     };
   }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame]);
+
+  // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
+  // comes back online -- the same full refresh as on subscribe. A hidden tab
+  // or a sleeping device can lose events without the channel ever reporting
+  // it. Not once the table has ended.
+  useEffect(() => {
+    if (!table) return;
+    const catchUp = () => {
+      if (document.visibilityState !== "visible" || errorRef.current) return;
+      refreshTableState(table.id);
+    };
+    document.addEventListener("visibilitychange", catchUp);
+    window.addEventListener("online", catchUp);
+    return () => {
+      document.removeEventListener("visibilitychange", catchUp);
+      window.removeEventListener("online", catchUp);
+    };
+  }, [table, refreshTableState]);
+
+  // TABLE SYNC: THE SAFETY POLL. Every SAFETY_POLL_MS while the tab is
+  // visible, a LIGHT read -- the table's live game row and the roster -- to
+  // repair anything a missed realtime event left wrong. Skipped while the tab
+  // is hidden, while one of my actions or a full refresh is in flight, and
+  // once the table has ended. A difference is applied (the game through
+  // reconcileGame and its tickets, the roster through the members guard) and
+  // logged as "[table-sync] poll repaired:", so a missed event shows in the
+  // console instead of being silently hidden.
+  useEffect(() => {
+    if (!table) return;
+    const tableId = table.id;
+    let polling = false;
+
+    async function pollOnce() {
+      const eventsAtIssue = gameEventSeqRef.current;
+      const shown = activeGameRef.current;
+      const { data: fresh, error: gameError } = await supabase
+        .from("games")
+        .select(GAME_COLUMNS)
+        .eq("table_id", tableId)
+        .in("status", LIVE_GAME_STATUSES)
+        .maybeSingle();
+      // A games event arrived during the read: realtime is alive and the
+      // screen may be newer than this read. Don't compare.
+      if (!gameError && gameEventSeqRef.current === eventsAtIssue) {
+        if (fresh?.id !== shown?.id) {
+          // A new game, or the end of one, was missed: the full refresh
+          // rebinds everything (hands, plays, the result).
+          console.warn("[table-sync] poll repaired:", {
+            game: `live game ${shown?.id ?? "none"} -> ${fresh?.id ?? "none"}`,
+          });
+          await refreshTableState(tableId);
+        } else if (fresh && shown) {
+          const diff = gameDiff(shown, fresh);
+          if (diff.length > 0) {
+            console.warn("[table-sync] poll repaired:", { game: diff });
+            await reconcileGame(fresh.id);
+            // The play log is read, never derived from the row: a missed
+            // play's row change means its play event was missed too.
+            if (fresh.status === "active") await fetchPlays(fresh.id);
+          }
+        }
+      }
+      await loadMembers(tableId, true);
+    }
+
+    const timer = window.setInterval(() => {
+      if (
+        polling ||
+        document.visibilityState !== "visible" ||
+        errorRef.current ||
+        actionsInFlightRef.current > 0 ||
+        refreshesInFlightRef.current > 0 ||
+        reconcileInFlightRef.current
+      ) {
+        return;
+      }
+      polling = true;
+      pollOnce().finally(() => {
+        polling = false;
+      });
+    }, SAFETY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
   // update, so this is a legitimate effect rather than a cascading render.
