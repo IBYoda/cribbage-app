@@ -22,11 +22,16 @@ export function TableShell({
   piles,
   hand,
   scores,
+  sides,
   surface = DEFAULT_TABLE_SURFACE,
   back = DEFAULT_CARD_BACK,
 }: {
   header: ReactNode;
   opponents: ReactNode;
+  // Phase 3 (3 and 4 players): the seats on my left and right, as narrow
+  // columns either side of the middle. Absent (every 2-player table), the
+  // middle is rendered exactly as before.
+  sides?: { left: ReactNode; right: ReactNode } | null;
   // The only region that absorbs leftover height. Its own content must fit;
   // anything that appears mid-game (errors, notices) is an overlay inside it.
   middle: ReactNode;
@@ -57,9 +62,21 @@ export function TableShell({
           the middle can hold -- the play area, the counting stage, the
           result, the cut -- sizes itself from this region's height, so it
           fits rather than relying on a scrollbar. */}
-      <div className="table-middle relative flex min-h-0 min-w-0 flex-col items-center justify-center gap-2 overflow-hidden">
-        {middle}
-      </div>
+      {sides ? (
+        // The side seats around the same middle (.table-midrow in
+        // app/globals.css); the middle keeps its class and size container.
+        <div className="table-midrow">
+          <div className="table-side table-side--left">{sides.left}</div>
+          <div className="table-middle relative flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 overflow-hidden">
+            {middle}
+          </div>
+          <div className="table-side table-side--right">{sides.right}</div>
+        </div>
+      ) : (
+        <div className="table-middle relative flex min-h-0 min-w-0 flex-col items-center justify-center gap-2 overflow-hidden">
+          {middle}
+        </div>
+      )}
       <div className="min-w-0">{piles}</div>
       <div className="min-w-0">{hand}</div>
       <div className="min-w-0">{scores}</div>

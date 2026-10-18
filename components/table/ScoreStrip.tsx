@@ -25,6 +25,9 @@ export type ScorePlate = {
   lastPoints: number | null;
   lastReason: string | null;
   lastAwardedAt: string | null;
+  // Who the flash names. Unset: the plate's members (one player). A team
+  // plate sets it to the partner who scored -- only their row's last_* moved.
+  flashName?: string;
 };
 
 // The scores, directly under my hand: a row of equal-width plates, 48px tall.
@@ -50,10 +53,20 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
             </div>
             <div className="flex min-w-0 flex-1 flex-col leading-tight">
               <span className="flex min-w-0 items-center gap-1 text-xs font-medium">
-                <span className="truncate">
-                  {plate.members.map((m) => m.name).join(" & ")}
-                  {plate.isMine && <span className="text-zinc-500"> (you)</span>}
-                </span>
+                {plate.members.length > 1 ? (
+                  // A team plate (4-player Teams): my name first, with "(you)"
+                  // right after it, then my partner's.
+                  <span className="truncate">
+                    {plate.members[0].name}
+                    {plate.isMine && <span className="text-zinc-500"> (you)</span>}
+                    {plate.members.slice(1).map((m) => ` & ${m.name}`).join("")}
+                  </span>
+                ) : (
+                  <span className="truncate">
+                    {plate.members.map((m) => m.name).join(" & ")}
+                    {plate.isMine && <span className="text-zinc-500"> (you)</span>}
+                  </span>
+                )}
                 {plate.hasDealer && <DealerChip />}
               </span>
             </div>
@@ -145,7 +158,7 @@ export function ScoreFlash({
 
   if (shownTime === null || shownTime !== latestTime || !latest || latest.lastPoints === null) return null;
 
-  const name = latest.members.map((m) => m.name).join(" & ");
+  const name = latest.flashName ?? latest.members.map((m) => m.name).join(" & ");
   const points = latest.lastPoints >= 0 ? `+${latest.lastPoints}` : String(latest.lastPoints);
 
   return (

@@ -66,6 +66,33 @@ export function OpponentBand({ seats }: { seats: OpponentSeat[] }) {
   );
 }
 
+// PHASE 3: a seat on my LEFT or RIGHT (3 and 4 players) -- a narrow column
+// beside the middle (TableShell's sides slot): the name, the dealer chip,
+// "Go", and the hand as a sideways stack of small cards, each showing a thin
+// strip, like a hand held across the table edge. Sized by .side-seat in
+// app/globals.css. Never used for 2 players.
+export function SideSeat({ seat, side }: { seat: OpponentSeat; side: "left" | "right" }) {
+  const cards: (string | null)[] = seat.shownCards ?? Array.from({ length: seat.cardCount }, () => null);
+  return (
+    <div className={`side-seat side-seat--${side}`} aria-label={`${seat.name}'s seat`}>
+      <p className="side-seat__name">{seat.name}</p>
+      {seat.isDealer && <DealerChip />}
+      {seat.saidGo && (
+        <span className="text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>
+      )}
+      <div className="side-seat__cards">
+        {cards.map((card, i) => (
+          <div key={card ?? i} className="side-seat__slot">
+            <div className="side-seat__card">
+              {card ? <PlayingCard card={card} sizing="side-card" /> : <FaceDownCard sizing="side-card" />}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // "D" for dealer -- the same chip on the seat and on the score plate.
 export function DealerChip() {
   return (

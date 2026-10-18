@@ -486,6 +486,76 @@ body {
   opacity: 0.8;
 }
 
+/* -- PHASE 3 SIDE SEATS (3 and 4 players; TableShell's sides slot, SideSeat
+      in OpponentBand.tsx): narrow columns either side of the middle. Each
+      card lies sideways: a portrait card --side-card-w wide, turned 90deg,
+      fills the column's width, and the cards overlap so each shows a strip.
+      Nothing here applies to a 2-player table (no .table-midrow there). */
+.table-midrow {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  gap: 4px;
+  --side-w: calc(var(--small-w) * 1.05);
+  --side-card-w: calc(var(--side-w) / 1.4);
+}
+.table-side {
+  flex: 0 0 var(--side-w);
+  width: var(--side-w);
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.side-seat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-height: 100%;
+  min-height: 0;
+}
+/* The name runs along the table edge: vertical, cut with an ellipsis past
+   7rem (inline size is the vertical length here). */
+.side-seat__name {
+  max-inline-size: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+  writing-mode: vertical-rl;
+}
+.side-seat--left .side-seat__name {
+  transform: rotate(180deg);
+}
+.side-seat__cards {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.side-seat__slot {
+  position: relative;
+  width: var(--side-w);
+  height: var(--side-card-w);
+}
+.side-seat__slot + .side-seat__slot {
+  margin-top: calc(var(--side-card-w) * -0.62);
+}
+.side-seat__card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.side-card {
+  width: var(--side-card-w);
+  flex-shrink: 0;
+  aspect-ratio: 5 / 7;
+}
+
 /* -- Phase 3 holding (3 and 4 players, after the cut): one short message
       above the read-only hand. */
 .phase3-holding {
