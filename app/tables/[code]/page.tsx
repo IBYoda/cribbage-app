@@ -16,6 +16,7 @@ import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { CountsToggle } from "@/components/table/CountsToggle";
+import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -222,6 +223,7 @@ const GAME_SYNC_FIELDS = [
   "status", "players", "dealer_id", "discarded_by", "deal_cut", "deal_cut_ack_by",
   "starter_card", "phase", "current_player", "play_count", "play_segment",
   "count_step", "revealed_by", "crib_revealed", "winner_id", "hand_no", "ready_by",
+  "win_claim_by",
 ] as const;
 
 function gameDiff(shown: Game, fresh: Game) {
@@ -330,6 +332,11 @@ export default function TablePage() {
   // Null until the dealer shows it -- before that, RLS returns no row at all.
   const [cribCards, setCribCards] = useState<string[] | null>(null);
   const [countStatus, setCountStatus] = useState<"idle" | "sending" | "error">("idle");
+  // MUGGINS: the win bar's call (claim_win / clear_win_claim / confirm_win)
+  // in flight, and a refused call's message -- kept with the game it was
+  // for, so it never shows on another game.
+  const [winSending, setWinSending] = useState(false);
+  const [winError, setWinError] = useState<{ gameId: string; message: string } | null>(null);
   const [countMessage, setCountMessage] = useState<string | null>(null);
   const [finishedGame, setFinishedGame] = useState<FinishedGame | null>(null);
   // True once the roster (and so every score and last award) has been read.
@@ -1038,6 +1045,28 @@ export default function TablePage() {
 
     if (table) await refreshTableState(table.id);
     setCountStatus("idle");
+  }
+
+  // MUGGINS: the win bar's three calls. Each is one locked RPC; the server
+  // enforces every rule (Muggins table, live game, a player, one claim at a
+  // time, only the claimant cancels, never confirm your own claim), and a
+  // refusal shows its message above the bar while the bar follows the real
+  // claim. Afterwards the game is re-read: a claim or cancel through
+  // reconcileGame; a confirm through the full refresh, because the match has
+  // ENDED (reconcileGame leaves endings alone) and the refresh is what shows
+  // the won screen if the ending's event is missed.
+  async function runWinAction(fn: "claim_win" | "clear_win_claim" | "confirm_win") {
+    if (!activeGame || !table) return;
+    const gameId = activeGame.id;
+    setWinSending(true);
+    setWinError(null);
+
+    const { error: rpcError } = await trackAction(supabase.rpc(fn, { p_game_id: gameId }));
+
+    if (rpcError) setWinError({ gameId, message: rpcError.message });
+    if (fn === "confirm_win" && !rpcError) await refreshTableState(table.id);
+    else await reconcileGame(gameId);
+    setWinSending(false);
   }
 
   // p_step is the step THIS screen is showing. If the server has already moved
@@ -2334,6 +2363,28 @@ export default function TablePage() {
     </HandRow>
   );
 
+  // MUGGINS: "I win" / "Confirm loss", only while a game is dealt and live
+  // ('active'): nothing to claim during the cut, between games or on the won
+  // screen. Its state is games.win_claim_by, which realtime, the re-reads and
+  // the safety poll all keep current.
+  const winClaimBy = activeGame?.win_claim_by ?? null;
+  const mugginsWinBar =
+    isMuggins && activeGame && isActive ? (
+      <MugginsWinBar
+        claim={!winClaimBy ? "none" : winClaimBy === session.user.id ? "mine" : "theirs"}
+        otherName={
+          winClaimBy && winClaimBy !== session.user.id
+            ? nameOf(winClaimBy)
+            : opponents.map((o) => displayName(o)).join(", ") || "the other player"
+        }
+        busy={winSending}
+        error={winError?.gameId === activeGame.id ? winError.message : null}
+        onClaim={() => runWinAction("claim_win")}
+        onCancel={() => runWinAction("clear_win_claim")}
+        onConfirm={() => runWinAction("confirm_win")}
+      />
+    ) : null;
+
   return (
     <TableShell
       header={header}
@@ -2344,11 +2395,10 @@ export default function TablePage() {
       // so the table doesn't jump when cards are dealt -- except during the
       // cut, which needs the space and has no hand to show.
       hand={isCutting ? null : hand}
-      // A Muggins table has no score strip: the row is left empty, which
-      // takes no height.
-      // ===== MUGGINS STAGE 3: the "I win" / "Confirm loss" buttons go here,
-      // in place of the strip (claim_win / clear_win_claim / confirm_win). =====
-      scores={isMuggins ? null : <ScoreStrip plates={plates} />}
+      // A Muggins table has no score strip: the win bar takes its place (see
+      // mugginsWinBar), and nothing at all -- no height -- while no game is
+      // dealt.
+      scores={isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />}
       surface={appearance.surface}
       back={appearance.back}
     />
