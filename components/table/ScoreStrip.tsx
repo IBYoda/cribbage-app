@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { DealerChip } from "@/components/table/OpponentBand";
+import { isCountReason } from "@/components/table/countingView";
 
 export type PlateMember = {
   userId: string;
@@ -98,11 +99,28 @@ function Avatar({ member }: { member: PlateMember }) {
 // freshness, so a page loaded with an hour-old award doesn't replay it. Keyed
 // on the award time so a new award restarts the CSS animation.
 //
+// EACH AWARD IS DECIDED ONCE, when it first arrives after mount: shown or
+// not, for good. Nothing else -- a later change of hideCountAwards, a
+// re-render -- can show it, hide it early, or restart its animation; the pill
+// element keeps one identity (keyed on the award's time) until the next
+// award replaces it.
+//
+// HIDE COUNT NUMBERS (hideCountAwards): read only at that moment. A hand or
+// crib count's award that arrives while it is on is never flashed, even if
+// the setting is turned off afterwards; pegging and his heels flash exactly
+// as before either way.
+//
 // MOUNT IT ONLY ONCE THE SCORES ARE LOADED. What it saw at mount counts as
 // "already seen"; mounted over an empty roster, the roster's arrival would
 // look like a new award and replay the last one (the table page waits for
 // its first roster read).
-export function ScoreFlash({ plates }: { plates: ScorePlate[] }) {
+export function ScoreFlash({
+  plates,
+  hideCountAwards = false,
+}: {
+  plates: ScorePlate[];
+  hideCountAwards?: boolean;
+}) {
   // Compared as times, not strings: the same timestamp can arrive formatted
   // differently from a REST read and from a realtime payload.
   const timeOf = (p: ScorePlate | null) => (p?.lastAwardedAt ? Date.parse(p.lastAwardedAt) || 0 : 0);
@@ -110,23 +128,29 @@ export function ScoreFlash({ plates }: { plates: ScorePlate[] }) {
     (best, p) => (p.lastAwardedAt && timeOf(p) >= timeOf(best) ? p : best),
     null
   );
-  const latestAt = latest?.lastAwardedAt ?? null;
+  const latestTime = latest ? timeOf(latest) : 0;
 
-  const [seenAt, setSeenAt] = useState<string | null>(latestAt);
-  const [hasNew, setHasNew] = useState(false);
-  if (latestAt !== seenAt) {
-    setSeenAt(latestAt);
-    setHasNew(true);
+  // The newest award seen so far (as a time), and the one award -- if any --
+  // being shown. What is there at mount counts as already seen and is never
+  // shown.
+  const [seenTime, setSeenTime] = useState(latestTime);
+  const [shownTime, setShownTime] = useState<number | null>(null);
+  if (latestTime !== seenTime) {
+    // A new award: decide it now, once.
+    setSeenTime(latestTime);
+    const show =
+      !!latest && latest.lastPoints !== null && !(hideCountAwards && isCountReason(latest.lastReason));
+    setShownTime(show ? latestTime : null);
   }
 
-  if (!hasNew || !latest || latest.lastPoints === null) return null;
+  if (shownTime === null || shownTime !== latestTime || !latest || latest.lastPoints === null) return null;
 
   const name = latest.members.map((m) => m.name).join(" & ");
   const points = latest.lastPoints >= 0 ? `+${latest.lastPoints}` : String(latest.lastPoints);
 
   return (
     <span
-      key={latestAt}
+      key={shownTime}
       title={`${name} ${points}${latest.lastReason ? ` — ${latest.lastReason}` : ""}`}
       className="score-flash flex max-w-full flex-col items-center rounded-xl bg-green-600 surface:bg-violet-600 px-2 py-0.5 text-[11px] font-semibold leading-[13px] text-white shadow"
     >

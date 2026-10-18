@@ -14,8 +14,8 @@ import {
   type Appearance,
 } from "@/lib/appearance";
 
-// THE SIGNED-IN PLAYER'S APPEARANCE -- their table surface and card back
-// (lib/appearance.ts), for THEIR OWN screen only.
+// THE SIGNED-IN PLAYER'S APPEARANCE -- their table surface, card back and
+// Hide counts setting (lib/appearance.ts), for THEIR OWN screen only.
 //
 // Read from public.user_appearance (owner-only, not in Realtime) once per
 // signed-in user: on load, and again only when the signed-in user changes.
@@ -32,9 +32,10 @@ import {
 type AppearanceState = Appearance & { userId: string | null; ready: boolean };
 
 type AppearanceContextValue = AppearanceState & {
-  // Saves both choices for the signed-in user (one upsert). Resolves to null
-  // on success -- the new look applies at once -- or to an error message, in
-  // which case nothing changes.
+  // Saves every choice for the signed-in user (one upsert of the whole row,
+  // so no field is ever lost). Resolves to null on success -- the new look
+  // applies at once -- or to an error message, in which case nothing
+  // changes.
   save: (next: Appearance) => Promise<string | null>;
 };
 
@@ -88,7 +89,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
       const { data, error } = await supabase
         .from("user_appearance")
-        .select("card_back, table_surface")
+        .select("card_back, table_surface, hide_counts")
         .eq("user_id", userId)
         .maybeSingle();
       if (ticket !== loadSeqRef.current) return; // superseded
@@ -98,7 +99,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         return;
       }
       const fetched = normalizeAppearance(
-        data ? { surface: data.table_surface, back: data.card_back } : null
+        data ? { surface: data.table_surface, back: data.card_back, hideCounts: data.hide_counts } : null
       );
       writeCachedAppearance(userId, fetched);
       setState({ ...fetched, userId, ready: true });
@@ -139,6 +140,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
           user_id: userId,
           table_surface: next.surface,
           card_back: next.back,
+          hide_counts: next.hideCounts,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id" }

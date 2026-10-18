@@ -22,7 +22,11 @@ import {
 // here is what the table shows. All six back images load on this page only.
 export function AppearanceSettings() {
   const appearance = useAppearance();
-  const saved: Appearance = { surface: appearance.surface, back: appearance.back };
+  const saved: Appearance = {
+    surface: appearance.surface,
+    back: appearance.back,
+    hideCounts: appearance.hideCounts,
+  };
 
   // Unsaved picks; null = nothing changed (shows the saved choice).
   const [draft, setDraft] = useState<Appearance | null>(null);
@@ -30,7 +34,9 @@ export function AppearanceSettings() {
   const [message, setMessage] = useState<string | null>(null);
 
   const shown = draft ?? saved;
-  const changed = draft !== null && (draft.surface !== saved.surface || draft.back !== saved.back);
+  const changed =
+    draft !== null &&
+    (draft.surface !== saved.surface || draft.back !== saved.back || draft.hideCounts !== saved.hideCounts);
 
   function pick(next: Partial<Appearance>) {
     setDraft({ ...shown, ...next });
@@ -130,6 +136,30 @@ export function AppearanceSettings() {
             </label>
           ))}
         </div>
+      </fieldset>
+
+      {/* COUNT NUMBERS: Hide counts, for this player's own screen only. The
+          table header has the same switch, which saves at once; this one is
+          saved with the rest by Save Appearance. */}
+      <fieldset className="flex flex-col gap-2" disabled={!appearance.ready || status === "saving"}>
+        <legend className="mb-2 text-sm font-medium">Count numbers</legend>
+        <div className="flex items-center gap-3">
+          <button
+            id="hide-counts-switch"
+            type="button"
+            role="switch"
+            aria-checked={shown.hideCounts}
+            aria-describedby="hide-counts-hint"
+            onClick={() => pick({ hideCounts: !shown.hideCounts })}
+            className="felt-switch"
+          />
+          <label htmlFor="hide-counts-switch" className="cursor-pointer text-sm">
+            Hide counts
+          </label>
+        </div>
+        <p id="hide-counts-hint" className="text-sm">
+          Hide the hand and crib point numbers on your screen. The score strip stays.
+        </p>
       </fieldset>
 
       <button
