@@ -22,6 +22,9 @@ import { scoreHand, type HandScore } from "@/lib/scoring";
 //   * POINTS ONLY AFTER A CONFIRM. Nothing here scores the hand or crib being
 //     counted -- players count out loud first. The recap has one line per
 //     count already confirmed.
+//   * HIDE COUNT NUMBERS (hideNumbers): the recap keeps one line per
+//     confirmed count but says only that it was counted ("Your hand
+//     counted") -- no points, no breakdown. Nothing else changes.
 
 export type CountingInput = {
   myId: string;
@@ -33,6 +36,9 @@ export type CountingInput = {
   oppCards: string[] | null; // the opponent's hand, if readable
   cribCards: string[] | null; // the crib, if readable
   starter: string | null;
+  // The table page's one hideCountNumbers value (the player's Hide counts
+  // setting). Optional: absent means numbers shown, as before.
+  hideNumbers?: boolean;
 };
 
 export type CardSlot =
@@ -55,6 +61,12 @@ export type CountingView = {
   recap: string[]; // one small line per count already confirmed
 };
 
+// A hand or crib count award, by the reason confirm_count writes ("hand:
+// ..." / "crib: ..."). Pegging and his heels are never count awards.
+export function isCountReason(reason: string | null | undefined) {
+  return !!reason && (reason.startsWith("hand:") || reason.startsWith("crib:"));
+}
+
 // "15s 4 · pairs 2 · runs 3", matching the reason confirm_count writes.
 export function formatBreakdown(score: HandScore) {
   const parts = [
@@ -68,7 +80,7 @@ export function formatBreakdown(score: HandScore) {
 }
 
 export function countingView(input: CountingInput): CountingView {
-  const { myId, dealerId, oppName, phase, step, myHand, oppCards, cribCards, starter } = input;
+  const { myId, dealerId, oppName, phase, step, myHand, oppCards, cribCards, starter, hideNumbers } = input;
   const done = phase === "done";
   const iAmDealer = myId === dealerId;
 
@@ -97,8 +109,9 @@ export function countingView(input: CountingInput): CountingView {
   }
 
   // RECAP: a small line per CONFIRMED count, in counting order -- never the
-  // count in progress.
+  // count in progress. With the numbers hidden, just "<label> counted".
   const line = (label: string, cards: string[] | null, isCrib: boolean) => {
+    if (hideNumbers) return `${label} counted`;
     if (!cards || cards.length !== 4 || !starter) return null;
     const score = scoreHand(cards, starter, isCrib);
     return `${label}: ${score.points} — ${formatBreakdown(score)}`;

@@ -58,21 +58,31 @@ export function cardBackUrl(back: CardBack) {
 
 // ---------------------------------------------------------------------------
 // A player's whole appearance, as saved in public.user_appearance
-// (docs/sql/appearance-settings.sql). No row means Classic for both.
+// (docs/sql/appearance-settings.sql, docs/sql/hide-counts.sql). No row means
+// Classic for both, with counts shown.
+//
+// hideCounts: hide the hand and crib COUNT numbers on this player's own
+// screen (the recap lines, the count flashes, a count win's breakdown). The
+// score strip still moves, and nothing changes for anyone else or on the
+// server.
 // ---------------------------------------------------------------------------
-export type Appearance = { surface: TableSurface; back: CardBack };
+export type Appearance = { surface: TableSurface; back: CardBack; hideCounts: boolean };
 
 export const CLASSIC_APPEARANCE: Appearance = {
   surface: DEFAULT_TABLE_SURFACE,
   back: DEFAULT_CARD_BACK,
+  hideCounts: false,
 };
 
-// Anything unknown -- an old value, a typo, a missing row -- is Classic.
+// Anything unknown -- an old value, a typo, a missing row -- is Classic. A
+// missing or non-boolean hideCounts (a per-device copy cached before the
+// setting existed) is false.
 export function normalizeAppearance(value: unknown): Appearance {
-  const v = (value ?? {}) as { surface?: unknown; back?: unknown };
+  const v = (value ?? {}) as { surface?: unknown; back?: unknown; hideCounts?: unknown };
   return {
     surface: isTableSurface(v.surface) ? v.surface : DEFAULT_TABLE_SURFACE,
     back: isCardBack(v.back) ? v.back : DEFAULT_CARD_BACK,
+    hideCounts: v.hideCounts === true,
   };
 }
 
@@ -80,7 +90,7 @@ export function normalizeAppearance(value: unknown): Appearance {
 // THE PER-DEVICE COPY (localStorage), keyed by user id, so a refresh can show
 // the right look at once and one account's look never shows for another:
 //   LAST_USER_KEY        the user the cached copy belongs to;
-//   cacheKey(userId)     that user's { surface, back }.
+//   cacheKey(userId)     that user's { surface, back, hideCounts }.
 // Cleared on sign-out and when a different user signs in. Every access is in
 // try/catch: with storage blocked, the app simply has no cache.
 // The database is the source of truth; this is only a head start.

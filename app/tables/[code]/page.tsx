@@ -15,6 +15,8 @@ import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { CountsToggle } from "@/components/table/CountsToggle";
+import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
 import { countingView } from "@/components/table/countingView";
@@ -222,6 +224,12 @@ export default function TablePage() {
   // MY card back and table surface (my screen only). The table isn't drawn
   // until they're known, so it never appears in the wrong look first.
   const appearance = useAppearance();
+  // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
+  // hand and crib count numbers on this screen (the recap, count flashes, a
+  // count win's breakdown). Today it is just this player's Hide counts
+  // setting; a later table option can OR into it here. The score strip is
+  // never affected.
+  const hideCountNumbers = appearance.hideCounts;
   const code = params.code;
 
   const [session, setSession] = useState<Session | null>(null);
@@ -1582,6 +1590,7 @@ export default function TablePage() {
           oppCards: revealedHands[countOpp.user_id] ? sortHand(revealedHands[countOpp.user_id]) : null,
           cribCards: cribCards ? sortHand(cribCards) : null,
           starter: starterCard,
+          hideNumbers: hideCountNumbers,
         })
       : null;
 
@@ -1700,6 +1709,21 @@ export default function TablePage() {
       handNo={isActive ? (activeGame?.hand_no ?? null) : null}
       right={
         <>
+          {/* Hide counts, saved at once. Not while Leave is asking to
+              confirm, so the header's right side never grows past one
+              line. */}
+          {appearance.ready && !leaveConfirming && (
+            <CountsToggle
+              hidden={appearance.hideCounts}
+              onSave={(nextHidden) =>
+                appearance.save({
+                  surface: appearance.surface,
+                  back: appearance.back,
+                  hideCounts: nextHidden,
+                })
+              }
+            />
+          )}
           {realtimeStatus === "disconnected" && (
             <span className="text-xs text-amber-600 dark:text-amber-500 surface:text-amber-200">Reconnecting...</span>
           )}
@@ -1889,7 +1913,10 @@ export default function TablePage() {
                     <>
                       {" "}
                       {winner.score}
+                      {/* With count numbers hidden, a count win shows
+                          only the score: no breakdown, no (+N). */}
                       {winner.last_reason &&
+                        !(hideCountNumbers && isCountReason(winner.last_reason)) &&
                         ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
                     </>
                   )}
@@ -1938,7 +1965,9 @@ export default function TablePage() {
   // The score flash, between the piles, above Sort. Not mounted until the
   // roster has loaded: see ScoreFlash. The same element in both pile rows
   // below, so the winning point's flash carries over onto the final board.
-  const scoreFlash = membersLoaded ? <ScoreFlash plates={plates} /> : null;
+  const scoreFlash = membersLoaded ? (
+    <ScoreFlash plates={plates} hideCountAwards={hideCountNumbers} />
+  ) : null;
 
   // The crib (left) and the starter or deck (right), with the hand's action
   // buttons between them. While cards are out -- and on the final board

@@ -1134,8 +1134,10 @@ section.felt-panel {
   opacity: 0.45;
 }
 
-/* An on/off switch on the felt (Muggins mode). Only the switch dims when
-   disabled, never its label. */
+/* An on/off switch on the felt (Muggins mode on Start a Table, disabled;
+   Hide counts on the Profile page, live). Only the switch dims when
+   disabled, never its label. On: the knob moves right and the track fills
+   with brass. */
 .felt-switch {
   position: relative;
   flex-shrink: 0;
@@ -1157,6 +1159,13 @@ section.felt-panel {
 }
 .felt-switch[aria-checked="true"]::after {
   left: 21px;
+}
+.felt-switch[aria-checked="true"] {
+  background: rgb(226 193 125 / 0.4);
+}
+.felt-switch:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
 }
 .felt-switch:disabled {
   opacity: 0.45;
