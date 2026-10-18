@@ -16,6 +16,7 @@ import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { CountsToggle } from "@/components/table/CountsToggle";
+import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -27,6 +28,10 @@ type TableRow = {
   id: string;
   code: string;
   status: string;
+  // MUGGINS (chosen at creation, never changed): the app keeps no visible
+  // score -- no score strip, no score flash, no count numbers, no score in
+  // the result -- and the players keep their own.
+  is_muggins: boolean;
 };
 
 type Member = {
@@ -105,13 +110,17 @@ type Game = {
   // "ready / waiting" state is derived from this, never from local state, so
   // a refresh shows exactly what the server knows.
   ready_by: string[];
+  // MUGGINS: who has claimed the win of this live match, waiting for the
+  // other player to confirm it (claim_win / confirm_win). Always null on a
+  // normal table. Carried here, not read yet.
+  win_claim_by: string | null;
 };
 
 // Must stay a single string LITERAL, not a concatenation: supabase-js infers
 // the returned row shape from this exact literal type, and "a" + "b" widens to
 // plain `string`, which silently collapses the result type to an error type.
 const GAME_COLUMNS =
-  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id, hand_no, ready_by";
+  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id, hand_no, ready_by, win_claim_by";
 
 // The last game to end in a win, kept after the live game is gone so the
 // result stays on screen (and survives a reload) until the next game starts.
@@ -214,6 +223,7 @@ const GAME_SYNC_FIELDS = [
   "status", "players", "dealer_id", "discarded_by", "deal_cut", "deal_cut_ack_by",
   "starter_card", "phase", "current_player", "play_count", "play_segment",
   "count_step", "revealed_by", "crib_revealed", "winner_id", "hand_no", "ready_by",
+  "win_claim_by",
 ] as const;
 
 function gameDiff(shown: Game, fresh: Game) {
@@ -261,17 +271,19 @@ export default function TablePage() {
   // MY card back and table surface (my screen only). The table isn't drawn
   // until they're known, so it never appears in the wrong look first.
   const appearance = useAppearance();
-  // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
-  // hand and crib count numbers on this screen (the recap, count flashes, a
-  // count win's breakdown). Today it is just this player's Hide counts
-  // setting; a later table option can OR into it here. The score strip is
-  // never affected.
-  const hideCountNumbers = appearance.hideCounts;
   const code = params.code;
 
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [table, setTable] = useState<TableRow | null>(null);
+  // MUGGINS: no visible scoring on this table, for everyone (see TableRow).
+  const isMuggins = table?.is_muggins === true;
+  // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
+  // hand and crib count numbers on this screen (the recap, count flashes, a
+  // count win's breakdown): this player's Hide counts setting, or a Muggins
+  // table, whatever the setting. The score strip is never affected by the
+  // setting (a Muggins table has none at all).
+  const hideCountNumbers = appearance.hideCounts || isMuggins;
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeGame, setActiveGame] = useState<Game | null>(null);
@@ -320,6 +332,11 @@ export default function TablePage() {
   // Null until the dealer shows it -- before that, RLS returns no row at all.
   const [cribCards, setCribCards] = useState<string[] | null>(null);
   const [countStatus, setCountStatus] = useState<"idle" | "sending" | "error">("idle");
+  // MUGGINS: the win bar's call (claim_win / clear_win_claim / confirm_win)
+  // in flight, and a refused call's message -- kept with the game it was
+  // for, so it never shows on another game.
+  const [winSending, setWinSending] = useState(false);
+  const [winError, setWinError] = useState<{ gameId: string; message: string } | null>(null);
   const [countMessage, setCountMessage] = useState<string | null>(null);
   const [finishedGame, setFinishedGame] = useState<FinishedGame | null>(null);
   // True once the roster (and so every score and last award) has been read.
@@ -823,7 +840,7 @@ export default function TablePage() {
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status, ended_reason")
+        .select("id, code, status, ended_reason, is_muggins")
         .eq("code", code)
         .maybeSingle();
 
@@ -1028,6 +1045,28 @@ export default function TablePage() {
 
     if (table) await refreshTableState(table.id);
     setCountStatus("idle");
+  }
+
+  // MUGGINS: the win bar's three calls. Each is one locked RPC; the server
+  // enforces every rule (Muggins table, live game, a player, one claim at a
+  // time, only the claimant cancels, never confirm your own claim), and a
+  // refusal shows its message above the bar while the bar follows the real
+  // claim. Afterwards the game is re-read: a claim or cancel through
+  // reconcileGame; a confirm through the full refresh, because the match has
+  // ENDED (reconcileGame leaves endings alone) and the refresh is what shows
+  // the won screen if the ending's event is missed.
+  async function runWinAction(fn: "claim_win" | "clear_win_claim" | "confirm_win") {
+    if (!activeGame || !table) return;
+    const gameId = activeGame.id;
+    setWinSending(true);
+    setWinError(null);
+
+    const { error: rpcError } = await trackAction(supabase.rpc(fn, { p_game_id: gameId }));
+
+    if (rpcError) setWinError({ gameId, message: rpcError.message });
+    if (fn === "confirm_win" && !rpcError) await refreshTableState(table.id);
+    else await reconcileGame(gameId);
+    setWinSending(false);
   }
 
   // p_step is the step THIS screen is showing. If the server has already moved
@@ -1296,6 +1335,7 @@ export default function TablePage() {
             winner_id: string | null;
             hand_no: number | null;
             ready_by: string[] | null;
+            win_claim_by: string | null;
           };
           // A new game arrives as EITHER 'cutting' (no decisive previous
           // result -- first game, a non-win ending, a changed roster: cut for
@@ -1337,6 +1377,7 @@ export default function TablePage() {
               winner_id: newGame.winner_id,
               hand_no: newGame.hand_no ?? 1,
               ready_by: newGame.ready_by ?? [],
+              win_claim_by: newGame.win_claim_by ?? null,
             });
             // Set NOW, not one render later: the UPDATEs that follow (a
             // discard, a cut card) are matched against this, and can arrive
@@ -1390,6 +1431,7 @@ export default function TablePage() {
             winner_id: string | null;
             hand_no: number | null;
             ready_by: string[] | null;
+            win_claim_by: string | null;
           };
           // THE WON GAME ON SCREEN: its only change after it ends is a New
           // Game tap (ready_by). Merge that and nothing else -- a union, so an
@@ -1523,6 +1565,7 @@ export default function TablePage() {
                   winner_id: updatedGame.winner_id,
                   hand_no: updatedGame.hand_no ?? current.hand_no,
                   ready_by: updatedGame.ready_by ?? [],
+                  win_claim_by: updatedGame.win_claim_by ?? null,
                 }
               : current
           );
@@ -1951,13 +1994,16 @@ export default function TablePage() {
     <TableHeader
       code={code}
       handNo={isActive ? (activeGame?.hand_no ?? null) : null}
+      muggins={isMuggins}
       right={
         <>
           {/* Hide counts, saved at once. Not while Leave is asking to
               confirm, so the header's right side never grows past one
-              line. */}
+              line. On a Muggins table it is locked: nothing to show, so
+              nothing to hide, and nothing is saved. */}
           {appearance.ready && !leaveConfirming && (
             <CountsToggle
+              locked={isMuggins}
               hidden={appearance.hideCounts}
               onSave={(nextHidden) =>
                 appearance.save({
@@ -2153,7 +2199,8 @@ export default function TablePage() {
                     : `${winner ? displayName(winner) : "A player who has left"} wins!`}
                   {/* How it ended: the winner's last award IS the winning one,
                       since nothing can score after the game ends. */}
-                  {winner && (
+                  {/* Not on a Muggins table: it shows no score anywhere. */}
+                  {winner && !isMuggins && (
                     <>
                       {" "}
                       {winner.score}
@@ -2209,7 +2256,9 @@ export default function TablePage() {
   // The score flash, between the piles, above Sort. Not mounted until the
   // roster has loaded: see ScoreFlash. The same element in both pile rows
   // below, so the winning point's flash carries over onto the final board.
-  const scoreFlash = membersLoaded ? (
+  // Never on a Muggins table (pegging's Go and last-card labels are not part
+  // of it, and stay).
+  const scoreFlash = membersLoaded && !isMuggins ? (
     <ScoreFlash plates={plates} hideCountAwards={hideCountNumbers} />
   ) : null;
 
@@ -2314,6 +2363,28 @@ export default function TablePage() {
     </HandRow>
   );
 
+  // MUGGINS: "I win" / "Confirm loss", only while a game is dealt and live
+  // ('active'): nothing to claim during the cut, between games or on the won
+  // screen. Its state is games.win_claim_by, which realtime, the re-reads and
+  // the safety poll all keep current.
+  const winClaimBy = activeGame?.win_claim_by ?? null;
+  const mugginsWinBar =
+    isMuggins && activeGame && isActive ? (
+      <MugginsWinBar
+        claim={!winClaimBy ? "none" : winClaimBy === session.user.id ? "mine" : "theirs"}
+        otherName={
+          winClaimBy && winClaimBy !== session.user.id
+            ? nameOf(winClaimBy)
+            : opponents.map((o) => displayName(o)).join(", ") || "the other player"
+        }
+        busy={winSending}
+        error={winError?.gameId === activeGame.id ? winError.message : null}
+        onClaim={() => runWinAction("claim_win")}
+        onCancel={() => runWinAction("clear_win_claim")}
+        onConfirm={() => runWinAction("confirm_win")}
+      />
+    ) : null;
+
   return (
     <TableShell
       header={header}
@@ -2324,7 +2395,10 @@ export default function TablePage() {
       // so the table doesn't jump when cards are dealt -- except during the
       // cut, which needs the space and has no hand to show.
       hand={isCutting ? null : hand}
-      scores={<ScoreStrip plates={plates} />}
+      // A Muggins table has no score strip: the win bar takes its place (see
+      // mugginsWinBar), and nothing at all -- no height -- while no game is
+      // dealt.
+      scores={isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />}
       surface={appearance.surface}
       back={appearance.back}
     />

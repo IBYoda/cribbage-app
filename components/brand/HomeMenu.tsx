@@ -6,6 +6,7 @@ import { Wordmark } from "@/components/brand/Wordmark";
 import { SiteFooter } from "@/components/brand/SiteFooter";
 import { JoinTableForm } from "@/components/brand/JoinTableForm";
 import type { JoinableTable, MyTable } from "@/lib/openTables";
+import { MugginsTag } from "@/components/MugginsTag";
 
 // What the Open Tables list shows (read by HomeView, lib/openTables.ts).
 export type OpenTablesState = {
@@ -188,7 +189,10 @@ function OpenTables({
                   <Avatar name={viewerName} url={viewerAvatar} />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-bold">Your table</span>
-                    <span className="text-sm leading-snug">{myTableStatus(t)}</span>
+                    <span className="text-sm leading-snug">
+                      {t.isMuggins && <MugginsLead />}
+                      {myTableStatus(t)}
+                    </span>
                   </span>
                 </span>
                 <Link href={`/tables/${t.code}`} className="rejoin-btn" aria-label={`Rejoin your table ${t.code}`}>
@@ -202,7 +206,10 @@ function OpenTables({
                   <Avatar name={t.hostName} url={t.hostAvatar} />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-bold">{t.hostName}</span>
-                    <span className="text-sm">{timeAgo(t.createdAt, readAt)}</span>
+                    <span className="text-sm">
+                      {t.isMuggins && <MugginsLead />}
+                      {timeAgo(t.createdAt, readAt)}
+                    </span>
                   </span>
                 </span>
                 <Link
@@ -226,6 +233,16 @@ function OpenTables({
         </p>
       )}
     </section>
+  );
+}
+
+// A Muggins table's tag, at the start of the row's second line -- never
+// beside the name, which keeps all the room it has.
+function MugginsLead() {
+  return (
+    <>
+      <MugginsTag />{" "}
+    </>
   );
 }
 

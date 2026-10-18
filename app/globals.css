@@ -1134,10 +1134,9 @@ section.felt-panel {
   opacity: 0.45;
 }
 
-/* An on/off switch on the felt (Muggins mode on Start a Table, disabled;
-   Hide counts on the Profile page, live). Only the switch dims when
-   disabled, never its label. On: the knob moves right and the track fills
-   with brass. */
+/* An on/off switch on the felt (Hide counts on the Profile page). Only the
+   switch dims when disabled, never its label. On: the knob moves right and
+   the track fills with brass. */
 .felt-switch {
   position: relative;
   flex-shrink: 0;
@@ -1177,6 +1176,22 @@ section.felt-panel {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--brass-light);
+}
+
+/* "Muggins · no scoring" (components/MugginsTag.tsx): a small outlined tag
+   on Open Tables rows and in the table header. It takes the text colour of
+   wherever it sits -- cream on the felt, the table's own text colour on
+   every table surface -- so it always has that text's contrast. */
+.muggins-tag {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 0 0.375rem;
+  border: 1px solid currentColor;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  white-space: nowrap;
 }
 
 /* OPEN TABLES (the home page's list, components/brand/HomeMenu.tsx).
