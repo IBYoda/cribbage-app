@@ -9,12 +9,13 @@ import { cardPlayValue, sortHand } from "@/lib/cards";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
 import { TableHeader, TableShell } from "@/components/table/TableShell";
-import { OpponentBand, type OpponentSeat } from "@/components/table/OpponentBand";
+import { OpponentBand, SideSeat, type OpponentSeat } from "@/components/table/OpponentBand";
 import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { PHASE3_TABLES } from "@/lib/featureFlags";
+import { buildPlates, cribCountDuringDiscard, handSizes, seatOrderFrom, seatPlaces } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
@@ -226,13 +227,12 @@ function revealKey(row: {
 // client, the admin view, leave-table and the timeout sweep.
 const LIVE_GAME_STATUSES = ["cutting", "active"];
 
-// The 2-player game this screen still plays: the discard, the crib and the
-// count. How many seats a table has is tables.max_players (see capacity
-// below); 3- and 4-player play arrives with app stages A2 to A4.
-const REQUIRED_PLAYERS = 2;
-const CARDS_DEALT = 6;
-const CARDS_TO_DISCARD = 2;
-const CARDS_AFTER_DISCARD = CARDS_DEALT - CARDS_TO_DISCARD;
+// HAND SIZES come from handSizes() in lib/phase3.ts, by the number of
+// players: 6 dealt, 2 discarded and 4 kept with 2 players (as always); 5, 1
+// and 4 with 3 or 4 -- but only with the Phase 3 flag on. With it off every
+// game uses the 2-player sizes, exactly as before Phase 3.
+const sizesFor = (players: string[] | null | undefined) =>
+  handSizes(PHASE3_TABLES ? (players?.length ?? 2) : 2);
 
 // TABLE SYNC: what the safety poll (see the poll effect) compares, to say
 // exactly what a missed realtime event had left wrong on screen.
@@ -572,6 +572,7 @@ export default function TablePage() {
         crib_revealed: boolean | null;
         count_step: number | null;
         discarded_by: string[] | null;
+        players?: string[] | null;
       },
       previousStatus: string | null
     ) => {
@@ -610,7 +611,7 @@ export default function TablePage() {
         row.status === "active" &&
         mine &&
         (row.discarded_by ?? []).includes(mine.userId) &&
-        mine.cards.length === CARDS_DEALT
+        mine.cards.length === sizesFor(row.players).dealt
       ) {
         fetchMyHand(row.id);
       }
@@ -1206,13 +1207,13 @@ export default function TablePage() {
       if (current.includes(card)) return current.filter((c) => c !== card);
       // Silently ignore a third pick rather than swapping one out -- swapping
       // would make it unclear which card you just deselected.
-      if (current.length >= CARDS_TO_DISCARD) return current;
+      if (current.length >= sizesFor(activeGame?.players).discard) return current;
       return [...current, card];
     });
   }
 
   async function handleDiscard() {
-    if (!activeGame || selectedCards.length !== CARDS_TO_DISCARD) return;
+    if (!activeGame || selectedCards.length !== sizesFor(activeGame.players).discard) return;
 
     setDiscardStatus("sending");
     setDiscardMessage(null);
@@ -1608,7 +1609,7 @@ export default function TablePage() {
                   // Only the kept four: a his-heels win can land before my
                   // post-discard refetch, while the six dealt are still here.
                   hands:
-                    mine && mine.cards.length === CARDS_AFTER_DISCARD
+                    mine && mine.cards.length === sizesFor(updatedGame.players).kept
                       ? { [mine.userId]: mine.cards }
                       : {},
                   crib: null,
@@ -1897,11 +1898,24 @@ export default function TablePage() {
   const isHost = hostId === session.user.id;
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
-  // The waiting room: no game and no result on screen. After the cut, the
-  // holding state: the hand is dealt but this screen can't play it yet
-  // (stages A3 and A4).
+  // The waiting room: no game and no result on screen. After the discard,
+  // the holding state: the starter is turned but this screen can't play the
+  // hand yet (stage A4). The discard itself is played (stage A3).
   const inWaitingRoom = isPhase3Table && !activeGame && !finishedGame;
-  const inPhase3Holding = isPhase3Table && !!activeGame && activeGame.status === "active";
+  const inPhase3Holding =
+    isPhase3Table && !!activeGame && activeGame.status === "active" && (activeGame.phase ?? "discard") !== "discard";
+  // The game's players (seat order) and how many: hand sizes, the crib, the
+  // seats and the plates follow them. 2 for every 2-player table, and for
+  // every table with the Phase 3 flag off (as before Phase 3).
+  const gamePlayers = activeGame?.players ?? finishedGame?.players ?? null;
+  const playerCount = isPhase3Table ? gamePlayers?.length || capacity : 2;
+  const sizes = handSizes(playerCount);
+  // THE PHASE 3 LAYOUT (3 and 4 players, flag on): the others around me --
+  // the next player clockwise on my left, then across the top, then on my
+  // right -- from the game's players list. Not in the waiting room or the
+  // cut, which have their own screens.
+  const phase3Layout = isPhase3Table && !!gamePlayers && !inWaitingRoom && activeGame?.status !== "cutting";
+  const places = phase3Layout && gamePlayers ? seatPlaces(gamePlayers, session.user.id) : null;
 
   const phase = activeGame?.phase ?? "discard";
   // STATUS BEFORE PHASE: every phase flag requires a live, dealt game first.
@@ -1962,12 +1976,13 @@ export default function TablePage() {
 
   const discardedBy = activeGame?.discarded_by ?? [];
   const iHaveDiscarded = discardedBy.includes(session.user.id);
-  const cribComplete = discardedBy.length >= REQUIRED_PLAYERS;
+  // Every player has discarded (2, 3 or 4).
+  const cribComplete = discardedBy.length >= playerCount;
   const iAmDealer = activeGame?.dealer_id === session.user.id;
   const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
   // (Never in the Phase 3 holding state: its hand is shown read-only.)
   const canDiscard =
-    Boolean(activeGame) && !iHaveDiscarded && myHand.length === CARDS_DEALT && !inPhase3Holding;
+    Boolean(activeGame) && !iHaveDiscarded && myHand.length === sizes.dealt && !inPhase3Holding;
 
   // The cut phase. Only the table's FIRST game cuts -- later games alternate
   // the deal, are created straight into 'active', and never enter this.
@@ -2066,10 +2081,10 @@ export default function TablePage() {
       // laid down. Reveals nothing: which cards they've played is already
       // public, and hand sizes are visible in a real game anyway.
       const played = plays.filter((p) => p.kind === "play" && p.user_id === opponentId).length;
-      return Math.max(CARDS_AFTER_DISCARD - played, 0);
+      return Math.max(sizes.kept - played, 0);
     }
-    if (isCountingOrDone) return CARDS_AFTER_DISCARD;
-    return discardedBy.includes(opponentId) ? CARDS_AFTER_DISCARD : CARDS_DEALT;
+    if (isCountingOrDone) return sizes.kept;
+    return discardedBy.includes(opponentId) ? sizes.kept : sizes.dealt;
   }
 
   // ---- The table, as a fixed-height shell (UI polish, stage 1). ----------
@@ -2096,7 +2111,7 @@ export default function TablePage() {
   // public hand size -- except in counting, where it shows face-up in the
   // middle and the strip keeps only the name -- or face-up, sorted, on the
   // final board.
-  const seats: OpponentSeat[] = opponents.map((opponent) => {
+  const seatOf = (opponent: Member): OpponentSeat => {
     return {
       userId: opponent.user_id,
       name: displayName(opponent),
@@ -2104,7 +2119,7 @@ export default function TablePage() {
       // In counting the hand is in the middle: the strip keeps no cards.
       // The final board: the hand face-up when readable, else face-down.
       cardCount: finalBoard
-        ? CARDS_AFTER_DISCARD
+        ? sizes.kept
         : view
           ? 0
           : opponentCardCount(opponent.user_id),
@@ -2115,20 +2130,39 @@ export default function TablePage() {
         : undefined,
       saidGo: goBy.has(opponent.user_id),
     };
-  });
+  };
+  const seats: OpponentSeat[] = opponents.map(seatOf);
+  // Phase 3: who sits where (left, top, right), as seats.
+  const memberSeat = (userId: string | null) => {
+    const m = userId ? members.find((x) => x.user_id === userId) : undefined;
+    return m ? seatOf(m) : null;
+  };
+  const leftSeat = places ? memberSeat(places.left) : null;
+  const topSeat = places ? memberSeat(places.top) : null;
+  const rightSeat = places ? memberSeat(places.right) : null;
 
-  // One plate per player (2-player). Built as a list so a 4-player team game
-  // only has to group members into plates -- see ScoreStrip.
-  const plates: ScorePlate[] = [...(me ? [me] : []), ...opponents].map((m) => ({
-    key: m.user_id,
-    members: [{ userId: m.user_id, name: displayName(m), avatarUrl: m.avatar_url }],
-    score: m.score,
-    isMine: m.user_id === session.user.id,
-    hasDealer: handDealerId === m.user_id,
-    lastPoints: m.last_points,
-    lastReason: m.last_reason,
-    lastAwardedAt: m.last_awarded_at,
-  }));
+  // THE SCORE PLATES, built in one place (buildPlates, lib/phase3.ts). 2
+  // players (and every table with the flag off): one plate per player, me
+  // first -- exactly the list this screen always built. 3 players and
+  // 4-player Solo: one per player, me first, then clockwise. 4-player Teams:
+  // one per team, my team first, the flash naming the partner who scored.
+  const plateMembers: Member[] = phase3Layout && gamePlayers
+    ? seatOrderFrom(gamePlayers, session.user.id).flatMap((id) => members.filter((m) => m.user_id === id))
+    : [...(me ? [me] : []), ...opponents];
+  const plates: ScorePlate[] = buildPlates({
+    rows: plateMembers.map((m) => ({
+      user_id: m.user_id,
+      name: displayName(m),
+      avatar_url: m.avatar_url,
+      score: m.score,
+      last_points: m.last_points,
+      last_reason: m.last_reason,
+      last_awarded_at: m.last_awarded_at,
+    })),
+    myId: session.user.id,
+    dealerId: handDealerId,
+    teamsPlayers: phase3Layout && isTeams && gamePlayers ? gamePlayers : null,
+  });
 
   // Every error the old layout stacked into the page as extra lines now
   // shares one overlay at the bottom of the middle region.
@@ -2229,12 +2263,13 @@ export default function TablePage() {
           onAcknowledge={handleAcknowledgeCut}
         />
       ) : inPhase3Holding ? (
-        // PHASE 3 HOLDING (A2): a 3- or 4-player hand is dealt, but this
-        // screen can't play it yet (A3, A4). The player's own hand is in the
-        // hand row, read-only; Leave (which ends the match) is in the header.
+        // PHASE 3 HOLDING: everyone has discarded and the starter is turned,
+        // but this screen can't play a 3- or 4-player hand yet (A4). My hand
+        // is in the hand row, read-only; Leave (which ends the match) is in
+        // the header.
         <div className="phase3-holding">
-          <p className="text-base font-medium">3- and 4-player play is coming soon.</p>
-          <p className="text-sm text-zinc-500">Your hand is dealt below. Leave ends the match for everyone.</p>
+          <p className="text-base font-medium">Play is coming soon.</p>
+          <p className="text-sm text-zinc-500">Your hand and the starter are below. Leave ends the match for everyone.</p>
         </div>
       ) : activeGame ? (
         !cribComplete ? (
@@ -2244,7 +2279,15 @@ export default function TablePage() {
             </p>
           ) : (
             <p className="text-base font-medium">
-              Pick {CARDS_TO_DISCARD} cards for {iAmDealer ? "your" : "their"} crib
+              {isPhase3Table ? (
+                <>
+                  Pick {sizes.discard} card for {iAmDealer ? "your" : `${nameOf(activeGame.dealer_id ?? "")}'s`} crib
+                </>
+              ) : (
+                <>
+                  Pick {sizes.discard} cards for {iAmDealer ? "your" : "their"} crib
+                </>
+              )}
             </p>
           )
         ) : (
@@ -2463,7 +2506,7 @@ export default function TablePage() {
     <PileRow
       // The crib face-up (fanned) when readable, else a face-down pile.
       crib={{
-        faceDownCount: CARDS_AFTER_DISCARD,
+        faceDownCount: sizes.kept,
         shownCards: finalBoard.board.crib ? sortHand(finalBoard.board.crib) : null,
         dealerIsMe: handDealerId === session.user.id,
       }}
@@ -2477,12 +2520,14 @@ export default function TablePage() {
           ? // Counting: a face-down pile until the crib's count is up, then
             // the face-up fan (as on the final board), through 'done'.
             {
-              faceDownCount: CARDS_AFTER_DISCARD,
+              faceDownCount: sizes.kept,
               shownCards: view.cribFan,
               dealerIsMe: handDealerId === session.user.id,
             }
           : {
-              faceDownCount: discardedBy.length * CARDS_TO_DISCARD,
+              // Everyone's discards so far (and, with 3 players, the deck
+              // card dealt to the crib).
+              faceDownCount: cribCountDuringDiscard(playerCount, discardedBy.length),
               shownCards: null,
               dealerIsMe: handDealerId === session.user.id,
             }
@@ -2502,9 +2547,10 @@ export default function TablePage() {
           Sort
         </button>
       )}
-      {/* Only at exactly 2 selected -- there is no valid partial discard, so
-          a disabled-but-visible button would just be noise. */}
-      {canDiscard && selectedCards.length === CARDS_TO_DISCARD && (
+      {/* Only once the full discard is picked (2 cards, or 1 with 3 and 4
+          players) -- there is no valid partial discard, so a
+          disabled-but-visible button would just be noise. */}
+      {canDiscard && selectedCards.length === sizes.discard && (
         <button
           onClick={handleDiscard}
           disabled={discardStatus === "sending"}
@@ -2525,7 +2571,7 @@ export default function TablePage() {
         ? sortHand(finalMyHand).map((card) => (
             <PlayingCard key={card} card={card} sizing={HAND_CARD} />
           ))
-        : Array.from({ length: CARDS_AFTER_DISCARD }, (_, i) => (
+        : Array.from({ length: sizes.kept }, (_, i) => (
             <FaceDownCard key={i} sizing={HAND_CARD} />
           ))}
     </HandRow>
@@ -2547,14 +2593,14 @@ export default function TablePage() {
           // turn, or it would take the count past 31. Visible-but-inert
           // beats hiding it, since "why can't I play my king?" has an
           // answer the player should be able to see.
-          dimmed={isPlaying && !canPlayCard(card)}
+          dimmed={isPlaying && !inPhase3Holding && !canPlayCard(card)}
           // One handler, two phases. Omitted entirely when no action is
           // available, which also renders the card as a plain div with
           // nothing to click or tab to.
           onSelect={
             canDiscard
               ? () => toggleCardSelection(card)
-              : isPlaying && canPlayCard(card) && playStatus !== "sending"
+              : isPlaying && !inPhase3Holding && canPlayCard(card) && playStatus !== "sending"
                 ? () => handlePlayCard(card)
                 : undefined
           }
@@ -2588,13 +2634,30 @@ export default function TablePage() {
   return (
     <TableShell
       header={header}
-      // Phase 3 (3 and 4 players, flag on): the waiting room and the holding
-      // state leave out the opponents band, the piles and the scores, which
-      // are still 2-player (A3); the waiting room the hand row too, to give
-      // the seats the room. A 2-player table is never either.
-      opponents={isCutting || inWaitingRoom || inPhase3Holding ? null : <OpponentBand seats={seats} />}
+      // Phase 3 (3 and 4 players, flag on): the waiting room leaves out the
+      // opponents band, the piles, the hand row and the scores, to give the
+      // seats the room. In a game, the player across the top (4 players)
+      // uses the band, and the players on my left and right the sides. A
+      // 2-player table is never any of these.
+      opponents={
+        isCutting || inWaitingRoom
+          ? null
+          : phase3Layout
+            ? topSeat
+              ? <OpponentBand seats={[topSeat]} />
+              : null
+            : <OpponentBand seats={seats} />
+      }
+      sides={
+        phase3Layout
+          ? {
+              left: leftSeat ? <SideSeat seat={leftSeat} side="left" /> : null,
+              right: rightSeat ? <SideSeat seat={rightSeat} side="right" /> : null,
+            }
+          : undefined
+      }
       middle={middle}
-      piles={isCutting || inWaitingRoom || inPhase3Holding ? null : piles}
+      piles={isCutting || inWaitingRoom ? null : piles}
       // The hand row reserves its full height even when empty (no game yet),
       // so the table doesn't jump when cards are dealt -- except during the
       // cut, which needs the space and has no hand to show.
@@ -2603,7 +2666,7 @@ export default function TablePage() {
       // mugginsWinBar), and nothing at all -- no height -- while no game is
       // dealt.
       scores={
-        inWaitingRoom || inPhase3Holding ? null : isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />
+        inWaitingRoom ? null : isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />
       }
       surface={appearance.surface}
       back={appearance.back}

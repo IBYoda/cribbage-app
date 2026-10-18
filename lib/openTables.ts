@@ -85,8 +85,8 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
 // Who created it doesn't matter: a table the viewer created but left is
 // listed for them like for anyone else, and the tables they ARE seated at
 // show only as "Your table" (loadMyTables), never twice. The row shows the
-// first seated player (the earliest seat) and, for 3 and 4 players, how
-// full it is. A failed profiles read only loses the names ("A player").
+// first seated player (the earliest seat) and how full it is ("1/2
+// seated"). A failed profiles read only loses the names ("A player").
 export async function loadJoinableTables(userId: string): Promise<JoinableTable[] | null> {
   const { data, error } = await supabase
     .from("tables")

@@ -209,9 +209,8 @@ function OpenTables({
                     <span className="text-sm">
                       {t.isMuggins && <MugginsLead />}
                       {timeAgo(t.createdAt, readAt)}
-                      {/* How full it is, for 3 and 4 players only: a
-                          listed 2-player table always has 1 of 2. */}
-                      {t.capacity !== 2 && ` · ${t.seated}/${t.capacity} seated`}
+                      {/* How full it is, on every row ("1/2 seated"). */}
+                      {` · ${t.seated}/${t.capacity} seated`}
                     </span>
                   </span>
                 </span>
