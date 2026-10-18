@@ -10,8 +10,10 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
+import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
 import {
   buildPlates,
+  cardsLeft,
   cribCountDuringDiscard,
   handSizes,
   seatOrderFrom,
@@ -155,6 +157,59 @@ check("Teams: no award yet -- no flash name; a lagging partner row can't lower t
     ["team-1", 12, undefined, false],
     ["team-2", 0, undefined, false],
   ]);
+});
+
+// ---- Pegging (A4): cards held, the run on the table, who said Go ---------------
+// A 3-player hand, players a (dealer's left), b, c, as play_card writes it
+// (E3): a go row for each player passed over who still holds cards.
+let seq = 0;
+const play = (segment: number, user: string, card: string, count: number): PlayEvent => ({
+  seq: ++seq, segment, user_id: user, kind: "play", card, count_after: count,
+});
+const go = (segment: number, user: string, count: number): PlayEvent => ({
+  seq: ++seq, segment, user_id: user, kind: "go", card: null, count_after: count,
+});
+const run3: PlayEvent[] = [
+  play(0, "a", "KS", 10), play(0, "b", "QS", 20), play(0, "c", "9S", 29),
+  go(0, "a", 29), go(0, "b", 29), // a and b can't play at 29; c plays on
+  play(0, "c", "2S", 31), // 31: the count resets, segment 1
+];
+
+check("cards held: kept minus plays, go rows don't count, never below 0", () => {
+  deepStrictEqual(["a", "b", "c", "d"].map((id) => cardsLeft(4, run3, id)), [3, 3, 2, 4]);
+  strictEqual(cardsLeft(4, [play(0, "a", "1", 1), play(0, "a", "2", 2), play(0, "a", "3", 3), play(0, "a", "4", 4), play(0, "a", "5", 5)], "a"), 0);
+});
+check("cards held: 2 players, the old formula (4 - plays)", () => {
+  const two = [play(0, "a", "5H", 5), play(0, "b", "5C", 10), play(0, "a", "6H", 16), go(0, "b", 16)];
+  for (const id of ["a", "b"]) {
+    const old = Math.max(4 - two.filter((p) => p.kind === "play" && p.user_id === id).length, 0);
+    strictEqual(cardsLeft(4, two, id), old);
+  }
+});
+check("Go labels: every player who said go in the run on the table (3 players)", () => {
+  // Still in segment 0 (before the 31): a and b said go.
+  const live = run3.slice(0, 5);
+  deepStrictEqual([...goSayers(displayedRun(live, 0, false).events)].sort(), ["a", "b"]);
+});
+check("Go labels clear when the count resets", () => {
+  // After the 31 the server is on segment 1 with no cards yet: the finished
+  // run stays up (dimmed) with its Go labels...
+  deepStrictEqual([...goSayers(displayedRun(run3, 1, false).events)].sort(), ["a", "b"]);
+  // ...until the first card of the new run replaces it: no labels.
+  const next = [...run3, play(1, "a", "AH", 1)];
+  deepStrictEqual([...goSayers(displayedRun(next, 1, false).events)], []);
+});
+check("4 players: three go rows in one run, then the last card's run", () => {
+  const run4: PlayEvent[] = [
+    play(0, "a", "TC", 10), play(0, "b", "6C", 16), play(0, "c", "9H", 25), play(0, "d", "2S", 27),
+    play(0, "a", "AS", 28), go(0, "b", 28), go(0, "c", 28), play(0, "d", "AC", 29),
+    go(0, "a", 29), go(0, "b", 29), go(0, "c", 29), // d played last: the go point is d's
+    play(1, "a", "KS", 10),
+  ];
+  deepStrictEqual([...goSayers(displayedRun(run4.slice(0, 11), 0, false).events)].sort(), ["a", "b", "c"]);
+  deepStrictEqual([...goSayers(displayedRun(run4, 1, false).events)], []);
+  // The hold after the last card shows the newest run with any plays.
+  deepStrictEqual(displayedRun(run4, 1, true).events.map((p) => p.seq), [run4.at(-1)!.seq]);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
