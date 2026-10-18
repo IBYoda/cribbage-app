@@ -41,15 +41,19 @@ export type CribPileProps = {
   faceDownCount: number;
   // Once shown: the four cards, fanned in place of the pile.
   shownCards: string[] | null;
+  // I am the dealer, so the crib is mine. The crib sits on MY side of the
+  // table, so it carries the dealer chip only then; when the opponent deals,
+  // their chip is by their hand (and on their score plate) instead.
+  dealerIsMe: boolean;
 };
 
 // A labelled pile, bottom-left, hand-card size. Expands into a fan only when
 // shown -- overlapped down to each card's corner (18px, or 36% of a card if
 // that's more), so four hand-size cards still leave room for the buttons.
-// Labelled just "Crib" with the dealer chip -- the crib is always the
-// dealer's, and the chip says whose without a name that long nicknames would
-// clip ("oda Again!'s crib").
-function CribPile({ faceDownCount, shownCards }: CribPileProps) {
+// Labelled just "Crib", with the dealer chip when the crib is mine -- the
+// crib is always the dealer's, and the chip says whose without a name that
+// long nicknames would clip ("oda Again!'s crib").
+function CribPile({ faceDownCount, shownCards, dealerIsMe }: CribPileProps) {
   return (
     <div className="relative" aria-label="Crib (the dealer's)">
       {shownCards ? (
@@ -78,9 +82,11 @@ function CribPile({ faceDownCount, shownCards }: CribPileProps) {
         <div className={`${HAND_CARD} rounded-lg border-2 border-dashed border-zinc-300 dark:border-zinc-700`} />
       )}
       <PileLabel>Crib</PileLabel>
-      <span className="absolute -right-1 -top-1">
-        <DealerChip />
-      </span>
+      {dealerIsMe && (
+        <span className="absolute -right-1 -top-1">
+          <DealerChip />
+        </span>
+      )}
     </div>
   );
 }
