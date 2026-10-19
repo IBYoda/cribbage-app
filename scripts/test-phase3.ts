@@ -19,6 +19,7 @@ import {
   cribCountDuringDiscard,
   handSizes,
   nextSeat,
+  winHeadline,
   seatOrderFrom,
   seatPlaces,
   teamOfPosition,
@@ -346,6 +347,51 @@ check("2 players: countingViewN says what countingView says (turn, headline, hin
       }
     }
   }
+});
+
+// ---- The win headline (A5b) ---------------------------------------------------------
+const WN: Record<string, string> = { a: "Ann", b: "Bob", c: "Cy", d: "Dee" };
+const seatedName = (id: string) => WN[id] ?? null;
+check("win headline, 2 and 3 players: the old wording for every winner and viewer", () => {
+  for (const players of [["a", "b"], ["a", "b", "c"]]) {
+    for (const winner of players) {
+      for (const me of players) {
+        const old = winner === me ? "You win!" : `${WN[winner]} wins!`;
+        strictEqual(winHeadline({ players, winnerId: winner, myId: me, nameOf: seatedName, teams: false }), old);
+        // teams is ignored below 4 players
+        strictEqual(winHeadline({ players, winnerId: winner, myId: me, nameOf: seatedName, teams: true }), old);
+      }
+    }
+  }
+});
+check("win headline, 4-player Teams: every winner position, me on every seat", () => {
+  const players = ["a", "b", "c", "d"]; // a+c against b+d
+  const expected: Record<string, Record<string, string>> = {
+    a: { a: "You and Cy win!", b: "Ann and Cy win!", c: "You and Ann win!", d: "Ann and Cy win!" },
+    c: { a: "You and Cy win!", b: "Ann and Cy win!", c: "You and Ann win!", d: "Ann and Cy win!" },
+    b: { a: "Bob and Dee win!", b: "You and Dee win!", c: "Bob and Dee win!", d: "You and Bob win!" },
+    d: { a: "Bob and Dee win!", b: "You and Dee win!", c: "Bob and Dee win!", d: "You and Bob win!" },
+  };
+  for (const winner of players) {
+    for (const me of players) {
+      strictEqual(winHeadline({ players, winnerId: winner, myId: me, nameOf: seatedName, teams: true }), expected[winner][me]);
+    }
+  }
+});
+check("win headline, 4-player Solo: the winner alone", () => {
+  const players = ["a", "b", "c", "d"];
+  strictEqual(winHeadline({ players, winnerId: "c", myId: "a", nameOf: seatedName, teams: false }), "Cy wins!");
+  strictEqual(winHeadline({ players, winnerId: "a", myId: "a", nameOf: seatedName, teams: false }), "You win!");
+});
+check("win headline: a winner or partner who has left; a winner not in the game", () => {
+  const players = ["a", "b", "c", "d"];
+  const gone = (id: string) => (id === "c" ? null : WN[id]);
+  strictEqual(winHeadline({ players, winnerId: "a", myId: "b", nameOf: gone, teams: true }), "Ann and A player who has left win!");
+  strictEqual(winHeadline({ players, winnerId: "a", myId: "a", nameOf: gone, teams: true }), "You and A player who has left win!");
+  strictEqual(winHeadline({ players: ["a", "b", "c"], winnerId: "c", myId: "a", nameOf: gone, teams: false }), "A player who has left wins!");
+  // Not in the game's players (shouldn't happen): the plain wording.
+  strictEqual(winHeadline({ players, winnerId: "z", myId: "a", nameOf: seatedName, teams: true }), "A player who has left wins!");
+  strictEqual(winHeadline({ players, winnerId: null, myId: "a", nameOf: seatedName, teams: true }), "A player who has left wins!");
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

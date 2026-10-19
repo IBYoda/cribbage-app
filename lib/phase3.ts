@@ -71,6 +71,34 @@ export function teamOfPosition(players: string[], userId: string): 1 | 2 | null 
   return i % 2 === 0 ? 1 : 2;
 }
 
+// THE WIN HEADLINE on the final board. Teams (4 players): the winning TEAM,
+// from the winner's position in the won game's own players list -- the
+// winner and the player two positions along (wrapping), never live seats:
+// "You and <partner> win!" on the winning team, else "<A> and <B> win!" (in
+// seat order). Everyone else: the winner -- "You win!" or "<name> wins!",
+// worded exactly as the 2-player screen has always worded it. nameOf gives
+// a player's name, or null if they have left the table.
+export function winHeadline(input: {
+  players: string[];
+  winnerId: string | null;
+  myId: string;
+  nameOf: (userId: string) => string | null;
+  teams: boolean;
+}): string {
+  const { players, winnerId, myId, nameOf, teams } = input;
+  const named = (id: string | null) => (id ? nameOf(id) : null) ?? "A player who has left";
+  const pos = winnerId ? players.indexOf(winnerId) : -1;
+  if (teams && players.length === 4 && pos >= 0) {
+    const partner = players[(pos + 2) % 4];
+    if (myId === winnerId || myId === partner) {
+      return `You and ${named(myId === winnerId ? partner : winnerId)} win!`;
+    }
+    const [first, second] = pos < 2 ? [winnerId!, partner] : [partner, winnerId!];
+    return `${named(first)} and ${named(second)} win!`;
+  }
+  return winnerId === myId ? "You win!" : `${named(winnerId)} wins!`;
+}
+
 // SCORE PLATES. One builder for every table size.
 //   * Per player (2 and 3 players, 4-player Solo): one plate per row, in
 //     the order given -- for 2 players exactly the list the screen always
