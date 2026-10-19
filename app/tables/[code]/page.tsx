@@ -15,7 +15,7 @@ import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { PHASE3_TABLES } from "@/lib/featureFlags";
-import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces } from "@/lib/phase3";
+import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces, winHeadline } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
@@ -1889,7 +1889,8 @@ export default function TablePage() {
   // with it on, it has the waiting room and the host's Start (stage A2).
   const capacity = table?.max_players ?? 2;
   const isTwoPlayerTable = capacity === 2;
-  const canStartGame = isTwoPlayerTable && members.length === capacity;
+  // (3 and 4 players: only with the Phase 3 flag on -- A5b's rematch.)
+  const canStartGame = (isTwoPlayerTable || (PHASE3_TABLES && capacity > 2)) && members.length === capacity;
   // Alone at the table with no game and no result on screen. Only once the
   // roster has loaded -- an empty roster before then isn't "alone".
   const waitingAlone =
@@ -1908,8 +1909,16 @@ export default function TablePage() {
   const isHost = hostId === session.user.id;
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
-  // The waiting room: no game and no result on screen.
-  const inWaitingRoom = isPhase3Table && !activeGame && !finishedGame;
+  // The waiting room: no game and no result on screen -- or, after a won
+  // match, a roster that is no longer the won game's players (someone left,
+  // or joined). The server then starts with a cut, which only the host may
+  // start, so the result gives way to the seats and the host's Start.
+  const finishedSameRoster =
+    !!finishedGame &&
+    finishedGame.players.length === members.length &&
+    finishedGame.players.every((id) => members.some((m) => m.user_id === id));
+  const inWaitingRoom =
+    isPhase3Table && !activeGame && (!finishedGame || (membersLoaded && !finishedSameRoster));
   // The game's players (seat order) and how many: hand sizes, the crib, the
   // seats and the plates follow them. 2 for every 2-player table, and for
   // every table with the Phase 3 flag off (as before Phase 3).
@@ -2117,6 +2126,13 @@ export default function TablePage() {
   const othersNotReadyForNewGame = newGameGated
     ? finishedGame.players.filter((id) => id !== session.user.id && !newGameReadyBy.includes(id))
     : [];
+  // Who deals the rematch, shown with 3 and 4 players: what
+  // start_game_with_deal does -- the next seat clockwise from the winner, by
+  // the seats now (phase3-e2-dealing.sql), with no cut.
+  const rematchDealerId =
+    isPhase3Table && newGameGated
+      ? nextSeat(seatedBySeat.map((m) => m.user_id), finishedGame.winner_id)
+      : null;
 
   // Derived from discarded_by rather than mirroring our own hand length: once
   // you discard and your opponent hasn't, mirroring would show 4 cards for a
@@ -2466,9 +2482,20 @@ export default function TablePage() {
             {finishedGame && (
               <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 surface:border-violet-300 px-6 py-3 text-center">
                 <p className="text-lg font-semibold">
-                  {finishedGame.winner_id === session.user.id
-                    ? "You win!"
-                    : `${winner ? displayName(winner) : "A player who has left"} wins!`}
+                  {isPhase3Table
+                    ? winHeadline({
+                        players: finishedGame.players,
+                        winnerId: finishedGame.winner_id,
+                        myId: session.user.id,
+                        nameOf: (id) => {
+                          const m = members.find((x) => x.user_id === id);
+                          return m ? displayName(m) : null;
+                        },
+                        teams: isTeams,
+                      })
+                    : finishedGame.winner_id === session.user.id
+                      ? "You win!"
+                      : `${winner ? displayName(winner) : "A player who has left"} wins!`}
                   {/* How it ended: the winner's last award IS the winning one,
                       since nothing can score after the game ends. */}
                   {/* Not on a Muggins table: it shows no score anywhere. */}
@@ -2490,8 +2517,9 @@ export default function TablePage() {
                 player's tap shows above the button; mine greys it out, with
                 who we're waiting for below. A repeat tap is quiet server-side
                 too. Leave stays available throughout. */}
-            {!isTwoPlayerTable ? (
-              // A full 3- or 4-player table: nothing to start yet (stage A2).
+            {!isTwoPlayerTable && !isPhase3Table ? (
+              // A full 3- or 4-player table with the Phase 3 flag off:
+              // nothing to start (stage A1).
               <p className="text-sm text-zinc-500">
                 {members.length} of {capacity} seated. Starting 3- and 4-player games is coming soon.
               </p>
@@ -2518,6 +2546,12 @@ export default function TablePage() {
                   {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
                     <p className="text-sm text-zinc-500">
                       Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+                    </p>
+                  )}
+                  {/* 3 and 4 players: who deals the rematch (no cut). */}
+                  {rematchDealerId && (
+                    <p className="text-xs text-zinc-500">
+                      Next dealer: {rematchDealerId === session.user.id ? "you" : nameOf(rematchDealerId)}
                     </p>
                   )}
                 </div>
