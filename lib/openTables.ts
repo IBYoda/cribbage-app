@@ -1,5 +1,4 @@
 import { supabase } from "@/lib/supabase";
-import { PHASE3_TABLES } from "@/lib/featureFlags";
 
 // OPEN TABLES -- the reads behind the home page's "Open Tables" list
 // (components/brand/HomeView.tsx). Two independent reads, each returning
@@ -79,9 +78,7 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
 // seated there, and at least 1 but fewer than max_players are seated -- at
 // least one, so a table everyone has left (open until the 12-hour timeout)
 // or a new one whose creator isn't seated yet is never listed; fewer than
-// its size, so it has a free seat. With the Phase 3 flag off
-// (lib/featureFlags.ts) only 2-player tables are listed at all, so a 3- or
-// 4-player table made on a flagged build never reaches an unflagged one.
+// its size, so it has a free seat. Every table size (2, 3 or 4) is listed.
 // Who created it doesn't matter: a table the viewer created but left is
 // listed for them like for anyone else, and the tables they ARE seated at
 // show only as "Your table" (loadMyTables), never twice. The row shows the
@@ -104,7 +101,6 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
     const listed =
       t.status === "open" &&
       t.is_public === true &&
-      (PHASE3_TABLES || capacity === 2) &&
       !seated.includes(userId) &&
       seated.length >= 1 &&
       seated.length < capacity;

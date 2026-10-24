@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
-import { PHASE3_TABLES } from "@/lib/featureFlags";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -159,12 +158,9 @@ export default function NewTablePage() {
 
 // THE TABLE OPTIONS: three groups, always all visible. Visibility, Scoring
 // and Players are all live and sent (tables.is_public, is_muggins,
-// max_players). With the Phase 3 flag off (lib/featureFlags.ts), 3 and 4
-// players are real disabled controls marked "Coming soon" (skipped by Tab
-// and arrow keys, announced as unavailable), exactly as before. With it on
-// they can be picked -- except with Muggins, which is 2-player only, so
-// each greys out the other. 4 players play Teams: Team is shown checked
-// and fixed, and Solo is still "Coming soon".
+// max_players). 3 and 4 players can be picked -- except with Muggins,
+// which is 2-player only, so each greys out the other. 4 players play
+// Teams: Team is shown checked and fixed, and Solo is still "Coming soon".
 function TableOptions({
   isPublic,
   onVisibilityChange,
@@ -182,9 +178,9 @@ function TableOptions({
 }) {
   // Muggins is 2-player only.
   const mugginsBlocked = maxPlayers !== 2;
-  // 3 or 4: only behind the flag, and never with Muggins.
-  const morePlayersNote = !PHASE3_TABLES ? undefined : isMuggins ? "Not with Muggins" : null;
-  const morePlayersDisabled = !PHASE3_TABLES || isMuggins;
+  // 3 or 4: never with Muggins.
+  const morePlayersNote = isMuggins ? "Not with Muggins" : null;
+  const morePlayersDisabled = isMuggins;
   return (
     <div className="flex flex-col gap-5">
       <fieldset className="flex flex-col gap-2" aria-describedby="visibility-help">
@@ -235,7 +231,7 @@ function TableOptions({
         </p>
       </fieldset>
 
-      <fieldset className="flex flex-col gap-2" aria-describedby={PHASE3_TABLES ? "players-help" : undefined}>
+      <fieldset className="flex flex-col gap-2" aria-describedby="players-help">
         <legend className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
           Players
         </legend>
@@ -258,35 +254,21 @@ function TableOptions({
             note={morePlayersNote}
           />
         </div>
-        {PHASE3_TABLES ? (
-          <>
-            <fieldset className="flex flex-col gap-2 pl-3" disabled={maxPlayers !== 4}>
-              <legend className="mb-1 text-sm">With 4 players: Team or Solo</legend>
-              <div className="grid grid-cols-2 gap-2">
-                {/* Fixed: the only 4-player mode for now. */}
-                <OptionCard name="four-player-mode" label="Team" checked={maxPlayers === 4} />
-                <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
-              </div>
-            </fieldset>
-            <p id="players-help" className="text-sm">
-              {maxPlayers === 4
-                ? "Two teams: partners sit opposite and share one score"
-                : maxPlayers === 3
-                  ? "Everyone plays for themselves"
-                  : "Head to head"}
-            </p>
-          </>
-        ) : (
-          <fieldset className="flex flex-col gap-2 pl-3" disabled>
-            <legend className="mb-1 text-sm">
-              With 4 players: Team or Solo <span className="coming-soon">Coming soon</span>
-            </legend>
-            <div className="grid grid-cols-2 gap-2">
-              <OptionCard name="four-player-mode" label="Team" checked={false} disabled />
-              <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
-            </div>
-          </fieldset>
-        )}
+        <fieldset className="flex flex-col gap-2 pl-3" disabled={maxPlayers !== 4}>
+          <legend className="mb-1 text-sm">With 4 players: Team or Solo</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {/* Fixed: the only 4-player mode for now. */}
+            <OptionCard name="four-player-mode" label="Team" checked={maxPlayers === 4} />
+            <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
+          </div>
+        </fieldset>
+        <p id="players-help" className="text-sm">
+          {maxPlayers === 4
+            ? "Two teams: partners sit opposite and share one score"
+            : maxPlayers === 3
+              ? "Everyone plays for themselves"
+              : "Head to head"}
+        </p>
       </fieldset>
     </div>
   );

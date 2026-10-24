@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import { copyText } from "@/components/table/WaitingForPlayer";
 
 // THE WAITING ROOM (Phase 3, app stage A2): a 3- or 4-player table before a
-// game. Only behind the Phase 3 flag (lib/featureFlags.ts); a 2-player
-// table never shows it.
+// game. A 2-player table never shows it.
 //
 //   * The table code to send, with Copy (as WaitingForPlayer).
 //   * One row per seat, in seat order (clockwise): the player, or "waiting"
