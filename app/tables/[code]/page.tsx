@@ -14,7 +14,6 @@ import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
-import { PHASE3_TABLES } from "@/lib/featureFlags";
 import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces, winHeadline } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
@@ -208,10 +207,8 @@ function unionIds(a: string[], b: string[]) {
 }
 
 // THE CRIB'S STEP in the count: after every hand, so step N for N players
-// (phase3-e4-counting.sql) -- 2 for every 2-player table, and for every
-// table with the Phase 3 flag off (as before Phase 3).
-const cribStepFor = (players: string[] | null | undefined) =>
-  PHASE3_TABLES ? (players?.length ?? 2) : 2;
+// (phase3-e4-counting.sql) -- 2 for every 2-player table.
+const cribStepFor = (players: string[] | null | undefined) => players?.length ?? 2;
 
 // The key for "has visibility changed?" -- compared on every games UPDATE so
 // hands and the crib are refetched only when what's readable can have
@@ -237,10 +234,8 @@ const LIVE_GAME_STATUSES = ["cutting", "active"];
 
 // HAND SIZES come from handSizes() in lib/phase3.ts, by the number of
 // players: 6 dealt, 2 discarded and 4 kept with 2 players (as always); 5, 1
-// and 4 with 3 or 4 -- but only with the Phase 3 flag on. With it off every
-// game uses the 2-player sizes, exactly as before Phase 3.
-const sizesFor = (players: string[] | null | undefined) =>
-  handSizes(PHASE3_TABLES ? (players?.length ?? 2) : 2);
+// and 4 with 3 or 4.
+const sizesFor = (players: string[] | null | undefined) => handSizes(players?.length ?? 2);
 
 // TABLE SYNC: what the safety poll (see the poll effect) compares, to say
 // exactly what a missed realtime event had left wrong on screen.
@@ -1884,21 +1879,19 @@ export default function TablePage() {
   // (Phase 3) slot in without restructuring the layout.
   const opponents = members.filter((m) => m.user_id !== session.user.id);
   // THE TABLE'S SIZE: tables.max_players, 2 for every table before Phase 3.
-  // This screen plays 2-player games only. A 3- or 4-player table, with the
-  // Phase 3 flag off, waits to fill and then holds (A1's holding message);
-  // with it on, it has the waiting room and the host's Start (stage A2).
+  // A 3- or 4-player table has the waiting room and the host's Start (stage
+  // A2).
   const capacity = table?.max_players ?? 2;
   const isTwoPlayerTable = capacity === 2;
-  // (3 and 4 players: only with the Phase 3 flag on -- A5b's rematch.)
-  const canStartGame = (isTwoPlayerTable || (PHASE3_TABLES && capacity > 2)) && members.length === capacity;
+  const canStartGame = members.length === capacity;
   // Alone at the table with no game and no result on screen. Only once the
   // roster has loaded -- an empty roster before then isn't "alone".
   const waitingAlone =
     membersLoaded && !activeGame && !finishedGame && members.length < capacity;
 
-  // PHASE 3 (A2), 3- and 4-player tables behind the flag only. Nothing here
-  // applies to a 2-player table.
-  const isPhase3Table = PHASE3_TABLES && !isTwoPlayerTable;
+  // PHASE 3 (A2), 3- and 4-player tables. Nothing here applies to a
+  // 2-player table.
+  const isPhase3Table = !isTwoPlayerTable;
   // THE HOST, worked out exactly as the server's table_host(): the creator
   // while seated, otherwise the player in the lowest seat.
   const seatedBySeat = [...members].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
@@ -1920,12 +1913,11 @@ export default function TablePage() {
   const inWaitingRoom =
     isPhase3Table && !activeGame && (!finishedGame || (membersLoaded && !finishedSameRoster));
   // The game's players (seat order) and how many: hand sizes, the crib, the
-  // seats and the plates follow them. 2 for every 2-player table, and for
-  // every table with the Phase 3 flag off (as before Phase 3).
+  // seats and the plates follow them. 2 for every 2-player table.
   const gamePlayers = activeGame?.players ?? finishedGame?.players ?? null;
   const playerCount = isPhase3Table ? gamePlayers?.length || capacity : 2;
   const sizes = handSizes(playerCount);
-  // THE PHASE 3 LAYOUT (3 and 4 players, flag on): the others around me --
+  // THE PHASE 3 LAYOUT (3 and 4 players): the others around me --
   // the next player clockwise on my left, then across the top, then on my
   // right -- from the game's players list. Not in the waiting room or the
   // cut, which have their own screens.
@@ -2209,10 +2201,10 @@ export default function TablePage() {
   const rightSeat = places ? memberSeat(places.right) : null;
 
   // THE SCORE PLATES, built in one place (buildPlates, lib/phase3.ts). 2
-  // players (and every table with the flag off): one plate per player, me
-  // first -- exactly the list this screen always built. 3 players and
-  // 4-player Solo: one per player, me first, then clockwise. 4-player Teams:
-  // one per team, my team first, the flash naming the partner who scored.
+  // players: one plate per player, me first -- exactly the list this screen
+  // always built. 3 players and 4-player Solo: one per player, me first,
+  // then clockwise. 4-player Teams: one per team, my team first, the flash
+  // naming the partner who scored.
   const plateMembers: Member[] = phase3Layout && gamePlayers
     ? seatOrderFrom(gamePlayers, session.user.id).flatMap((id) => members.filter((m) => m.user_id === id))
     : [...(me ? [me] : []), ...opponents];
@@ -2517,51 +2509,43 @@ export default function TablePage() {
                 player's tap shows above the button; mine greys it out, with
                 who we're waiting for below. A repeat tap is quiet server-side
                 too. Leave stays available throughout. */}
-            {!isTwoPlayerTable && !isPhase3Table ? (
-              // A full 3- or 4-player table with the Phase 3 flag off:
-              // nothing to start (stage A1).
-              <p className="text-sm text-zinc-500">
-                {members.length} of {capacity} seated. Starting 3- and 4-player games is coming soon.
-              </p>
-            ) : (
-              <>
-                <div className="result-stage__actions">
-                  {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
-                    <p className="text-sm font-medium">
-                      {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
-                      {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
-                    </p>
-                  )}
-                  <button
-                    onClick={handleStartNewGame}
-                    disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
-                    className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
-                  >
-                    {gameStatus === "creating"
-                      ? newGameGated && othersNotReadyForNewGame.length > 0
-                        ? "Sending..."
-                        : "Dealing..."
-                      : "New Game"}
-                  </button>
-                  {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
-                    <p className="text-sm text-zinc-500">
-                      Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
-                    </p>
-                  )}
-                  {/* 3 and 4 players: who deals the rematch (no cut). */}
-                  {rematchDealerId && (
-                    <p className="text-xs text-zinc-500">
-                      Next dealer: {rematchDealerId === session.user.id ? "you" : nameOf(rematchDealerId)}
-                    </p>
-                  )}
-                </div>
-                {!canStartGame && (
-                  <p className="text-sm text-zinc-500">
-                    Needs exactly {capacity} players ({members.length} here).
+            <>
+              <div className="result-stage__actions">
+                {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
+                  <p className="text-sm font-medium">
+                    {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
+                    {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
                   </p>
                 )}
-              </>
-            )}
+                <button
+                  onClick={handleStartNewGame}
+                  disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
+                  className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
+                >
+                  {gameStatus === "creating"
+                    ? newGameGated && othersNotReadyForNewGame.length > 0
+                      ? "Sending..."
+                      : "Dealing..."
+                    : "New Game"}
+                </button>
+                {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
+                  <p className="text-sm text-zinc-500">
+                    Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+                  </p>
+                )}
+                {/* 3 and 4 players: who deals the rematch (no cut). */}
+                {rematchDealerId && (
+                  <p className="text-xs text-zinc-500">
+                    Next dealer: {rematchDealerId === session.user.id ? "you" : nameOf(rematchDealerId)}
+                  </p>
+                )}
+              </div>
+              {!canStartGame && (
+                <p className="text-sm text-zinc-500">
+                  Needs exactly {capacity} players ({members.length} here).
+                </p>
+              )}
+            </>
           </div>
         </div>
       )}
@@ -2714,7 +2698,7 @@ export default function TablePage() {
   return (
     <TableShell
       header={header}
-      // Phase 3 (3 and 4 players, flag on): the waiting room leaves out the
+      // Phase 3 (3 and 4 players): the waiting room leaves out the
       // opponents band, the piles, the hand row and the scores, to give the
       // seats the room. In a game, the player across the top (4 players)
       // uses the band, and the players on my left and right the sides. A
