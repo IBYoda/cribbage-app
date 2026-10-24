@@ -87,6 +87,7 @@ The original plan (see revision history) included a fully virtual board with ani
 - **One Supabase project is shared** by local development, previews and production (free plan, spend cap on). Anything run locally touches the same data players see.
 - **Free-plan quirks:** the project pauses after about a week of inactivity (resume it from the Supabase dashboard), and the built-in sign-up email has a low rate limit, so a burst of sign-ups can get throttled.
 - **Email and the friends test (October 15, 2026):** friends signed up and played on the live site. Finding: Supabase's built-in email sender allows **2 emails per hour for the whole project**, and Supabase has announced it may only deliver to addresses in the project's organization, so confirmation emails can't work for friends. **"Confirm email" is OFF** for the test: a new account is logged in straight away (Section 9, item 19). **Before a public or app-store release:** set up custom SMTP (or social sign-in) and turn confirmation back on.
+- **Grants on new tables (from October 30, 2026):** Supabase no longer grants Data API access to new tables in `public`, so every new table needs explicit grants in its own SQL file, least privilege, checked by its verification SQL. The standing rule is in `AGENTS.md` ("New tables"), with `docs/sql/appearance-settings.sql` as the template. Existing tables keep their current grants.
 
 ---
 
