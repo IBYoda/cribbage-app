@@ -27,6 +27,7 @@ import { countingView, type CountingView } from "@/components/table/countingView
 import { countingViewN } from "@/lib/countingN";
 import { CountStage, SlotCards } from "@/components/table/CountStage";
 import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
+import { useComputerDriver } from "@/components/table/useComputerDriver";
 
 type TableRow = {
   id: string;
@@ -43,6 +44,10 @@ type TableRow = {
   // whether partners play as teams. Every table before Phase 3 is 2 / teams.
   max_players: number;
   team_mode: string;
+  // A COMPUTER TABLE: the computer opponent's level ('easy' / 'medium' /
+  // 'hard'), null at every other table. Set by create_computer_table; the
+  // computer's moves come from the creator's browser (useComputerDriver).
+  computer_level: string | null;
 };
 
 type Member = {
@@ -277,7 +282,10 @@ function membersDiff(shown: Member[], fresh: Member[]) {
 // Every 12 seconds while the tab is visible -- see the poll effect.
 const SAFETY_POLL_MS = 12_000;
 
-function tableEndedMessage(endedReason: string | null | undefined) {
+// A closed computer table (leave_computer_table) has no ended_reason: it was
+// closed by its player, not an admin.
+function tableEndedMessage(endedReason: string | null | undefined, computerLevel?: string | null) {
+  if (computerLevel && endedReason == null) return "This computer table has been closed.";
   return endedReason === "timeout"
     ? "This table was automatically ended after being open for 12 hours."
     : "This table has been ended by an admin.";
@@ -353,6 +361,13 @@ export default function TablePage() {
   const [leaveConfirming, setLeaveConfirming] = useState(false);
   const [leaveStatus, setLeaveStatus] = useState<"idle" | "leaving" | "error">("idle");
   const [leaveMessage, setLeaveMessage] = useState<string | null>(null);
+  // MY OWN LEAVE in progress, for the realtime "table closed" handler (a
+  // long-lived closure): leaving a computer table closes it, and that event
+  // must not flash the closed message before we navigate away.
+  const leavingRef = useRef(false);
+  useEffect(() => {
+    leavingRef.current = leaveStatus === "leaving";
+  }, [leaveStatus]);
   // Explains why the remaining player's cards just vanished. Without it, a
   // game silently evaporating is exactly the kind of mystery the PRD's UX
   // section objects to.
@@ -901,7 +916,7 @@ export default function TablePage() {
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status, ended_reason, is_muggins, created_by, max_players, team_mode")
+        .select("id, code, status, ended_reason, is_muggins, created_by, max_players, team_mode, computer_level")
         .eq("code", code)
         .maybeSingle();
 
@@ -916,7 +931,7 @@ export default function TablePage() {
         return;
       }
       if (tableRow.status !== "open") {
-        setError(tableEndedMessage(tableRow.ended_reason));
+        setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));
         return;
       }
 
@@ -1040,8 +1055,10 @@ export default function TablePage() {
     setLeaveStatus("leaving");
     setLeaveMessage(null);
 
+    // A computer table closes when its player leaves (both seats go, and
+    // the table ends): leave_computer_table. Every other table: leave_table.
     const { error: rpcError } = await trackAction(
-      supabase.rpc("leave_table", {
+      supabase.rpc(table.computer_level ? "leave_computer_table" : "leave_table", {
         p_table_id: table.id,
       })
     );
@@ -1694,9 +1711,13 @@ export default function TablePage() {
           filter: `id=eq.${table.id}`,
         },
         (payload) => {
-          const updatedTable = payload.new as { status: string; ended_reason: string | null };
-          if (updatedTable.status !== "open") {
-            setError(tableEndedMessage(updatedTable.ended_reason));
+          const updatedTable = payload.new as {
+            status: string;
+            ended_reason: string | null;
+            computer_level?: string | null;
+          };
+          if (updatedTable.status !== "open" && !leavingRef.current) {
+            setError(tableEndedMessage(updatedTable.ended_reason, updatedTable.computer_level ?? table.computer_level));
           }
         }
       )
@@ -1809,6 +1830,31 @@ export default function TablePage() {
   useEffect(() => {
     activeGameIdRef.current = activeGame?.id ?? null;
   }, [activeGame?.id]);
+
+  // THE COMPUTER OPPONENT (a computer table this user created): its moves,
+  // made from this browser. Only while the table is open on this screen and
+  // not being left. The other seated member is the computer; the server's
+  // guard checks that too. "Count hands" not yet tapped holds its counting
+  // back, so the human sees pegging end first.
+  const myUserId = session?.user.id ?? null;
+  const computerTable = Boolean(table?.computer_level) && table?.created_by === myUserId;
+  useComputerDriver({
+    enabled: computerTable && !error && leaveStatus !== "leaving",
+    tableId: table?.id ?? null,
+    level: table?.computer_level ?? null,
+    computerId: computerTable ? (members.find((m) => m.user_id !== myUserId)?.user_id ?? null) : null,
+    tableFull: members.length === (table?.max_players ?? 2),
+    humanHoldsPegging: Boolean(activeGame) && pegHoldKey === `${activeGame?.id}:${activeGame?.hand_no}`,
+    game: activeGame,
+    finished: finishedGame
+      ? { id: finishedGame.id, players: finishedGame.players, ready_by: finishedGame.ready_by }
+      : null,
+    humanHand: myHand,
+    trackAction,
+    refresh: async () => {
+      if (table) await refreshTableState(table.id);
+    },
+  });
 
   // .table-loading: painted in this device's cached surface from the first
   // paint (app/globals.css), so a refresh doesn't flash Classic.

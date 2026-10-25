@@ -8,10 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --import ./scripts/ts-resolve.mjs scripts/test-scoring.ts",
-    "test:quick": "node --import ./scripts/ts-resolve.mjs scripts/test-scoring.ts --quick && node --import ./scripts/ts-resolve.mjs scripts/test-computer.ts",
+    "test:quick": "node --import ./scripts/ts-resolve.mjs scripts/test-scoring.ts --quick && node --import ./scripts/ts-resolve.mjs scripts/test-computer.ts && node --import ./scripts/ts-resolve.mjs scripts/test-computer-next.ts",
     "test:sql-cases": "node --import ./scripts/ts-resolve.mjs scripts/test-scoring.ts --emit-sql-cases",
     "test:phase3": "node --import ./scripts/ts-resolve.mjs scripts/test-phase3.ts",
-    "test:computer": "node --import ./scripts/ts-resolve.mjs scripts/test-computer.ts"
+    "test:computer": "node --import ./scripts/ts-resolve.mjs scripts/test-computer.ts",
+    "test:computer-next": "node --import ./scripts/ts-resolve.mjs scripts/test-computer-next.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",
