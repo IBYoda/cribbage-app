@@ -14,3 +14,12 @@ From October 30, 2026, Supabase no longer grants Data API access to new tables i
 - Template: `docs/sql/appearance-settings.sql` (it revokes all from `public`, `anon` and `authenticated`, then grants `authenticated` only SELECT, INSERT and UPDATE). Its grant check is in `docs/sql/appearance-settings-verification.sql`.
 - Existing tables are unaffected: they keep their current grants.
 - Function EXECUTE grants are a separate matter; this rule covers tables only.
+
+# Game functions (since the computer opponent)
+
+The eight 2-player game functions (`start_game_with_deal`, `draw_cut_card`, `acknowledge_deal_cut`, `discard_to_crib`, `play_card`, `show_crib`, `confirm_count`, `next_hand`) now live as internal `<name>_as(p_actor, ...)` functions, with thin public wrappers that pass `auth.uid()`.
+
+- Change game rules in the `_as` function, never in the wrapper.
+- After changing one, re-run `docs/sql/computer-c1-verification.sql` and `docs/sql/computer-c2-verification.sql`, and update the md5 fingerprints in `computer-c1-verification.sql`.
+- The older `phase3-e*` and muggins verification suites fingerprint function bodies and stop at those checks by design after C1; they are no longer the regression proof.
+- Computer-table functions must keep acting only through the guard (`_computer_for_table` / `_computer_for_game`).
