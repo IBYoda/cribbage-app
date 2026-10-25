@@ -27,7 +27,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { decideDiscard, decidePlay } from "@/lib/computer/brain";
-import { THINK_MS, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
+import { LEVELS, THINK_MS, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
 import { computerNextAction, type ComputerAction, type NextGame } from "@/lib/computer/next";
 
 export type ComputerDriverInput = {
@@ -80,6 +80,8 @@ function nextActionOf(input: ComputerDriverInput): ComputerAction | null {
     computerId: input.computerId,
     tableFull: input.tableFull,
     humanHoldsPegging: input.humanHoldsPegging,
+    // Hard reads the human's kept hand, so it discards after them.
+    discardAfterOpponent: LEVELS[input.level].peekDiscard,
     game: input.game,
     finished: input.finished ? { ...input.finished, ended_reason: "won" } : null,
   });
@@ -147,7 +149,15 @@ async function perform(action: ComputerAction, input: ComputerDriverInput): Prom
       if ("error" in read) return read.error;
       // Not six cards: the discard already happened (the game moved on).
       if (read.cards.length !== 6) return "already: the computer's hand is not the six dealt";
-      const cards = decideDiscard({ hand: read.cards, isDealer: game.dealer_id === computerId, level });
+      const cards = decideDiscard({
+        hand: read.cards,
+        isDealer: game.dealer_id === computerId,
+        level,
+        // The human's kept four (their hand on screen after their discard);
+        // read only by a level that peeks at the discard. Not the four yet:
+        // the brain falls back to the ordinary discard.
+        opponentKept: input.humanHand.length === 4 ? input.humanHand : undefined,
+      });
       return call("computer_discard_to_crib", { p_game_id: game.id, p_cards: cards });
     }
 

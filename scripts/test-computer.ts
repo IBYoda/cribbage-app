@@ -52,9 +52,9 @@ const same = (a: string[], b: string[]) => [...a].sort().join() === [...b].sort(
 // ---- Levels -------------------------------------------------------------------
 check("levels: the three settings as specified", () => {
   deepStrictEqual(LEVELS, {
-    easy: { mistakeRate: 0, peek: false, style: "dumb", cribSamples: 60 },
-    medium: { mistakeRate: 0.35, peek: false, style: "normal", cribSamples: 60 },
-    hard: { mistakeRate: 0, peek: true, style: "normal", cribSamples: 500 },
+    easy: { mistakeRate: 0, peek: false, peekDiscard: false, search: false, style: "dumb", cribSamples: 60 },
+    medium: { mistakeRate: 0, peek: true, peekDiscard: false, search: false, style: "normal", cribSamples: 60 },
+    hard: { mistakeRate: 0, peek: true, peekDiscard: true, search: true, style: "normal", cribSamples: 500 },
   });
 });
 
@@ -115,21 +115,17 @@ check("discard: hard never errs -- always the top option, and the same for the s
     deepStrictEqual(b, a);
   }
 });
-check("discard: medium deviates from the best at about its rate", () => {
+check("discard: medium never errs -- always the top discard, and the same for the same seed", () => {
   const rng = seededRng(11);
   const hands = Array.from({ length: 400 }, () => shuffled(rng).slice(0, 6));
-  for (const [level, low, high] of [["medium", 0.2, 0.45]] as const) {
-    let deviations = 0;
-    hands.forEach((hand, t) => {
-      const seed = 5000 + t;
-      const best = evaluateDiscards({ hand, isDealer: true, level, rng: seededRng(seed) })[0].discard;
-      const out = decideDiscard({ hand, isDealer: true, level, rng: seededRng(seed) });
-      if (!same(out, best)) deviations++;
-    });
-    // Expected: mistakeRate x 14/15 (a random pick lands on the best 1 in 15).
-    const rate = deviations / hands.length;
-    ok(rate >= low && rate <= high, `${level}: deviated ${rate.toFixed(3)}, expected ${low}-${high}`);
-  }
+  hands.forEach((hand, t) => {
+    const seed = 5000 + t;
+    const isDealer = t % 2 === 0;
+    const best = evaluateDiscards({ hand, isDealer, level: "medium", rng: seededRng(seed) })[0].discard;
+    const out = decideDiscard({ hand, isDealer, level: "medium", rng: seededRng(seed) });
+    deepStrictEqual(out, best, `t=${t}`);
+    deepStrictEqual(decideDiscard({ hand, isDealer, level: "medium", rng: seededRng(seed) }), out);
+  });
 });
 check("discard: refuses anything but six different cards", () => {
   throws(() => decideDiscard({ hand: ["AS", "2S", "3S", "4S", "5S"], isDealer: true, level: "hard" }), /six/);
@@ -177,13 +173,13 @@ check("play: with peek, hard avoids handing the opponent a 15 when an equal card
   strictEqual(peeked.find((o) => o.card === "9D")?.risk, 2);
   strictEqual(peeked.find((o) => o.card === "7S")?.risk, 0);
 });
-check("play: easy and medium ignore opponentRemaining (same seed, same card)", () => {
+check("play: easy ignores opponentRemaining (same seed, same card)", () => {
   const rng = seededRng(99);
   for (let t = 0; t < 300; t++) {
     const deck = shuffled(rng);
     const mine = deck.slice(0, 4);
     const theirs = deck.slice(4, 8);
-    for (const level of ["easy", "medium"] as const) {
+    for (const level of ["easy"] as const) {
       const scene: PlayInput = { myRemaining: mine, starter: deck[8], segmentCards: [], count: 0, allPlayed: [], opponentCardCount: 4, level };
       const blind = decidePlay({ ...scene, rng: seededRng(t) });
       const shown = decidePlay({ ...scene, rng: seededRng(t), opponentRemaining: theirs });
@@ -485,14 +481,66 @@ check("hard search: beats the one-move-ahead choice in hand-made positions", () 
     strictEqual(decidePlay({ ...scene, opponentRemaining: c.theirs }), c.searched);
   }
 });
-check("hard search: medium and easy never search (same choices with the opponent's cards)", () => {
+check("hard search: easy never uses the opponent's cards (same values with them)", () => {
   const rng = seededRng(5050);
   for (let t = 0; t < 300; t++) {
     const s = randomScene(rng);
-    for (const level of ["medium", "easy"] as const) {
-      const scene = { ...peggingScene(s), level };
-      deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, opponentRemaining: undefined }));
+    const scene = { ...peggingScene(s), level: "easy" as const };
+    deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, opponentRemaining: undefined }));
+  }
+});
+// Medium: the best card one move ahead, from the opponent's actual cards --
+// points now minus their best reply, written out here independently.
+function oneMoveAhead(seg: string[], count: number, card: string, theirs: string[]) {
+  const segment = [...seg, card];
+  const now = count + cardPlayValue(card);
+  const points = scorePegging(segment).points;
+  if (now === 31) return { points, value: points };
+  const replies = theirs.filter((c) => now + cardPlayValue(c) <= 31).map((c) => scorePegging([...segment, c]).points);
+  return { points, value: points - Math.max(0, ...replies) };
+}
+check("medium uses the opponent's cards: one move ahead, exact (300 positions)", () => {
+  const rng = seededRng(5151);
+  let differs = 0;
+  for (let t = 0; t < 300; t++) {
+    const s = randomScene(rng);
+    const scene = { ...peggingScene(s), level: "medium" as const };
+    const options = evaluatePlays(scene);
+    for (const o of options) {
+      const expected = oneMoveAhead(s.segmentCards, s.count, o.card, s.theirLeft);
+      strictEqual(o.points, expected.points, `t=${t} ${o.card}: points`);
+      ok(Math.abs(o.value - expected.value) < 1e-9, `t=${t} ${o.card}: ${o.value}, expected ${expected.value}`);
     }
+    // And the cards matter: the blind estimate gives other values.
+    if (JSON.stringify(options) !== JSON.stringify(evaluatePlays({ ...scene, opponentRemaining: undefined }))) differs++;
+  }
+  ok(differs > 100, `the opponent's cards changed medium's values only ${differs} times`);
+});
+check("medium never searches: the one-move-ahead values where the search's differ", () => {
+  // The hand-made search positions above: Hard's search beats one move ahead.
+  const cases = [
+    { mine: ["QS", "JH", "2D"], theirs: ["JD", "5H", "9D"], starter: "7S", seg: [] as string[], oneMove: "2D" },
+    { mine: ["TC", "5D", "8C"], theirs: ["7C", "6C", "AC"], starter: "3S", seg: [] as string[], oneMove: "TC" },
+    { mine: ["2S", "AS"], theirs: ["2H", "9S"], starter: "6H", seg: ["JS"], oneMove: "AS" },
+  ];
+  for (const c of cases) {
+    const count = c.seg.reduce((n, card) => n + cardPlayValue(card), 0);
+    const scene: PlayInput = {
+      myRemaining: c.mine,
+      starter: c.starter,
+      segmentCards: c.seg,
+      count,
+      allPlayed: c.seg,
+      opponentCardCount: c.theirs.length,
+      level: "medium",
+      rng: seededRng(1),
+      opponentRemaining: c.theirs,
+    };
+    for (const o of evaluatePlays(scene)) {
+      ok(Math.abs(o.value - oneMoveAhead(c.seg, count, o.card, c.theirs).value) < 1e-9, `${c.mine} ${o.card}`);
+    }
+    strictEqual(decidePlay(scene), c.oneMove, `${c.mine}: medium plays the one-move-ahead card`);
+    ok(decidePlay({ ...scene, level: "hard" }) !== c.oneMove, `${c.mine}: hard searches to another card`);
   }
 });
 // ---- Hard: playing to win near 121 ---------------------------------------------------
@@ -649,7 +697,8 @@ check("hard to-win search: medium and easy ignore the game state", () => {
     const { input } = endgameScene(rng, 95, 120);
     for (const level of ["medium", "easy"] as const) {
       const scene = { ...input, level, rng: seededRng(t) };
-      strictEqual(decidePlay(scene), decidePlay({ ...scene, game: undefined, opponentRemaining: undefined, rng: seededRng(t) }));
+      strictEqual(decidePlay(scene), decidePlay({ ...scene, game: undefined, rng: seededRng(t) }));
+      deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, game: undefined }));
     }
   }
 });
@@ -708,6 +757,101 @@ check("speed: the hard search averages well under 50 ms per decision", () => {
     worst = Math.max(worst, took);
   }
   console.log(`   hard search: ${(total / N).toFixed(2)} ms average, ${worst.toFixed(2)} ms worst (${N} full-hand leads)`);
+  ok(total / N < 50, `${total / N} ms`);
+});
+
+// ---- Hard: the discard with the opponent's kept hand --------------------------------
+// A deal: my six and the opponent's kept four, all different.
+function discardDeal(rng: () => number) {
+  const deck = shuffled(rng);
+  return { hand: deck.slice(0, 6), theirs: deck.slice(6, 10) };
+}
+// The average hand score of a keep over the given starters, written out here.
+const averageOver = (keep: string[], starters: string[]) =>
+  starters.reduce((sum, s) => sum + scoreHand(keep, s, false).points, 0) / starters.length;
+check("easy and medium ignore opponentKept (same seed, same discard, same evaluation)", () => {
+  const rng = seededRng(3131);
+  for (let t = 0; t < 100; t++) {
+    const { hand, theirs } = discardDeal(rng);
+    for (const level of ["easy", "medium"] as const) {
+      const isDealer = t % 2 === 0;
+      deepStrictEqual(
+        evaluateDiscards({ hand, isDealer, level, rng: seededRng(t), opponentKept: theirs }),
+        evaluateDiscards({ hand, isDealer, level, rng: seededRng(t) })
+      );
+      deepStrictEqual(
+        decideDiscard({ hand, isDealer, level, rng: seededRng(t), opponentKept: theirs }),
+        decideDiscard({ hand, isDealer, level, rng: seededRng(t) })
+      );
+    }
+  }
+});
+check("hard without opponentKept: the previous discard (46 starters, no pegging value)", () => {
+  const rng = seededRng(3232);
+  for (let t = 0; t < 40; t++) {
+    const { hand } = discardDeal(rng);
+    const isDealer = t % 2 === 0;
+    const unseen = FULL_DECK.filter((c) => !hand.includes(c));
+    for (const o of evaluateDiscards({ hand, isDealer, level: "hard", rng: seededRng(t) })) {
+      strictEqual(o.peggingValue, 0);
+      ok(Math.abs(o.handValue - averageOver(o.keep, unseen)) < 1e-9, `t=${t}: hand value over 46 starters`);
+      strictEqual(o.value, isDealer ? o.handValue + o.cribValue : o.handValue - o.cribValue);
+    }
+  }
+});
+check("hard with opponentKept: the exact pegging value per keep matches a brute force (100 deals, dealer and pone)", () => {
+  const rng = seededRng(3333);
+  for (let t = 0; t < 100; t++) {
+    const { hand, theirs } = discardDeal(rng);
+    const isDealer = t % 2 === 0;
+    const unseen = FULL_DECK.filter((c) => !hand.includes(c) && !theirs.includes(c));
+    for (const o of evaluateDiscards({ hand, isDealer, level: "hard", rng: seededRng(t), opponentKept: theirs })) {
+      // The pone leads: the opponent when I deal.
+      const turn = isDealer ? 1 : 0;
+      const best = naiveBest({ hands: [o.keep, theirs], seg: [], count: 0, turn });
+      strictEqual(o.peggingValue, turn === 0 ? best : -best, `t=${t} keep ${o.keep}`);
+      ok(Math.abs(o.handValue - averageOver(o.keep, unseen)) < 1e-9, `t=${t}: hand value over the 42 starters`);
+      strictEqual(o.value, (isDealer ? o.handValue + o.cribValue : o.handValue - o.cribValue) + o.peggingValue);
+    }
+  }
+});
+check("hard: an invalid opponentKept is ignored (wrong length, a repeat, overlapping my six)", () => {
+  const rng = seededRng(3434);
+  for (let t = 0; t < 30; t++) {
+    const { hand, theirs } = discardDeal(rng);
+    const plain = evaluateDiscards({ hand, isDealer: true, level: "hard", rng: seededRng(t) });
+    for (const bad of [theirs.slice(0, 3), [...theirs.slice(0, 3), theirs[0]], [...theirs.slice(0, 3), hand[0]], ["ZZ", ...theirs.slice(0, 3)]]) {
+      deepStrictEqual(evaluateDiscards({ hand, isDealer: true, level: "hard", rng: seededRng(t), opponentKept: bad }), plain, `bad ${bad}`);
+    }
+  }
+});
+check("hard: the opponent's kept hand changes the discard in a good share of deals", () => {
+  const rng = seededRng(3535);
+  let differs = 0;
+  for (let t = 0; t < 200; t++) {
+    const { hand, theirs } = discardDeal(rng);
+    const isDealer = t % 2 === 0;
+    const blind = decideDiscard({ hand, isDealer, level: "hard", rng: seededRng(t) });
+    const seen = decideDiscard({ hand, isDealer, level: "hard", rng: seededRng(t), opponentKept: theirs });
+    if (!same(blind, seen)) differs++;
+  }
+  console.log(`   hard discard with the kept hand: a different discard in ${differs} of 200 deals`);
+  ok(differs >= 20, `only ${differs} of 200 differ`);
+});
+check("speed: hard's discard with the opponent's kept hand averages well under 50 ms", () => {
+  const rng = seededRng(3636);
+  let total = 0;
+  let worst = 0;
+  const N = 150;
+  for (let t = 0; t < N; t++) {
+    const { hand, theirs } = discardDeal(rng);
+    const start = performance.now();
+    decideDiscard({ hand, isDealer: t % 2 === 0, level: "hard", rng: seededRng(t), opponentKept: theirs });
+    const took = performance.now() - start;
+    total += took;
+    worst = Math.max(worst, took);
+  }
+  console.log(`   hard discard with the kept hand: ${(total / N).toFixed(2)} ms average, ${worst.toFixed(2)} ms worst`);
   ok(total / N < 50, `${total / N} ms`);
 });
 

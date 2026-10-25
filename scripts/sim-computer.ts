@@ -22,21 +22,51 @@
 // dealer and both kept hands) for playing to win near 121; no other level
 // ever does.
 //
-// OLD HARD: `npm run sim:computer -- --old-hard` also plays today's Hard
-// against "old Hard" (60 crib samples, no game state) over 4000 games. It is
-// opt-in because it takes several minutes on its own.
+// THE DISCARD: a seat whose level peeks at the discard (Hard) discards
+// second and is given the other seat's kept four, as the real driver waits
+// for the human's discard.
+//
+// OPT-IN MATCHUPS (4000 games each, several minutes apiece):
+//   --hard-no-discard-peek  Hard against Hard without the discard peek
+//   --old-medium            Medium against "old Medium" (0.35 mistakes, no peek)
+//   --old-hard              Hard against "old Hard" (60 crib samples, no game
+//                           state, no discard peek)
 
 import { decideDiscard, decidePlay, FULL_DECK, seededRng, type Rng } from "../lib/computer/brain";
-import { LEVELS, type ComputerLevel } from "../lib/computer/config";
+import { LEVELS, type ComputerLevel, type LevelSettings } from "../lib/computer/config";
 import { scoreHand } from "../lib/scoring";
 import { applyPlay, type PegState, type Seat } from "../lib/computer/rules";
 
 const GAMES = 2000;
 
-// A player: a level, optionally with its crib sample count forced, and
-// whether it is given the game state (only used by a level that peeks).
-type Player = { name: string; level: ComputerLevel; cribSamples?: number; withGame: boolean };
+// A player: a level, optionally with its crib sample count forced, whether
+// it is given the game state (only used by a level that searches), whether
+// it is given the other seat's kept hand at the discard (discardPeek; by
+// default for a level with peekDiscard), and optionally other settings for
+// its level ("old Medium"): swapped in for that player's own decisions only.
+type Player = {
+  name: string;
+  level: ComputerLevel;
+  cribSamples?: number;
+  withGame: boolean;
+  discardPeek?: boolean;
+  settings?: LevelSettings;
+};
 const player = (level: ComputerLevel): Player => ({ name: level, level, withGame: true });
+const peeksAtDiscard = (p: Player) => p.discardPeek ?? (p.settings ?? LEVELS[p.level]).peekDiscard;
+
+// Runs fn with the player's own settings in place (a simulator-only device
+// for a level as it used to be); the real settings are always restored.
+function asPlayer<T>(p: Player, fn: () => T): T {
+  if (!p.settings) return fn();
+  const real = LEVELS[p.level];
+  LEVELS[p.level] = p.settings;
+  try {
+    return fn();
+  } finally {
+    LEVELS[p.level] = real;
+  }
+}
 
 type Tally = { pegging: number; hand: number; crib: number; heels: number; hands: number };
 type GameResult = { winner: Seat; scores: [number, number]; tally: [Tally, Tally] };
@@ -76,14 +106,22 @@ function playGame(players: [Player, Player], firstDealer: Seat, seed: number): G
     const dealt: [string[], string[]] = [deck.slice(0, 6), deck.slice(6, 12)];
     const kept: [string[], string[]] = [[], []];
     const crib: string[] = [];
-    for (const seat of [0, 1] as const) {
-      const out = decideDiscard({
-        hand: dealt[seat],
-        isDealer: seat === dealer,
-        level: players[seat].level,
-        rng: rngs[seat],
-        cribSamples: players[seat].cribSamples,
-      });
+    // The discard: a seat that peeks goes second and is given the other
+    // seat's kept four; if both peek, seat 0 goes first without peeking.
+    const order: Seat[] = peeksAtDiscard(players[0]) && !peeksAtDiscard(players[1]) ? [1, 0] : [0, 1];
+    for (const seat of order) {
+      const other: Seat = seat === 0 ? 1 : 0;
+      const givenKept = seat === order[1] && peeksAtDiscard(players[seat]) ? [...kept[other]] : undefined;
+      const out = asPlayer(players[seat], () =>
+        decideDiscard({
+          hand: dealt[seat],
+          isDealer: seat === dealer,
+          level: players[seat].level,
+          rng: rngs[seat],
+          cribSamples: players[seat].cribSamples,
+          opponentKept: givenKept,
+        })
+      );
       kept[seat] = dealt[seat].filter((c) => !out.includes(c));
       crib.push(...out);
     }
@@ -96,22 +134,24 @@ function playGame(players: [Player, Player], firstDealer: Seat, seed: number): G
     while (state) {
       const p: Seat = state.turn;
       const o: Seat = p === 0 ? 1 : 0;
-      const peeks = LEVELS[players[p].level].peek;
-      const card = decidePlay({
-        myRemaining: state.hands[p],
+      const settings = players[p].settings ?? LEVELS[players[p].level];
+      const peeks = settings.peek;
+      const now: PegState = state;
+      const card = asPlayer(players[p], () => decidePlay({
+        myRemaining: now.hands[p],
         starter,
-        segmentCards: state.segment,
-        count: state.count,
+        segmentCards: now.segment,
+        count: now.count,
         allPlayed: [...allPlayed],
-        opponentCardCount: state.hands[o].length,
+        opponentCardCount: now.hands[o].length,
         level: players[p].level,
         rng: rngs[p],
-        opponentRemaining: peeks ? [...state.hands[o]] : undefined,
+        opponentRemaining: peeks ? [...now.hands[o]] : undefined,
         game:
           peeks && players[p].withGame
             ? { myScore: scores[p], opponentScore: scores[o], iAmDealer: p === dealer, myKept: [...kept[p]], opponentKept: [...kept[o]] }
             : undefined,
-      });
+      }));
       const result = applyPlay(state, card);
       allPlayed.push(card);
       if (result.points > 0 && award(p, result.points, "pegging")) return { winner: p, scores, tally };
@@ -164,10 +204,21 @@ function matchup(pa: Player, pb: Player, games = GAMES) {
 }
 
 const start = performance.now();
-matchup(player("hard"), player("medium"));
 matchup(player("medium"), player("easy"));
+matchup(player("hard"), player("medium"));
 matchup(player("hard"), player("easy"));
 if (process.argv.includes("--old-hard")) {
-  matchup(player("hard"), { name: "old hard", level: "hard", cribSamples: 60, withGame: false }, 4000);
+  matchup(player("hard"), { name: "old hard", level: "hard", cribSamples: 60, withGame: false, discardPeek: false }, 4000);
+}
+if (process.argv.includes("--hard-no-discard-peek")) {
+  matchup(player("hard"), { name: "hard, no discard peek", level: "hard", withGame: true, discardPeek: false }, 4000);
+}
+if (process.argv.includes("--old-medium")) {
+  matchup(player("medium"), {
+    name: "old medium",
+    level: "medium",
+    withGame: false,
+    settings: { mistakeRate: 0.35, peek: false, peekDiscard: false, search: false, style: "normal", cribSamples: 60 },
+  }, 4000);
 }
 console.log(`Total run time: ${((performance.now() - start) / 1000).toFixed(1)} s`);

@@ -4,7 +4,12 @@
 //                choosing uniformly at random among the legal options
 //                (a "mistake" can still land on the best one by chance).
 //   peek         may read the human's remaining hand -- during pegging ONLY.
-//                Nothing else is ever visible to the brain (see brain.ts).
+//   peekDiscard  may read the human's kept four-card hand when discarding
+//                (so it discards after the human); nothing else is ever
+//                visible to the brain (see brain.ts).
+//   search       pegging by searching every line to the end of the hand
+//                (and playing for the win near 121); without it, a level
+//                that peeks plays the best card one move ahead.
 //   style        "normal": play to win (with mistakeRate). "dumb": play to
 //                lose on purpose -- discards its worst-valued cards (and
 //                always gives the opponent's crib its 5s), leads 5s, avoids
@@ -18,6 +23,8 @@ export type ComputerLevel = "easy" | "medium" | "hard";
 export type LevelSettings = {
   mistakeRate: number;
   peek: boolean;
+  peekDiscard: boolean;
+  search: boolean;
   style: "normal" | "dumb";
   // How many random (starter, two unknown cards) samples estimate the crib's
   // value for each discard (see CRIB_SAMPLES).
@@ -31,13 +38,15 @@ export type LevelSettings = {
 export const CRIB_SAMPLES = 60;
 
 export const LEVELS: Record<ComputerLevel, LevelSettings> = {
-  easy: { mistakeRate: 0, peek: false, style: "dumb", cribSamples: CRIB_SAMPLES },
-  medium: { mistakeRate: 0.35, peek: false, style: "normal", cribSamples: CRIB_SAMPLES },
+  easy: { mistakeRate: 0, peek: false, peekDiscard: false, search: false, style: "dumb", cribSamples: CRIB_SAMPLES },
+  // Medium: what Hard was before the pegging search -- no mistakes, and the
+  // best card one move ahead with the human's remaining cards known.
+  medium: { mistakeRate: 0, peek: true, peekDiscard: false, search: false, style: "normal", cribSamples: CRIB_SAMPLES },
   // Hard: 500 crib samples. Measured over 300 hands against a 3000-sample
   // reference: 60 agree 86.7%, 300 93.7%, 500 97.0%, 1000 97.3%, 3000 97.0%
   // (two 3000 runs differ on near-ties, so ~97% is the ceiling); 500 costs
   // about 6 ms per discard.
-  hard: { mistakeRate: 0, peek: true, style: "normal", cribSamples: 500 },
+  hard: { mistakeRate: 0, peek: true, peekDiscard: true, search: true, style: "normal", cribSamples: 500 },
 };
 
 // PACING: how long the computer "thinks" before each kind of action, as

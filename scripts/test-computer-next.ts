@@ -83,6 +83,20 @@ check("discard: not yet in discarded_by", () => {
   strictEqual(kindOf(state({ game: game({ discarded_by: [C] }) })), null);
   strictEqual(kindOf(state({ game: game({ discarded_by: [H, C] }) })), null);
 });
+check("discard: a level that reads the human's kept hand (Hard) waits for the human's discard", () => {
+  // Hard: nothing until the human is in discarded_by, then the discard.
+  strictEqual(kindOf(state({ discardAfterOpponent: true, game: game({ discarded_by: [] }) })), null);
+  deepStrictEqual(computerNextAction(state({ discardAfterOpponent: true, game: game({ discarded_by: [H] }) })), {
+    kind: "discard",
+    key: "g1:1:discard",
+  });
+  strictEqual(kindOf(state({ discardAfterOpponent: true, game: game({ discarded_by: [H, C] }) })), null);
+  // Easy and Medium (the flag off or absent): discard straight away, as before.
+  strictEqual(kindOf(state({ discardAfterOpponent: false, game: game({ discarded_by: [] }) })), "discard");
+  strictEqual(kindOf(state({ game: game({ discarded_by: [] }) })), "discard");
+  // The flag only affects the discard.
+  strictEqual(kindOf(state({ discardAfterOpponent: true, game: game({ phase: "play", current_player: C }) })), "play");
+});
 check("play: only on the computer's turn", () => {
   deepStrictEqual(
     computerNextAction(state({ game: game({ phase: "play", current_player: C, play_segment: 1, play_count: 17 }) })),
