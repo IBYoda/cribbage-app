@@ -14,6 +14,9 @@ type TableRow = {
   id: string;
   code: string;
   created_at: string;
+  // A computer table's level ('easy' / 'medium' / 'hard'), null otherwise.
+  // Shown as a tag; computer tables are listed and force-endable like any.
+  computerLevel: string | null;
   memberCount: number;
   activeGame: { id: string; created_at: string; status: string } | null;
 };
@@ -56,7 +59,7 @@ export default function AdminPage() {
 
       const { data: openTables, error: tablesError } = await supabase
         .from("tables")
-        .select("id, code, created_at")
+        .select("id, code, created_at, computer_level")
         .eq("status", "open")
         .order("created_at", { ascending: false });
 
@@ -103,6 +106,7 @@ export default function AdminPage() {
           id: t.id,
           code: t.code,
           created_at: t.created_at,
+          computerLevel: t.computer_level ?? null,
           memberCount: memberCountByTableId.get(t.id) ?? 0,
           activeGame: gameByTableId.get(t.id) ?? null,
         }))
@@ -204,7 +208,10 @@ export default function AdminPage() {
               className="flex flex-col gap-2 rounded-xl border border-[rgb(226_193_125/0.4)] bg-black/25 p-4"
             >
               <div className="flex items-center justify-between gap-3">
-                <span className="text-xl font-bold tracking-widest">{t.code}</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-xl font-bold tracking-widest">{t.code}</span>
+                  {t.computerLevel && <span className="muggins-tag">Computer ({t.computerLevel})</span>}
+                </span>
                 <button
                   onClick={() => handleForceEndTable(t.id)}
                   disabled={actionInFlight === t.id}

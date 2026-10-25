@@ -23,8 +23,8 @@
 --     admins, and not seated anywhere (unless already a computer account,
 --     on a re-run); anything else stops it with a clear message and changes
 --     nothing;
---   * writes each account's profile: nickname "Computer (Easy)",
---     "Computer (Medium)", "Computer (Hard)", avatar left null (the app
+--   * writes each account's profile: nickname "Shortbus" (easy),
+--     "Normie" (medium), "God" (hard), avatar left null (the app
 --     shows its usual fallback); an existing profile row is overwritten;
 --   * records the three in public.computer_accounts (a level already
 --     recorded is pointed at the new id).
@@ -41,7 +41,7 @@ declare
 
   v_ids uuid[];
   v_levels text[] := array['easy', 'medium', 'hard'];
-  v_names text[] := array['Computer (Easy)', 'Computer (Medium)', 'Computer (Hard)'];
+  v_names text[] := array['Shortbus', 'Normie', 'God'];
   v_txt text;
   i int;
 begin
