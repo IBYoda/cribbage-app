@@ -9,13 +9,32 @@
 // exception is opponentRemaining (the human's unplayed cards) in decidePlay:
 // it is read ONLY when LEVELS[level].peek is true, and ignored otherwise.
 //
+// THE PEGGING SEARCH (peek-only, so Hard only): with the opponent's exact
+// unplayed cards known, evaluatePlays searches every line to the end of the
+// pegging (minimax, both sides playing their best, under the server's rules
+// in rules.ts) and values each card as my points minus the opponent's from
+// here to the last card. Every other level, and Hard without those cards,
+// uses the one-move-ahead estimate below, unchanged.
+//
+// PLAYING TO WIN (also peek-only): when the input carries the game state
+// (the public scores and dealer, plus both kept hands) and either player
+// could reach 121 by the end of this deal's count, the same search plays for
+// the WIN: a line that pegs a player out ends the game for that player, and
+// a line whose count is CERTAIN to finish the game (the pone's hand, then
+// the dealer's hand; never the crib, which is partly unknown) is a win or a
+// loss; every other line still counts as the points difference. Wins rank
+// above any points and sooner wins above later ones; losses the reverse.
+// The scores are public; everything about the opponent's cards is still
+// read only when LEVELS[level].peek.
+//
 // Points here are estimates for choosing a move. The server scores every
 // play and count itself (score_pegging, score_hand); nothing from this file
 // is ever sent as a score.
 
 import { RANKS, SUITS, cardPlayValue, sortHand } from "../cards";
 import { scoreHand, scorePegging } from "../scoring";
-import { CRIB_SAMPLES, LEVELS, type ComputerLevel } from "./config";
+import { LEVELS, type ComputerLevel } from "./config";
+import { applyPlay, legalCards, type PegState, type Seat } from "./rules";
 
 export type Rng = () => number;
 
@@ -69,6 +88,9 @@ export type DiscardInput = {
   isDealer: boolean; // the crib is mine (counts for me) or the opponent's
   level: ComputerLevel;
   rng?: Rng;
+  // How many crib samples to draw; undefined = the level's cribSamples.
+  // (For measuring -- the simulator pits counts against each other.)
+  cribSamples?: number;
 };
 
 export type DiscardOption = {
@@ -80,9 +102,10 @@ export type DiscardOption = {
 };
 
 // Every one of the 15 discards with its expected value, best first. The
-// crib is estimated by Monte Carlo: CRIB_SAMPLES random (starter, two
-// unknown cards) draws from the 46 unseen cards, the SAME draws for every
-// discard, scored with the crib rule. Uses rng for the draws only.
+// crib is estimated by Monte Carlo: the level's cribSamples (or the input's
+// override) random (starter, two unknown cards) draws from the 46 unseen
+// cards, the SAME draws for every discard, scored with the crib rule. Uses
+// rng for the draws only.
 export function evaluateDiscards(input: DiscardInput): DiscardOption[] {
   const { hand, isDealer } = input;
   const rng = input.rng ?? Math.random;
@@ -97,7 +120,8 @@ export function evaluateDiscards(input: DiscardInput): DiscardOption[] {
 
   // The shared crib samples: three distinct unseen cards each.
   const samples: [string, string, string][] = [];
-  for (let s = 0; s < CRIB_SAMPLES; s++) {
+  const sampleCount = input.cribSamples ?? LEVELS[input.level].cribSamples;
+  for (let s = 0; s < sampleCount; s++) {
     const a = pickIndex(rng, unseen.length);
     let b = pickIndex(rng, unseen.length - 1);
     if (b >= a) b += 1;
@@ -184,12 +208,24 @@ export type PlayInput = {
   rng?: Rng;
   // The opponent's unplayed cards. Read ONLY when LEVELS[level].peek.
   opponentRemaining?: string[];
+  // THE GAME STATE, for playing to win near 121. Read ONLY when
+  // LEVELS[level].peek (and only with opponentRemaining). The scores and
+  // the dealer are public; the kept four-card hands (each player's whole
+  // hand this deal: the remaining cards plus the ones already played) are
+  // used for the count after the pegging.
+  game?: {
+    myScore: number;
+    opponentScore: number;
+    iAmDealer: boolean;
+    myKept?: string[];
+    opponentKept?: string[];
+  };
 };
 
 export type PlayOption = {
   card: string;
   points: number; // what this card scores now
-  risk: number; // the opponent's expected best reply
+  risk: number; // the opponent's expected best reply (searched: points - value)
   value: number; // points - risk
 };
 
@@ -227,6 +263,124 @@ function replyRisk(segment: string[], count: number, opponentCards: string[], n:
   return expected;
 }
 
+// THE SEARCH'S PIECES. The opponent's cards are usable for the search only
+// if they are real, unrepeated cards that are none of mine, none already
+// played and not the starter.
+function validOpponentCards(cards: string[], mine: string[], allPlayed: string[], starter: string) {
+  const seen = new Set([...mine, ...allPlayed, starter]);
+  for (const card of cards) {
+    if (!DECK_SET.has(card) || seen.has(card)) return false;
+    seen.add(card);
+  }
+  return cards.length <= 4;
+}
+
+// The best (my points - the opponent's points) to the end of the pegging
+// for the player whose turn it is in state, both sides playing their best.
+// Memoised on the position (whose turn, the segment, both hands).
+function bestDifference(state: PegState, memo: Map<string, number>): number {
+  const key = `${state.turn}|${state.segment.join(",")}|${[...state.hands[0]].sort().join(",")}|${[...state.hands[1]].sort().join(",")}`;
+  const known = memo.get(key);
+  if (known !== undefined) return known;
+  let best = -Infinity;
+  for (const card of legalCards(state.hands[state.turn], state.count)) {
+    const { points, next } = applyPlay(state, card);
+    const rest = next === null ? 0 : next.turn === state.turn ? bestDifference(next, memo) : -bestDifference(next, memo);
+    best = Math.max(best, points + rest);
+  }
+  // Unreachable (the player on turn always holds a legal card), but safe.
+  if (best === -Infinity) best = 0;
+  memo.set(key, best);
+  return best;
+}
+
+// PLAYING TO WIN: the value scale. A win is worth WIN minus STEP for every
+// play (or count) it takes, so any win outranks any points difference and a
+// sooner win outranks a later one; a loss is the negative, so a later loss
+// outranks a sooner one. |value| >= DECIDED means the line is decided.
+const WIN = 100000;
+const STEP = 100;
+const DECIDED = WIN / 2;
+// Either player this close to 121 (pegging plus a hand can be worth this
+// much in one deal): play to win. Further away no line can end the game, so
+// the points-difference search is used, unchanged.
+const ENDGAME_REACH = 61;
+
+type Endgame = {
+  dealer: Seat; // seat 0 is me, seat 1 the opponent
+  handPoints: [number, number] | null; // each kept hand's count, if both are known
+};
+
+// The count after the pegging, where it is CERTAIN: the pone counts first,
+// then the dealer's hand. The crib (partly unknown) never decides.
+function countResult(scores: [number, number], eg: Endgame): { winner: Seat; steps: number } | null {
+  if (!eg.handPoints) return null;
+  const pone: Seat = eg.dealer === 0 ? 1 : 0;
+  if (scores[pone] + eg.handPoints[pone] >= 121) return { winner: pone, steps: 1 };
+  if (scores[eg.dealer] + eg.handPoints[eg.dealer] >= 121) return { winner: eg.dealer, steps: 2 };
+  return null;
+}
+
+// The value of one play for the player making it, in a game to 121.
+function playToWinMove(
+  state: PegState,
+  card: string,
+  scores: [number, number],
+  depth: number,
+  eg: Endgame,
+  memo: Map<string, number>
+): { points: number; value: number } {
+  const p = state.turn;
+  const { points, next } = applyPlay(state, card);
+  const after: [number, number] = [scores[0], scores[1]];
+  after[p] += points;
+  if (after[p] >= 121) return { points, value: WIN - STEP * (depth + 1) }; // pegged out
+  if (next === null) {
+    const result = countResult(after, eg);
+    if (!result) return { points, value: points };
+    const size = WIN - STEP * (depth + 1 + result.steps);
+    return { points, value: result.winner === p ? size : -size };
+  }
+  const child = bestToWin(next, after, depth + 1, eg, memo);
+  const rest = next.turn === p ? child : -child;
+  return { points, value: Math.abs(rest) >= DECIDED ? rest : points + rest };
+}
+
+// The best value for the player whose turn it is, in a game to 121.
+// Memoised on the position and the running scores.
+function bestToWin(state: PegState, scores: [number, number], depth: number, eg: Endgame, memo: Map<string, number>): number {
+  const key = `${state.turn}|${scores[0]},${scores[1]}|${state.segment.join(",")}|${[...state.hands[0]].sort().join(",")}|${[...state.hands[1]].sort().join(",")}`;
+  const known = memo.get(key);
+  if (known !== undefined) return known;
+  let best = -Infinity;
+  for (const card of legalCards(state.hands[state.turn], state.count)) {
+    best = Math.max(best, playToWinMove(state, card, scores, depth, eg, memo).value);
+  }
+  if (best === -Infinity) best = 0; // unreachable, as above
+  memo.set(key, best);
+  return best;
+}
+
+// The kept four-card hands, if they are usable for the count: four real,
+// unrepeated cards each, holding that player's remaining cards, the rest of
+// each among the cards played, no card in both, and not the starter.
+function keptHandsValid(
+  myKept: string[] | undefined,
+  oppKept: string[] | undefined,
+  myRemaining: string[],
+  oppRemaining: string[],
+  allPlayed: string[],
+  starter: string
+) {
+  if (!Array.isArray(myKept) || !Array.isArray(oppKept) || myKept.length !== 4 || oppKept.length !== 4) return false;
+  const all = [...myKept, ...oppKept];
+  if (new Set(all).size !== 8 || all.some((c) => !DECK_SET.has(c) || c === starter)) return false;
+  const played = new Set(allPlayed);
+  const fits = (kept: string[], remaining: string[]) =>
+    remaining.every((c) => kept.includes(c)) && kept.every((c) => remaining.includes(c) || played.has(c));
+  return fits(myKept, myRemaining) && fits(oppKept, oppRemaining);
+}
+
 // Every legal card with its estimated value, best first. Tie-breaks: not
 // leading a 5 (it invites a ten for 15), then playing the higher card so
 // the low, flexible ones stay for later, then card order.
@@ -257,12 +411,55 @@ export function evaluatePlays(input: PlayInput): PlayOption[] {
   }
   const n = peek ? opponentCards.length : input.opponentCardCount;
 
-  const options = legal.map((card) => {
-    const segment = [...segmentCards, card];
-    const points = scorePegging(segment).points;
-    const risk = replyRisk(segment, count + cardPlayValue(card), opponentCards, n, peek);
-    return { card, points, risk, value: points - risk };
-  });
+  let options: PlayOption[];
+  if (peek && validOpponentCards(opponentCards, myRemaining, allPlayed, starter)) {
+    // THE SEARCH (peek only): every line to the end of the pegging. points
+    // is this play's own points (a go or last-card point included); value
+    // is my points minus the opponent's from here to the end; risk is
+    // points - value, what the rest of the hand costs me (negative when the
+    // rest of the hand gains).
+    const root: PegState = { hands: [[...myRemaining], [...opponentCards]], segment: [...segmentCards], count, turn: 0 };
+    const memo = new Map<string, number>();
+    // PLAYING TO WIN, when the game state is given and 121 is within reach
+    // of either player; otherwise the points difference, as before.
+    const g = input.game;
+    const toWin =
+      g !== undefined &&
+      Number.isFinite(g.myScore) &&
+      Number.isFinite(g.opponentScore) &&
+      Math.max(g.myScore, g.opponentScore) + ENDGAME_REACH >= 121;
+    if (toWin && g) {
+      const handsKnown = keptHandsValid(g.myKept, g.opponentKept, myRemaining, opponentCards, allPlayed, starter);
+      const eg: Endgame = {
+        dealer: g.iAmDealer ? 0 : 1,
+        handPoints: handsKnown
+          ? [
+              scoreHand(g.myKept as string[], starter, false).points,
+              scoreHand(g.opponentKept as string[], starter, false).points,
+            ]
+          : null,
+      };
+      const scores: [number, number] = [g.myScore, g.opponentScore];
+      options = legal.map((card) => {
+        const { points, value } = playToWinMove(root, card, scores, 0, eg, memo);
+        return { card, points, risk: points - value, value };
+      });
+    } else {
+      options = legal.map((card) => {
+        const { points, next } = applyPlay(root, card);
+        const rest = next === null ? 0 : next.turn === 0 ? bestDifference(next, memo) : -bestDifference(next, memo);
+        const value = points + rest;
+        return { card, points, risk: points - value, value };
+      });
+    }
+  } else {
+    options = legal.map((card) => {
+      const segment = [...segmentCards, card];
+      const points = scorePegging(segment).points;
+      const risk = replyRisk(segment, count + cardPlayValue(card), opponentCards, n, peek);
+      return { card, points, risk, value: points - risk };
+    });
+  }
 
   const leadingFive = (card: string) => segmentCards.length === 0 && card[0] === "5";
   return options.sort((p, q) => {
