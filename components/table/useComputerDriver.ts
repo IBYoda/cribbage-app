@@ -87,6 +87,30 @@ function nextActionOf(input: ComputerDriverInput): ComputerAction | null {
 
 type PlayRow = { seq: number; segment: number; user_id: string; kind: string; card: string | null };
 
+// The game state for decidePlay, or undefined if the scores can't be read.
+// The kept hands: the computer's four cards (computer_hand, which keeps the
+// four after the discard) and the human's four (their own hand on screen);
+// left out unless both are the full four.
+function gameState(
+  scores: { user_id: string; score: number }[] | null,
+  dealerId: string | null,
+  computerKept: string[],
+  humanKept: string[],
+  computerId: string
+) {
+  const mine = scores?.find((s) => s.user_id === computerId);
+  const theirs = scores?.find((s) => s.user_id !== computerId);
+  if (!mine || !theirs || !dealerId) return undefined;
+  const full = computerKept.length === 4 && humanKept.length === 4;
+  return {
+    myScore: mine.score ?? 0,
+    opponentScore: theirs.score ?? 0,
+    iAmDealer: dealerId === computerId,
+    myKept: full ? computerKept : undefined,
+    opponentKept: full ? humanKept : undefined,
+  };
+}
+
 // Performs one action. Returns null when done, or the refusal's message.
 async function perform(action: ComputerAction, input: ComputerDriverInput): Promise<string | null> {
   const { trackAction } = input;
@@ -131,11 +155,11 @@ async function perform(action: ComputerAction, input: ComputerDriverInput): Prom
       if (!game) return "no game";
       // Everything from fresh reads, so the segment, the count and whose turn
       // it is all describe the same moment.
-      const [{ data: row }, { data: playRows }, read] = await Promise.all([
+      const [{ data: row }, { data: playRows }, read, { data: scoreRows }] = await Promise.all([
         trackAction(
           supabase
             .from("games")
-            .select("status, phase, current_player, play_count, play_segment, starter_card")
+            .select("status, phase, current_player, play_count, play_segment, starter_card, dealer_id")
             .eq("id", game.id)
             .maybeSingle()
         ),
@@ -147,6 +171,8 @@ async function perform(action: ComputerAction, input: ComputerDriverInput): Prom
             .order("seq", { ascending: true })
         ),
         computerHand(game.id),
+        // The public scores, for playing to win near 121.
+        trackAction(supabase.from("table_members").select("user_id, score").eq("table_id", input.tableId)),
       ]);
       if ("error" in read) return read.error;
       const hand = read.cards;
@@ -176,6 +202,9 @@ async function perform(action: ComputerAction, input: ComputerDriverInput): Prom
         level,
         // The brain reads this only when the level peeks.
         opponentRemaining: input.humanHand.length === 4 ? humanRemaining : undefined,
+        // Likewise the game state (scores public; the kept hands are the
+        // computer's four cards and the human's): only when the level peeks.
+        game: gameState(scoreRows as { user_id: string; score: number }[] | null, row.dealer_id, hand, input.humanHand, computerId),
       });
       return call("computer_play_card", { p_game_id: game.id, p_card: card });
     }

@@ -12,7 +12,8 @@
     "test:sql-cases": "node --import ./scripts/ts-resolve.mjs scripts/test-scoring.ts --emit-sql-cases",
     "test:phase3": "node --import ./scripts/ts-resolve.mjs scripts/test-phase3.ts",
     "test:computer": "node --import ./scripts/ts-resolve.mjs scripts/test-computer.ts",
-    "test:computer-next": "node --import ./scripts/ts-resolve.mjs scripts/test-computer-next.ts"
+    "test:computer-next": "node --import ./scripts/ts-resolve.mjs scripts/test-computer-next.ts",
+    "sim:computer": "node --import ./scripts/ts-resolve.mjs scripts/sim-computer.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",

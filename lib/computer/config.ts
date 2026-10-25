@@ -19,18 +19,26 @@ export type LevelSettings = {
   mistakeRate: number;
   peek: boolean;
   style: "normal" | "dumb";
-};
-
-export const LEVELS: Record<ComputerLevel, LevelSettings> = {
-  easy: { mistakeRate: 0, peek: false, style: "dumb" },
-  medium: { mistakeRate: 0.35, peek: false, style: "normal" },
-  hard: { mistakeRate: 0, peek: true, style: "normal" },
+  // How many random (starter, two unknown cards) samples estimate the crib's
+  // value for each discard (see CRIB_SAMPLES).
+  cribSamples: number;
 };
 
 // How many random (starter, two unknown cards) samples estimate the crib's
-// value for each discard. The same samples are reused for all 15 discards,
-// so the comparison between them is fair even with few samples.
+// value for each discard, by default. The same samples are reused for all 15
+// discards, so the comparison between them is fair even with few samples.
+// Easy and Medium use this; Hard uses more (measured: see LEVELS).
 export const CRIB_SAMPLES = 60;
+
+export const LEVELS: Record<ComputerLevel, LevelSettings> = {
+  easy: { mistakeRate: 0, peek: false, style: "dumb", cribSamples: CRIB_SAMPLES },
+  medium: { mistakeRate: 0.35, peek: false, style: "normal", cribSamples: CRIB_SAMPLES },
+  // Hard: 500 crib samples. Measured over 300 hands against a 3000-sample
+  // reference: 60 agree 86.7%, 300 93.7%, 500 97.0%, 1000 97.3%, 3000 97.0%
+  // (two 3000 runs differ on near-ties, so ~97% is the ceiling); 500 costs
+  // about 6 ms per discard.
+  hard: { mistakeRate: 0, peek: true, style: "normal", cribSamples: 500 },
+};
 
 // PACING: how long the computer "thinks" before each kind of action, as
 // [min, max] milliseconds -- a random delay in that range, so its moves are
