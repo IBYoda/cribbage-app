@@ -20,11 +20,26 @@
 // level whose LEVELS[level].peek is true gets the opponent's unplayed cards
 // as opponentRemaining while pegging, and the game state (the scores, the
 // dealer and both kept hands) for playing to win near 121; no other level
-// ever does.
+// ever does. Only Hard peeks; Easy and Medium never do (the calibrations
+// switch a peek on for one test player through its settings override).
 //
 // THE DISCARD: a seat whose level peeks at the discard (Hard) discards
 // second and is given the other seat's kept four, as the real driver waits
 // for the human's discard.
+//
+// THE LADDER (the default run): Easy vs Medium and Hard vs Medium at 2000
+// games, Hard vs Easy at 1000.
+//
+// THE EASY CALIBRATION: `npm run sim:computer -- --calibrate-easy` runs,
+// instead of the ladder, Easy at mistake rates 0.50, 0.55 and 0.60 against
+// today's Medium and against the old Medium, plus the old Medium against
+// today's Medium (2000 games each; a couple of minutes apiece).
+//
+// THE MEDIUM CALIBRATION: `npm run sim:computer -- --calibrate-medium` runs,
+// instead of the ladder, Medium at mistake rates 0, 0.10 and 0.20 (never
+// peeking) against Easy and the old Medium (2000 games each) and against
+// Hard (1000), plus the peeking Medium (the previous one: peek on, no
+// search, no mistakes) against Hard. About 20 minutes, mostly Hard.
 //
 // OPT-IN MATCHUPS (4000 games each, several minutes apiece):
 //   --hard-no-discard-peek  Hard against Hard without the discard peek
@@ -203,10 +218,59 @@ function matchup(pa: Player, pb: Player, games = GAMES) {
   }
 }
 
+// "Old Medium": the original Medium (0.35 mistakes, no peeking).
+const OLD_MEDIUM: LevelSettings = { mistakeRate: 0.35, peek: false, peekDiscard: false, search: false, cribSamples: 60 };
+const oldMedium = (): Player => ({ name: "old medium", level: "medium", withGame: false, settings: OLD_MEDIUM });
+// Easy at another mistake rate (everything else as today's Easy).
+const easyAt = (rate: number): Player => ({
+  name: `easy ${rate.toFixed(2)}`,
+  level: "easy",
+  withGame: false,
+  settings: { ...LEVELS.easy, mistakeRate: rate },
+});
+
+// Medium at a mistake rate (never peeking, as today's Medium).
+const mediumAt = (rate: number): Player => ({
+  name: `medium ${rate.toFixed(2)}`,
+  level: "medium",
+  withGame: false,
+  settings: { ...LEVELS.medium, mistakeRate: rate },
+});
+// The Medium just before this one: peeking while pegging, no search, no mistakes.
+const peekingMedium = (): Player => ({
+  name: "peeking medium",
+  level: "medium",
+  withGame: false,
+  settings: { ...LEVELS.medium, mistakeRate: 0, peek: true },
+});
+
 const start = performance.now();
-matchup(player("medium"), player("easy"));
-matchup(player("hard"), player("medium"));
-matchup(player("hard"), player("easy"));
+if (process.argv.includes("--calibrate-medium")) {
+  // THE MEDIUM CALIBRATION (instead of the main ladder): Medium at three
+  // mistake rates (never peeking) against Easy, the old Medium and Hard; and
+  // the peeking Medium against Hard, to show what the peek was worth.
+  for (const rate of [0, 0.1, 0.2]) {
+    matchup(mediumAt(rate), player("easy"));
+    matchup(mediumAt(rate), oldMedium());
+    matchup(mediumAt(rate), player("hard"), 1000);
+  }
+  matchup(peekingMedium(), player("hard"), 1000);
+} else if (process.argv.includes("--calibrate-easy")) {
+  // THE EASY CALIBRATION (instead of the main ladder): Easy at three mistake
+  // rates against today's Medium and against the old Medium, and the old
+  // Medium against today's Medium for reference. 2000 games each.
+  for (const rate of [0.5, 0.55, 0.6]) {
+    matchup(easyAt(rate), player("medium"));
+    matchup(easyAt(rate), oldMedium());
+  }
+  matchup(oldMedium(), player("medium"));
+} else {
+  // THE LADDER. Hard vs Easy at 1000 games: Hard is slow and the result is
+  // never close.
+  matchup(player("easy"), player("medium"));
+  matchup(player("hard"), player("medium"));
+  matchup(player("hard"), player("easy"), 1000);
+}
 if (process.argv.includes("--old-hard")) {
   matchup(player("hard"), { name: "old hard", level: "hard", cribSamples: 60, withGame: false, discardPeek: false }, 4000);
 }
@@ -214,11 +278,6 @@ if (process.argv.includes("--hard-no-discard-peek")) {
   matchup(player("hard"), { name: "hard, no discard peek", level: "hard", withGame: true, discardPeek: false }, 4000);
 }
 if (process.argv.includes("--old-medium")) {
-  matchup(player("medium"), {
-    name: "old medium",
-    level: "medium",
-    withGame: false,
-    settings: { mistakeRate: 0.35, peek: false, peekDiscard: false, search: false, style: "normal", cribSamples: 60 },
-  }, 4000);
+  matchup(player("medium"), oldMedium(), 4000);
 }
 console.log(`Total run time: ${((performance.now() - start) / 1000).toFixed(1)} s`);

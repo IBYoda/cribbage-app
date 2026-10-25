@@ -8,20 +8,22 @@
 // opponent's discards or the crib, so none can be passed by accident. The one
 // exceptions are the human's cards, each read only for a level that allows
 // it: opponentRemaining (their unplayed cards) in decidePlay, read ONLY when
-// LEVELS[level].peek -- Medium and Hard; and opponentKept (their kept
-// four-card hand, once they have discarded) in decideDiscard, read ONLY when
-// LEVELS[level].peekDiscard -- Hard only, which therefore discards after the
-// human (lib/computer/next.ts). Otherwise both are ignored.
+// LEVELS[level].peek; and opponentKept (their kept four-card hand, once they
+// have discarded) in decideDiscard, read ONLY when LEVELS[level].peekDiscard,
+// so that level discards after the human (lib/computer/next.ts). Only Hard
+// has either; for Easy and Medium both are ignored.
 //
-// MEDIUM'S PEGGING (peek without search): the best card one move ahead --
-// its points now minus the human's best reply, from their actual cards.
+// EASY AND MEDIUM'S PEGGING (no peek): the best card one move ahead -- its
+// points now minus the expected best reply, estimated from the unseen cards.
 //
 // THE PEGGING SEARCH (LEVELS[level].search, so Hard only): with the
 // opponent's exact unplayed cards known, evaluatePlays searches every line
 // to the end of the pegging (minimax, both sides playing their best, under
 // the server's rules in rules.ts) and values each card as my points minus
 // the opponent's from here to the last card. Without search, or without
-// those cards, it uses the one-move-ahead branch below, unchanged.
+// those cards, it uses the one-move-ahead branch below, unchanged. (That
+// branch also has an exact-replies form, for a level that peeks without
+// searching; no level does now, but it is kept, and the tests exercise it.)
 //
 // HARD'S DISCARD (peekDiscard): with the human's kept hand known, each of
 // the 15 keeps also gets its EXACT pegging value against that hand (the
@@ -202,39 +204,10 @@ function validKeptHand(cards: string[] | undefined, mine: Set<string>) {
   return cards.every((card) => DECK_SET.has(card) && !mine.has(card));
 }
 
-// THE DUMB DISCARD (style "dumb", playing to lose): the WORST discard --
-// the lowest-valued of the 15 (evaluateDiscards), so it keeps its worst
-// cards and throws its best. When the crib is the opponent's (not the
-// dealer) every 5 it holds goes into that crib first: two 5s at random if it
-// holds two or more; with one 5, that 5 plus whichever other card gives the
-// lowest-valued discard.
-function dumbDiscard(hand: string[], isDealer: boolean, rng: Rng): [string, string] {
-  if (!Array.isArray(hand) || hand.length !== 6) {
-    throw new Error("decideDiscard needs exactly six cards.");
-  }
-  assertCards(hand, "decideDiscard");
-  const fives = hand.filter((card) => card[0] === "5");
-  if (!isDealer && fives.length >= 2) {
-    const a = pickIndex(rng, fives.length);
-    let b = pickIndex(rng, fives.length - 1);
-    if (b >= a) b += 1;
-    return [fives[a], fives[b]];
-  }
-  // Best first, so the worst is the last one that qualifies.
-  const options = evaluateDiscards({ hand, isDealer, level: "easy", rng });
-  if (!isDealer && fives.length === 1) {
-    const withFive = options.filter((o) => o.discard.includes(fives[0]));
-    return withFive[withFive.length - 1].discard;
-  }
-  return options[options.length - 1].discard;
-}
-
 // The two cards to put in the crib. The best discard, except that with
-// probability mistakeRate it picks one of the 15 uniformly at random. The
-// "dumb" style (easy) has its own discard (dumbDiscard).
+// probability mistakeRate it picks one of the 15 uniformly at random.
 export function decideDiscard(input: DiscardInput): [string, string] {
   const rng = input.rng ?? Math.random;
-  if (LEVELS[input.level].style === "dumb") return dumbDiscard(input.hand, input.isDealer, rng);
   const options = evaluateDiscards({ ...input, rng });
   if (rng() < LEVELS[input.level].mistakeRate) {
     return options[pickIndex(rng, options.length)].discard;
@@ -520,32 +493,12 @@ export function evaluatePlays(input: PlayInput): PlayOption[] {
   });
 }
 
-// THE DUMB PLAY (style "dumb", playing to lose), from the same points and
-// reply risk as evaluatePlays: (1) only the legal cards that score the
-// LEAST (never a 15, 31, pair or run if a card avoids it); (2) leading a
-// run, a 5 if it holds one; (3) otherwise the card that gives the opponent
-// the best reply (the highest risk), ties broken at random. The opponent's
-// cards are never passed in.
-function dumbPlay(input: PlayInput, rng: Rng): string {
-  const options = evaluatePlays({ ...input, opponentRemaining: undefined });
-  const least = Math.min(...options.map((o) => o.points));
-  const pool = options.filter((o) => o.points === least);
-  if (input.segmentCards.length === 0) {
-    const fives = pool.filter((o) => o.card[0] === "5");
-    if (fives.length > 0) return fives[pickIndex(rng, fives.length)].card;
-  }
-  const most = Math.max(...pool.map((o) => o.risk));
-  const top = pool.filter((o) => Math.abs(o.risk - most) <= EPS);
-  return top[pickIndex(rng, top.length)].card;
-}
-
 // One legal card to play: the best, except that with probability
 // mistakeRate it picks a legal card uniformly at random. Throws if there is
 // no legal card (the caller should never ask then: the server passes the
 // turn on a go).
 export function decidePlay(input: PlayInput): string {
   const rng = input.rng ?? Math.random;
-  if (LEVELS[input.level].style === "dumb") return dumbPlay(input, rng);
   const options = evaluatePlays(input);
   if (rng() < LEVELS[input.level].mistakeRate) {
     return options[pickIndex(rng, options.length)].card;
