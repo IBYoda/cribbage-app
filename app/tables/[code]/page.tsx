@@ -320,6 +320,10 @@ export default function TablePage() {
   const hideCountNumbers = appearance.hideCounts || isMuggins;
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The error on screen is a CLOSED COMPUTER TABLE: the error screen offers
+  // just "Back to home" (Retry and another code make no sense there). Set
+  // with the error where a table is found closed; cleared by a fresh setup.
+  const [closedComputerTable, setClosedComputerTable] = useState(false);
   const [activeGame, setActiveGame] = useState<Game | null>(null);
   const [gameStatus, setGameStatus] = useState<"idle" | "creating" | "error">("idle");
   const [gameMessage, setGameMessage] = useState<string | null>(null);
@@ -912,6 +916,7 @@ export default function TablePage() {
 
     async function setup() {
       setError(null);
+      setClosedComputerTable(false);
       setPendingJoin(null);
 
       const { data: tableRow, error: tableError } = await supabase
@@ -931,6 +936,7 @@ export default function TablePage() {
         return;
       }
       if (tableRow.status !== "open") {
+        setClosedComputerTable(Boolean(tableRow.computer_level));
         setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));
         return;
       }
@@ -1717,7 +1723,9 @@ export default function TablePage() {
             computer_level?: string | null;
           };
           if (updatedTable.status !== "open" && !leavingRef.current) {
-            setError(tableEndedMessage(updatedTable.ended_reason, updatedTable.computer_level ?? table.computer_level));
+            const level = updatedTable.computer_level ?? table.computer_level;
+            setClosedComputerTable(Boolean(level));
+            setError(tableEndedMessage(updatedTable.ended_reason, level));
           }
         }
       )
@@ -1883,17 +1891,26 @@ export default function TablePage() {
     return (
       <CardRoomFrame backHome={false}>
         <p className="text-[var(--error-on-felt)]">{error}</p>
-        <div className="flex flex-col gap-2.5">
-          <button
-            onClick={() => setRetryKey((k) => k + 1)}
-            className="peg-btn peg-btn--brass"
-          >
-            Retry
-          </button>
-          <Link href="/tables/join" className="peg-btn peg-btn--ghost">
-            Try a different code
-          </Link>
-        </div>
+        {closedComputerTable ? (
+          // A closed computer table: there's nothing to retry or rejoin.
+          <div className="flex flex-col gap-2.5">
+            <Link href="/" className="peg-btn peg-btn--brass">
+              Back to home
+            </Link>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2.5">
+            <button
+              onClick={() => setRetryKey((k) => k + 1)}
+              className="peg-btn peg-btn--brass"
+            >
+              Retry
+            </button>
+            <Link href="/tables/join" className="peg-btn peg-btn--ghost">
+              Try a different code
+            </Link>
+          </div>
+        )}
       </CardRoomFrame>
     );
   }

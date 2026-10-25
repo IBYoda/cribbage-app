@@ -37,6 +37,15 @@ export const THINK_MS = {
   ready: [800, 1500], // Next Hand, New Game (rematch)
 } as const satisfies Record<string, readonly [number, number]>;
 
+// HOW EACH LEVEL IS SHOWN (Start a Table's level picker): the computer's
+// name, the level's label and a tagline. The name is also the computer
+// account's nickname (docs/sql/computer-accounts-setup.sql).
+export const LEVEL_INFO: Record<ComputerLevel, { name: string; label: string; tagline: string }> = {
+  easy: { name: "Shortbus", label: "Easy", tagline: "Just Learning" },
+  medium: { name: "Normie", label: "Medium", tagline: "Don't Suck!" },
+  hard: { name: "God", label: "Hard", tagline: "Start Praying" },
+};
+
 export function isComputerLevel(value: unknown): value is ComputerLevel {
   return value === "easy" || value === "medium" || value === "hard";
 }
