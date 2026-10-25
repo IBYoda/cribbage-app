@@ -129,10 +129,39 @@ export function evaluateDiscards(input: DiscardInput): DiscardOption[] {
   return options.sort((p, q) => q.value - p.value);
 }
 
+// THE DUMB DISCARD (style "dumb", playing to lose): the WORST discard --
+// the lowest-valued of the 15 (evaluateDiscards), so it keeps its worst
+// cards and throws its best. When the crib is the opponent's (not the
+// dealer) every 5 it holds goes into that crib first: two 5s at random if it
+// holds two or more; with one 5, that 5 plus whichever other card gives the
+// lowest-valued discard.
+function dumbDiscard(hand: string[], isDealer: boolean, rng: Rng): [string, string] {
+  if (!Array.isArray(hand) || hand.length !== 6) {
+    throw new Error("decideDiscard needs exactly six cards.");
+  }
+  assertCards(hand, "decideDiscard");
+  const fives = hand.filter((card) => card[0] === "5");
+  if (!isDealer && fives.length >= 2) {
+    const a = pickIndex(rng, fives.length);
+    let b = pickIndex(rng, fives.length - 1);
+    if (b >= a) b += 1;
+    return [fives[a], fives[b]];
+  }
+  // Best first, so the worst is the last one that qualifies.
+  const options = evaluateDiscards({ hand, isDealer, level: "easy", rng });
+  if (!isDealer && fives.length === 1) {
+    const withFive = options.filter((o) => o.discard.includes(fives[0]));
+    return withFive[withFive.length - 1].discard;
+  }
+  return options[options.length - 1].discard;
+}
+
 // The two cards to put in the crib. The best discard, except that with
-// probability mistakeRate it picks one of the 15 uniformly at random.
+// probability mistakeRate it picks one of the 15 uniformly at random. The
+// "dumb" style (easy) has its own discard (dumbDiscard).
 export function decideDiscard(input: DiscardInput): [string, string] {
   const rng = input.rng ?? Math.random;
+  if (LEVELS[input.level].style === "dumb") return dumbDiscard(input.hand, input.isDealer, rng);
   const options = evaluateDiscards({ ...input, rng });
   if (rng() < LEVELS[input.level].mistakeRate) {
     return options[pickIndex(rng, options.length)].discard;
@@ -245,12 +274,32 @@ export function evaluatePlays(input: PlayInput): PlayOption[] {
   });
 }
 
+// THE DUMB PLAY (style "dumb", playing to lose), from the same points and
+// reply risk as evaluatePlays: (1) only the legal cards that score the
+// LEAST (never a 15, 31, pair or run if a card avoids it); (2) leading a
+// run, a 5 if it holds one; (3) otherwise the card that gives the opponent
+// the best reply (the highest risk), ties broken at random. The opponent's
+// cards are never passed in.
+function dumbPlay(input: PlayInput, rng: Rng): string {
+  const options = evaluatePlays({ ...input, opponentRemaining: undefined });
+  const least = Math.min(...options.map((o) => o.points));
+  const pool = options.filter((o) => o.points === least);
+  if (input.segmentCards.length === 0) {
+    const fives = pool.filter((o) => o.card[0] === "5");
+    if (fives.length > 0) return fives[pickIndex(rng, fives.length)].card;
+  }
+  const most = Math.max(...pool.map((o) => o.risk));
+  const top = pool.filter((o) => Math.abs(o.risk - most) <= EPS);
+  return top[pickIndex(rng, top.length)].card;
+}
+
 // One legal card to play: the best, except that with probability
 // mistakeRate it picks a legal card uniformly at random. Throws if there is
 // no legal card (the caller should never ask then: the server passes the
 // turn on a go).
 export function decidePlay(input: PlayInput): string {
   const rng = input.rng ?? Math.random;
+  if (LEVELS[input.level].style === "dumb") return dumbPlay(input, rng);
   const options = evaluatePlays(input);
   if (rng() < LEVELS[input.level].mistakeRate) {
     return options[pickIndex(rng, options.length)].card;

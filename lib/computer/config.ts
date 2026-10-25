@@ -5,6 +5,11 @@
 //                (a "mistake" can still land on the best one by chance).
 //   peek         may read the human's remaining hand -- during pegging ONLY.
 //                Nothing else is ever visible to the brain (see brain.ts).
+//   style        "normal": play to win (with mistakeRate). "dumb": play to
+//                lose on purpose -- discards its worst-valued cards (and
+//                always gives the opponent's crib its 5s), leads 5s, avoids
+//                scoring in pegging and gives the opponent the best reply
+//                (see brain.ts).
 //
 // Pure data, no React, no database: read by lib/computer/brain.ts.
 
@@ -13,12 +18,13 @@ export type ComputerLevel = "easy" | "medium" | "hard";
 export type LevelSettings = {
   mistakeRate: number;
   peek: boolean;
+  style: "normal" | "dumb";
 };
 
 export const LEVELS: Record<ComputerLevel, LevelSettings> = {
-  easy: { mistakeRate: 0.9, peek: false },
-  medium: { mistakeRate: 0.35, peek: false },
-  hard: { mistakeRate: 0, peek: true },
+  easy: { mistakeRate: 0, peek: false, style: "dumb" },
+  medium: { mistakeRate: 0.35, peek: false, style: "normal" },
+  hard: { mistakeRate: 0, peek: true, style: "normal" },
 };
 
 // How many random (starter, two unknown cards) samples estimate the crib's

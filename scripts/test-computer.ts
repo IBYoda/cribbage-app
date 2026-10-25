@@ -49,9 +49,9 @@ const same = (a: string[], b: string[]) => [...a].sort().join() === [...b].sort(
 // ---- Levels -------------------------------------------------------------------
 check("levels: the three settings as specified", () => {
   deepStrictEqual(LEVELS, {
-    easy: { mistakeRate: 0.9, peek: false },
-    medium: { mistakeRate: 0.35, peek: false },
-    hard: { mistakeRate: 0, peek: true },
+    easy: { mistakeRate: 0, peek: false, style: "dumb" },
+    medium: { mistakeRate: 0.35, peek: false, style: "normal" },
+    hard: { mistakeRate: 0, peek: true, style: "normal" },
   });
 });
 
@@ -112,10 +112,10 @@ check("discard: hard never errs -- always the top option, and the same for the s
     deepStrictEqual(b, a);
   }
 });
-check("discard: easy and medium deviate from the best at about their rates", () => {
+check("discard: medium deviates from the best at about its rate", () => {
   const rng = seededRng(11);
   const hands = Array.from({ length: 400 }, () => shuffled(rng).slice(0, 6));
-  for (const [level, low, high] of [["easy", 0.72, 0.95], ["medium", 0.2, 0.45]] as const) {
+  for (const [level, low, high] of [["medium", 0.2, 0.45]] as const) {
     let deviations = 0;
     hands.forEach((hand, t) => {
       const seed = 5000 + t;
@@ -264,6 +264,133 @@ check("deterministic: the same seed gives the same choices", () => {
     return out;
   };
   deepStrictEqual(run(), run());
+});
+
+// ---- Easy: the "dumb" style (plays to lose) -------------------------------------
+const FIVES = ["5S", "5H", "5D", "5C"];
+// A hand with exactly k fives (the rest random non-fives).
+function handWithFives(rng: () => number, k: number) {
+  const fives = shuffled(rng).filter((c) => c[0] === "5").slice(0, k);
+  const others = shuffled(rng).filter((c) => c[0] !== "5").slice(0, 6 - k);
+  return [...fives, ...others];
+}
+check("easy as pone always gives the opponent's crib every 5 it holds", () => {
+  const rng = seededRng(55);
+  for (const k of [0, 1, 2, 3]) {
+    for (let t = 0; t < 150; t++) {
+      const hand = handWithFives(rng, k);
+      const out = decideDiscard({ hand, isDealer: false, level: "easy", rng: seededRng(t) });
+      ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out} / ${hand}`);
+      const thrownFives = out.filter((c) => FIVES.includes(c)).length;
+      strictEqual(thrownFives, Math.min(k, 2), `k=${k}: discarded ${out} from ${hand}`);
+    }
+  }
+});
+// The worst discard: the lowest-valued option (evaluateDiscards is best
+// first), computed with the same seed so the crib samples match.
+function worstDiscard(hand: string[], isDealer: boolean, seed: number, mustInclude?: string) {
+  const options = evaluateDiscards({ hand, isDealer, level: "easy", rng: seededRng(seed) }).filter(
+    (o) => !mustInclude || o.discard.includes(mustInclude)
+  );
+  return options[options.length - 1].discard;
+}
+check("easy as dealer throws its best cards: the lowest-valued discard, always valid", () => {
+  const rng = seededRng(66);
+  for (let t = 0; t < 300; t++) {
+    const hand = shuffled(rng).slice(0, 6);
+    const out = decideDiscard({ hand, isDealer: true, level: "easy", rng: seededRng(t) });
+    ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out} / ${hand}`);
+    deepStrictEqual(out, worstDiscard(hand, true, t), `t=${t}: ${out} / ${hand}`);
+  }
+});
+check("easy as pone with no 5s: the lowest-valued discard, always valid", () => {
+  const rng = seededRng(67);
+  for (let t = 0; t < 300; t++) {
+    const hand = handWithFives(rng, 0);
+    const out = decideDiscard({ hand, isDealer: false, level: "easy", rng: seededRng(t) });
+    ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out} / ${hand}`);
+    deepStrictEqual(out, worstDiscard(hand, false, t), `t=${t}: ${out} / ${hand}`);
+  }
+});
+check("easy as pone with one 5: the 5 plus the card giving the lowest-valued discard", () => {
+  const rng = seededRng(68);
+  for (let t = 0; t < 300; t++) {
+    const hand = handWithFives(rng, 1);
+    const five = hand.find((c) => c[0] === "5") as string;
+    const out = decideDiscard({ hand, isDealer: false, level: "easy", rng: seededRng(t) });
+    ok(out.includes(five), `t=${t}: the 5 was kept: ${out} / ${hand}`);
+    deepStrictEqual(out, worstDiscard(hand, false, t, five), `t=${t}: ${out} / ${hand}`);
+  }
+});
+check("easy pegging (1000 scenes): never scores when it can avoid it; else the least; then the best reply for the opponent", () => {
+  const rng = seededRng(77);
+  for (let t = 0; t < 1000; t++) {
+    const s = randomScene(rng);
+    const scene: PlayInput = {
+      myRemaining: s.myRemaining,
+      starter: s.starter,
+      segmentCards: s.segmentCards,
+      count: s.count,
+      allPlayed: s.allPlayed,
+      opponentCardCount: s.theirLeft.length,
+      level: "easy",
+    };
+    const options = evaluatePlays(scene);
+    const card = decidePlay({ ...scene, rng: seededRng(t) });
+    const chosen = options.find((o) => o.card === card);
+    ok(chosen, `not a legal card: ${card}`);
+    const least = Math.min(...options.map((o) => o.points));
+    strictEqual(chosen.points, least, `scored ${chosen.points} when ${least} was possible (${card})`);
+    const leadingFive = s.segmentCards.length === 0 && card[0] === "5";
+    if (!leadingFive) {
+      const most = Math.max(...options.filter((o) => o.points === least).map((o) => o.risk));
+      ok(Math.abs(chosen.risk - most) < 1e-9, `risk ${chosen.risk}, the most was ${most} (${card})`);
+    }
+  }
+});
+check("easy leads a 5 whenever it holds one at the start of a run", () => {
+  const rng = seededRng(88);
+  for (let t = 0; t < 300; t++) {
+    const k = 1 + (t % 3);
+    const hand = handWithFives(rng, k).slice(0, 4);
+    if (!hand.some((c) => c[0] === "5")) continue;
+    const starter = shuffled(rng).find((c) => !hand.includes(c)) as string;
+    const card = decidePlay({ myRemaining: hand, starter, segmentCards: [], count: 0, allPlayed: [], opponentCardCount: 4, level: "easy", rng: seededRng(t) });
+    strictEqual(card[0], "5", `led ${card} from ${hand}`);
+  }
+});
+check("easy: the same seed gives the same choices", () => {
+  const run = () => {
+    const rng = seededRng(99);
+    const out: string[] = [];
+    for (let t = 0; t < 60; t++) {
+      out.push(decideDiscard({ hand: shuffled(rng).slice(0, 6), isDealer: t % 2 === 0, level: "easy", rng }).join());
+      const s = randomScene(rng);
+      out.push(decidePlay({ ...s, opponentCardCount: s.theirLeft.length, level: "easy", rng }));
+    }
+    return out;
+  };
+  deepStrictEqual(run(), run());
+});
+check("easy ignores opponentRemaining (same seed, same card)", () => {
+  const rng = seededRng(111);
+  for (let t = 0; t < 500; t++) {
+    const s = randomScene(rng);
+    const scene: PlayInput = {
+      myRemaining: s.myRemaining,
+      starter: s.starter,
+      segmentCards: s.segmentCards,
+      count: s.count,
+      allPlayed: s.allPlayed,
+      opponentCardCount: s.theirLeft.length,
+      level: "easy",
+    };
+    strictEqual(
+      decidePlay({ ...scene, rng: seededRng(t), opponentRemaining: s.theirLeft }),
+      decidePlay({ ...scene, rng: seededRng(t) }),
+      `t=${t}`
+    );
+  }
 });
 
 // ---- Speed ---------------------------------------------------------------------
