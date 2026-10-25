@@ -52,9 +52,9 @@ const same = (a: string[], b: string[]) => [...a].sort().join() === [...b].sort(
 // ---- Levels -------------------------------------------------------------------
 check("levels: the three settings as specified", () => {
   deepStrictEqual(LEVELS, {
-    easy: { mistakeRate: 0, peek: false, peekDiscard: false, search: false, style: "dumb", cribSamples: 60 },
-    medium: { mistakeRate: 0, peek: true, peekDiscard: false, search: false, style: "normal", cribSamples: 60 },
-    hard: { mistakeRate: 0, peek: true, peekDiscard: true, search: true, style: "normal", cribSamples: 500 },
+    easy: { mistakeRate: 0.55, peek: false, peekDiscard: false, search: false, cribSamples: 60 },
+    medium: { mistakeRate: 0, peek: false, peekDiscard: false, search: false, cribSamples: 60 },
+    hard: { mistakeRate: 0, peek: true, peekDiscard: true, search: true, cribSamples: 500 },
   });
 });
 
@@ -269,65 +269,30 @@ check("deterministic: the same seed gives the same choices", () => {
   deepStrictEqual(run(), run());
 });
 
-// ---- Easy: the "dumb" style (plays to lose) -------------------------------------
-const FIVES = ["5S", "5H", "5D", "5C"];
-// A hand with exactly k fives (the rest random non-fives).
-function handWithFives(rng: () => number, k: number) {
-  const fives = shuffled(rng).filter((c) => c[0] === "5").slice(0, k);
-  const others = shuffled(rng).filter((c) => c[0] !== "5").slice(0, 6 - k);
-  return [...fives, ...others];
-}
-check("easy as pone always gives the opponent's crib every 5 it holds", () => {
-  const rng = seededRng(55);
-  for (const k of [0, 1, 2, 3]) {
-    for (let t = 0; t < 150; t++) {
-      const hand = handWithFives(rng, k);
-      const out = decideDiscard({ hand, isDealer: false, level: "easy", rng: seededRng(t) });
-      ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out} / ${hand}`);
-      const thrownFives = out.filter((c) => FIVES.includes(c)).length;
-      strictEqual(thrownFives, Math.min(k, 2), `k=${k}: discarded ${out} from ${hand}`);
-    }
-  }
+// ---- Easy: the original Medium with 55% mistakes ---------------------------------
+check("easy deviates from the best discard at about its rate", () => {
+  const rng = seededRng(11);
+  const hands = Array.from({ length: 400 }, () => shuffled(rng).slice(0, 6));
+  let deviations = 0;
+  hands.forEach((hand, t) => {
+    const seed = 5000 + t;
+    const isDealer = t % 2 === 0;
+    const best = evaluateDiscards({ hand, isDealer, level: "easy", rng: seededRng(seed) })[0].discard;
+    const out = decideDiscard({ hand, isDealer, level: "easy", rng: seededRng(seed) });
+    ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out}`);
+    if (!same(out, best)) deviations++;
+  });
+  // Expected: mistakeRate x 14/15 (a random pick lands on the best 1 in 15).
+  const rate = deviations / hands.length;
+  console.log(`   easy discard: differs from the best ${rate.toFixed(3)} (expected ${(LEVELS.easy.mistakeRate * 14 / 15).toFixed(3)})`);
+  ok(rate >= 0.4 && rate <= 0.62, `deviated ${rate.toFixed(3)}, expected 0.40-0.62`);
 });
-// The worst discard: the lowest-valued option (evaluateDiscards is best
-// first), computed with the same seed so the crib samples match.
-function worstDiscard(hand: string[], isDealer: boolean, seed: number, mustInclude?: string) {
-  const options = evaluateDiscards({ hand, isDealer, level: "easy", rng: seededRng(seed) }).filter(
-    (o) => !mustInclude || o.discard.includes(mustInclude)
-  );
-  return options[options.length - 1].discard;
-}
-check("easy as dealer throws its best cards: the lowest-valued discard, always valid", () => {
-  const rng = seededRng(66);
-  for (let t = 0; t < 300; t++) {
-    const hand = shuffled(rng).slice(0, 6);
-    const out = decideDiscard({ hand, isDealer: true, level: "easy", rng: seededRng(t) });
-    ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out} / ${hand}`);
-    deepStrictEqual(out, worstDiscard(hand, true, t), `t=${t}: ${out} / ${hand}`);
-  }
-});
-check("easy as pone with no 5s: the lowest-valued discard, always valid", () => {
-  const rng = seededRng(67);
-  for (let t = 0; t < 300; t++) {
-    const hand = handWithFives(rng, 0);
-    const out = decideDiscard({ hand, isDealer: false, level: "easy", rng: seededRng(t) });
-    ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out} / ${hand}`);
-    deepStrictEqual(out, worstDiscard(hand, false, t), `t=${t}: ${out} / ${hand}`);
-  }
-});
-check("easy as pone with one 5: the 5 plus the card giving the lowest-valued discard", () => {
-  const rng = seededRng(68);
-  for (let t = 0; t < 300; t++) {
-    const hand = handWithFives(rng, 1);
-    const five = hand.find((c) => c[0] === "5") as string;
-    const out = decideDiscard({ hand, isDealer: false, level: "easy", rng: seededRng(t) });
-    ok(out.includes(five), `t=${t}: the 5 was kept: ${out} / ${hand}`);
-    deepStrictEqual(out, worstDiscard(hand, false, t, five), `t=${t}: ${out} / ${hand}`);
-  }
-});
-check("easy pegging (1000 scenes): never scores when it can avoid it; else the least; then the best reply for the opponent", () => {
+check("easy deviates from the best card at about its rate (2000 pegging scenes)", () => {
   const rng = seededRng(77);
-  for (let t = 0; t < 1000; t++) {
+  let deviations = 0;
+  let expected = 0;
+  const N = 2000;
+  for (let t = 0; t < N; t++) {
     const s = randomScene(rng);
     const scene: PlayInput = {
       myRemaining: s.myRemaining,
@@ -339,27 +304,36 @@ check("easy pegging (1000 scenes): never scores when it can avoid it; else the l
       level: "easy",
     };
     const options = evaluatePlays(scene);
-    const card = decidePlay({ ...scene, rng: seededRng(t) });
-    const chosen = options.find((o) => o.card === card);
-    ok(chosen, `not a legal card: ${card}`);
-    const least = Math.min(...options.map((o) => o.points));
-    strictEqual(chosen.points, least, `scored ${chosen.points} when ${least} was possible (${card})`);
-    const leadingFive = s.segmentCards.length === 0 && card[0] === "5";
-    if (!leadingFive) {
-      const most = Math.max(...options.filter((o) => o.points === least).map((o) => o.risk));
-      ok(Math.abs(chosen.risk - most) < 1e-9, `risk ${chosen.risk}, the most was ${most} (${card})`);
-    }
+    if (decidePlay({ ...scene, rng: seededRng(t) }) !== options[0].card) deviations++;
+    // A random pick lands on the best card 1 in (legal cards).
+    expected += LEVELS.easy.mistakeRate * (1 - 1 / options.length);
   }
+  const rate = deviations / N;
+  const want = expected / N;
+  console.log(`   easy play: differs from the best ${rate.toFixed(3)} (expected ${want.toFixed(3)})`);
+  // About three standard errors over 2000 scenes.
+  ok(Math.abs(rate - want) <= 0.035, `deviated ${rate.toFixed(3)}, expected ${want.toFixed(3)} +- 0.035`);
 });
-check("easy leads a 5 whenever it holds one at the start of a run", () => {
-  const rng = seededRng(88);
-  for (let t = 0; t < 300; t++) {
-    const k = 1 + (t % 3);
-    const hand = handWithFives(rng, k).slice(0, 4);
-    if (!hand.some((c) => c[0] === "5")) continue;
-    const starter = shuffled(rng).find((c) => !hand.includes(c)) as string;
-    const card = decidePlay({ myRemaining: hand, starter, segmentCards: [], count: 0, allPlayed: [], opponentCardCount: 4, level: "easy", rng: seededRng(t) });
-    strictEqual(card[0], "5", `led ${card} from ${hand}`);
+check("easy never searches and ignores opponentKept and the game state", () => {
+  const rng = seededRng(222);
+  for (let t = 0; t < 200; t++) {
+    const s = randomScene(rng);
+    const scene: PlayInput = {
+      myRemaining: s.myRemaining,
+      starter: s.starter,
+      segmentCards: s.segmentCards,
+      count: s.count,
+      allPlayed: s.allPlayed,
+      opponentCardCount: s.theirLeft.length,
+      level: "easy",
+      opponentRemaining: s.theirLeft,
+    };
+    // The one-move-ahead estimate from the unseen cards, whatever is passed.
+    deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, opponentRemaining: undefined }));
+    strictEqual(
+      decidePlay({ ...scene, rng: seededRng(t), game: { myScore: 115, opponentScore: 118, iAmDealer: true } }),
+      decidePlay({ ...scene, rng: seededRng(t), opponentRemaining: undefined })
+    );
   }
 });
 check("easy: the same seed gives the same choices", () => {
@@ -481,16 +455,51 @@ check("hard search: beats the one-move-ahead choice in hand-made positions", () 
     strictEqual(decidePlay({ ...scene, opponentRemaining: c.theirs }), c.searched);
   }
 });
-check("hard search: easy never uses the opponent's cards (same values with them)", () => {
+check("hard search: easy and medium never use the opponent's cards (same values with them)", () => {
   const rng = seededRng(5050);
   for (let t = 0; t < 300; t++) {
     const s = randomScene(rng);
-    const scene = { ...peggingScene(s), level: "easy" as const };
-    deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, opponentRemaining: undefined }));
+    for (const level of ["easy", "medium"] as const) {
+      const scene = { ...peggingScene(s), level };
+      deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, opponentRemaining: undefined }));
+    }
   }
 });
-// Medium: the best card one move ahead, from the opponent's actual cards --
-// points now minus their best reply, written out here independently.
+check("medium never errs in pegging: always the best card (1000 scenes)", () => {
+  const rng = seededRng(5252);
+  for (let t = 0; t < 1000; t++) {
+    const s = randomScene(rng);
+    const scene = { ...peggingScene(s), level: "medium" as const, opponentRemaining: undefined };
+    strictEqual(decidePlay({ ...scene, rng: seededRng(t) }), evaluatePlays(scene)[0].card, `t=${t}`);
+  }
+});
+check("medium ignores opponentRemaining and the game state, and never searches (same seed, same card)", () => {
+  const rng = seededRng(5353);
+  for (let t = 0; t < 300; t++) {
+    const s = randomScene(rng);
+    const scene = { ...peggingScene(s), level: "medium" as const };
+    strictEqual(
+      decidePlay({ ...scene, rng: seededRng(t), game: { myScore: 115, opponentScore: 118, iAmDealer: true } }),
+      decidePlay({ ...scene, rng: seededRng(t), opponentRemaining: undefined }),
+      `t=${t}`
+    );
+  }
+});
+// THE EXACT-REPLIES BRANCH: a level that peeks without searching takes the
+// one-move-ahead branch with the opponent's actual cards. No level is set
+// up that way now, so these tests make one, for their own duration only:
+// Medium with peek switched on (restored afterwards, whatever happens).
+function withPeekingMedium(fn: () => void) {
+  const real = LEVELS.medium;
+  LEVELS.medium = { ...real, peek: true };
+  try {
+    fn();
+  } finally {
+    LEVELS.medium = real;
+  }
+}
+// The best card one move ahead from the opponent's actual cards -- points
+// now minus their best reply, written out here independently.
 function oneMoveAhead(seg: string[], count: number, card: string, theirs: string[]) {
   const segment = [...seg, card];
   const now = count + cardPlayValue(card);
@@ -499,7 +508,7 @@ function oneMoveAhead(seg: string[], count: number, card: string, theirs: string
   const replies = theirs.filter((c) => now + cardPlayValue(c) <= 31).map((c) => scorePegging([...segment, c]).points);
   return { points, value: points - Math.max(0, ...replies) };
 }
-check("medium uses the opponent's cards: one move ahead, exact (300 positions)", () => {
+check("a peeking level without search (forced here): one move ahead, exact replies (300 positions)", () => withPeekingMedium(() => {
   const rng = seededRng(5151);
   let differs = 0;
   for (let t = 0; t < 300; t++) {
@@ -514,9 +523,9 @@ check("medium uses the opponent's cards: one move ahead, exact (300 positions)",
     // And the cards matter: the blind estimate gives other values.
     if (JSON.stringify(options) !== JSON.stringify(evaluatePlays({ ...scene, opponentRemaining: undefined }))) differs++;
   }
-  ok(differs > 100, `the opponent's cards changed medium's values only ${differs} times`);
-});
-check("medium never searches: the one-move-ahead values where the search's differ", () => {
+  ok(differs > 100, `the opponent's cards changed the values only ${differs} times`);
+}));
+check("a peeking level without search (forced here) never searches: the one-move-ahead values where the search's differ", () => withPeekingMedium(() => {
   // The hand-made search positions above: Hard's search beats one move ahead.
   const cases = [
     { mine: ["QS", "JH", "2D"], theirs: ["JD", "5H", "9D"], starter: "7S", seg: [] as string[], oneMove: "2D" },
@@ -539,10 +548,10 @@ check("medium never searches: the one-move-ahead values where the search's diffe
     for (const o of evaluatePlays(scene)) {
       ok(Math.abs(o.value - oneMoveAhead(c.seg, count, o.card, c.theirs).value) < 1e-9, `${c.mine} ${o.card}`);
     }
-    strictEqual(decidePlay(scene), c.oneMove, `${c.mine}: medium plays the one-move-ahead card`);
+    strictEqual(decidePlay(scene), c.oneMove, `${c.mine}: it plays the one-move-ahead card`);
     ok(decidePlay({ ...scene, level: "hard" }) !== c.oneMove, `${c.mine}: hard searches to another card`);
   }
-});
+}));
 // ---- Hard: playing to win near 121 ---------------------------------------------------
 // A pegging position from a real deal with both kept hands known: some
 // random plays (by the independent rules above), stopped on my turn.
