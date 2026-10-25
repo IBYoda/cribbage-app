@@ -6,17 +6,29 @@
 // knows: their own hand, the starter, the cards played so far, and how many
 // cards the opponent still holds. There is NO field for the deck, the
 // opponent's discards or the crib, so none can be passed by accident. The one
-// exception is opponentRemaining (the human's unplayed cards) in decidePlay:
-// it is read ONLY when LEVELS[level].peek is true, and ignored otherwise.
+// exceptions are the human's cards, each read only for a level that allows
+// it: opponentRemaining (their unplayed cards) in decidePlay, read ONLY when
+// LEVELS[level].peek -- Medium and Hard; and opponentKept (their kept
+// four-card hand, once they have discarded) in decideDiscard, read ONLY when
+// LEVELS[level].peekDiscard -- Hard only, which therefore discards after the
+// human (lib/computer/next.ts). Otherwise both are ignored.
 //
-// THE PEGGING SEARCH (peek-only, so Hard only): with the opponent's exact
-// unplayed cards known, evaluatePlays searches every line to the end of the
-// pegging (minimax, both sides playing their best, under the server's rules
-// in rules.ts) and values each card as my points minus the opponent's from
-// here to the last card. Every other level, and Hard without those cards,
-// uses the one-move-ahead estimate below, unchanged.
+// MEDIUM'S PEGGING (peek without search): the best card one move ahead --
+// its points now minus the human's best reply, from their actual cards.
 //
-// PLAYING TO WIN (also peek-only): when the input carries the game state
+// THE PEGGING SEARCH (LEVELS[level].search, so Hard only): with the
+// opponent's exact unplayed cards known, evaluatePlays searches every line
+// to the end of the pegging (minimax, both sides playing their best, under
+// the server's rules in rules.ts) and values each card as my points minus
+// the opponent's from here to the last card. Without search, or without
+// those cards, it uses the one-move-ahead branch below, unchanged.
+//
+// HARD'S DISCARD (peekDiscard): with the human's kept hand known, each of
+// the 15 keeps also gets its EXACT pegging value against that hand (the
+// same search, the pone leading), and the starters and crib samples come
+// from the 42 cards neither hand holds.
+//
+// PLAYING TO WIN (search only): when the input carries the game state
 // (the public scores and dealer, plus both kept hands) and either player
 // could reach 121 by the end of this deal's count, the same search plays for
 // the WIN: a line that pegs a player out ends the game for that player, and
@@ -25,7 +37,7 @@
 // loss; every other line still counts as the points difference. Wins rank
 // above any points and sooner wins above later ones; losses the reverse.
 // The scores are public; everything about the opponent's cards is still
-// read only when LEVELS[level].peek.
+// read only when the level allows it (peek; peekDiscard at the discard).
 //
 // Points here are estimates for choosing a move. The server scores every
 // play and count itself (score_pegging, score_hand); nothing from this file
@@ -91,21 +103,30 @@ export type DiscardInput = {
   // How many crib samples to draw; undefined = the level's cribSamples.
   // (For measuring -- the simulator pits counts against each other.)
   cribSamples?: number;
+  // The opponent's kept four-card hand (they have discarded already). Read
+  // ONLY when LEVELS[level].peekDiscard, and only if it is four real,
+  // distinct cards, none of them mine; otherwise ignored.
+  opponentKept?: string[];
 };
 
 export type DiscardOption = {
   discard: [string, string];
   keep: string[];
-  handValue: number; // average score of the kept four over all 46 starters
+  handValue: number; // average score of the kept four over the possible starters
   cribValue: number; // estimated crib score (my two cards + two unknown)
-  value: number; // handValue + cribValue (dealer) or - cribValue (pone)
+  // With the opponent's kept hand known: the exact pegging result (my points
+  // minus theirs, both playing their best, the pone leading); 0 otherwise.
+  peggingValue: number;
+  value: number; // handValue + cribValue (dealer) or - cribValue (pone), + peggingValue
 };
 
 // Every one of the 15 discards with its expected value, best first. The
 // crib is estimated by Monte Carlo: the level's cribSamples (or the input's
-// override) random (starter, two unknown cards) draws from the 46 unseen
-// cards, the SAME draws for every discard, scored with the crib rule. Uses
-// rng for the draws only.
+// override) random (starter, two unknown cards) draws from the unseen cards
+// (46; 42 when the opponent's kept hand is known), the SAME draws for every
+// discard, scored with the crib rule. Uses rng for the draws only. With the
+// opponent's kept hand (peekDiscard only), each keep also gets its exact
+// pegging value against that hand.
 export function evaluateDiscards(input: DiscardInput): DiscardOption[] {
   const { hand, isDealer } = input;
   const rng = input.rng ?? Math.random;
@@ -116,7 +137,19 @@ export function evaluateDiscards(input: DiscardInput): DiscardOption[] {
 
   const sorted = sortHand(hand);
   const held = new Set(sorted);
-  const unseen = FULL_DECK.filter((card) => !held.has(card));
+  // The opponent's kept hand: read only for a level that peeks at discard.
+  const theirs =
+    LEVELS[input.level].peekDiscard && validKeptHand(input.opponentKept, held) ? (input.opponentKept as string[]) : null;
+  const theirSet = new Set(theirs ?? []);
+  const unseen = FULL_DECK.filter((card) => !held.has(card) && !theirSet.has(card));
+  const memo = new Map<string, number>();
+  // The pone leads the pegging: the opponent when I deal.
+  const peggingOf = (keep: string[]) => {
+    if (!theirs) return 0;
+    const state: PegState = { hands: [[...keep], [...theirs]], segment: [], count: 0, turn: isDealer ? 1 : 0 };
+    const v = bestDifference(state, memo);
+    return state.turn === 0 ? v : -v;
+  };
 
   // The shared crib samples: three distinct unseen cards each.
   const samples: [string, string, string][] = [];
@@ -145,12 +178,28 @@ export function evaluateDiscards(input: DiscardInput): DiscardOption[] {
         cribTotal += scoreHand([discard[0], discard[1], x, y], starter, true).points;
       }
       const cribValue = cribTotal / samples.length;
+      const peggingValue = peggingOf(keep);
 
-      options.push({ discard, keep, handValue, cribValue, value: isDealer ? handValue + cribValue : handValue - cribValue });
+      options.push({
+        discard,
+        keep,
+        handValue,
+        cribValue,
+        peggingValue,
+        value: (isDealer ? handValue + cribValue : handValue - cribValue) + peggingValue,
+      });
     }
   }
   // Best first; equal values keep the enumeration order (stable sort).
   return options.sort((p, q) => q.value - p.value);
+}
+
+// The opponent's kept hand is usable at discard if it is four real,
+// distinct cards and none of them is in my six.
+function validKeptHand(cards: string[] | undefined, mine: Set<string>) {
+  if (!Array.isArray(cards) || cards.length !== 4) return false;
+  if (new Set(cards).size !== 4) return false;
+  return cards.every((card) => DECK_SET.has(card) && !mine.has(card));
 }
 
 // THE DUMB DISCARD (style "dumb", playing to lose): the WORST discard --
@@ -412,7 +461,7 @@ export function evaluatePlays(input: PlayInput): PlayOption[] {
   const n = peek ? opponentCards.length : input.opponentCardCount;
 
   let options: PlayOption[];
-  if (peek && validOpponentCards(opponentCards, myRemaining, allPlayed, starter)) {
+  if (peek && LEVELS[level].search && validOpponentCards(opponentCards, myRemaining, allPlayed, starter)) {
     // THE SEARCH (peek only): every line to the end of the pegging. points
     // is this play's own points (a go or last-card point included); value
     // is my points minus the opponent's from here to the end; risk is

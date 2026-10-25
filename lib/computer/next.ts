@@ -52,6 +52,9 @@ export type NextState = {
   computerId: string;
   tableFull: boolean; // every seat taken (the human and the computer)
   humanHoldsPegging: boolean; // the human hasn't tapped "Count hands" yet
+  // A level that reads the human's kept hand when discarding (Hard): it
+  // discards only after every other player has (discarded_by).
+  discardAfterOpponent?: boolean;
   game: NextGame | null; // the LIVE game (cutting or active), or none
   // The last game's result when no game is live (the page only keeps a
   // result for a won game; ended_reason is checked anyway).
@@ -103,6 +106,10 @@ export function computerNextAction(state: NextState): ComputerAction | null {
     case "discard":
       if (!Array.isArray(game.discarded_by)) return null;
       if (game.discarded_by.includes(me)) return null;
+      // Hard waits for the human's discard (it reads their kept hand).
+      if (state.discardAfterOpponent && !game.players.every((p) => p === me || game.discarded_by!.includes(p))) {
+        return null;
+      }
       return { kind: "discard", key: `${game.id}:${hand}:discard` };
 
     case "play":
