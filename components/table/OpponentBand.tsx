@@ -1,9 +1,12 @@
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { SMALL_CARD } from "@/components/table/sizes";
+import { Avatar } from "@/components/Avatar";
 
 export type OpponentSeat = {
   userId: string;
   name: string;
+  // profiles.avatar_url: drawn round beside the name (the initial if none).
+  avatarUrl?: string | null;
   isDealer: boolean;
   // Face-down cards to draw when the hand isn't shown.
   cardCount: number;
@@ -49,8 +52,9 @@ export function OpponentBand({ seats }: { seats: OpponentSeat[] }) {
                   </div>
                 ))}
           </div>
-          {/* Name tag, with "Go" beneath it -- both inside the strip's 32px,
-              so the label costs no height. */}
+          {/* Avatar and name tag, with "Go" beneath the name -- all inside
+              the strip's 32px, so they cost no height. */}
+          <Avatar name={seat.name} url={seat.avatarUrl} size="sm" tone="table" />
           <div className="flex min-w-0 flex-col pt-0.5 leading-none">
             <p className="flex items-center gap-1 truncate text-xs font-medium">
               <span className="truncate">{seat.name}</span>
@@ -75,6 +79,7 @@ export function SideSeat({ seat, side }: { seat: OpponentSeat; side: "left" | "r
   const cards: (string | null)[] = seat.shownCards ?? Array.from({ length: seat.cardCount }, () => null);
   return (
     <div className={`side-seat side-seat--${side}`} aria-label={`${seat.name}'s seat`}>
+      <Avatar name={seat.name} url={seat.avatarUrl} size="xs" tone="table" />
       <p className="side-seat__name">{seat.name}</p>
       {seat.isDealer && <DealerChip />}
       {seat.saidGo && (

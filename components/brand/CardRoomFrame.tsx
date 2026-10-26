@@ -19,16 +19,25 @@ export function CardRoomFrame({
   after,
   backHome = true,
   followDeviceScheme = false,
+  compact = false,
 }: {
   title?: string;
   children: ReactNode;
   after?: ReactNode;
   backHome?: boolean;
   followDeviceScheme?: boolean;
+  // Tighter spacing around the panel (16px gaps, 12px top and bottom), for
+  // the taller pages -- Start a Table, the opponent chooser -- so they fit a
+  // phone screen without scrolling. Off: exactly as before.
+  compact?: boolean;
 }) {
   return (
     <div className="card-room" data-scheme={followDeviceScheme ? undefined : "dark"}>
-      <main className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-6 px-5 py-8">
+      <main
+        className={`mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center px-5 ${
+          compact ? "gap-4 py-3" : "gap-6 py-8"
+        }`}
+      >
         <Link href="/" aria-label="Nobs! home" className="rounded-lg">
           <Wordmark size="small" />
         </Link>
