@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
-import { LEVEL_INFO, type ComputerLevel } from "@/lib/computer/config";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -40,11 +39,6 @@ export default function NewTablePage() {
   // refuses anything else too), so each greys out the other. Always sent; 4
   // players play Teams.
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
-  // PLAY THE COMPUTER: against other players (the table options) or the
-  // computer, at a level. A computer table is always private, 2-player and
-  // regular scoring, so none of those options shows for it.
-  const [opponent, setOpponent] = useState<"players" | "computer">("players");
-  const [level, setLevel] = useState<ComputerLevel>("medium");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -99,48 +93,6 @@ export default function NewTablePage() {
     setMessage("Couldn't generate a unique table code, please try again.");
   }
 
-  // A computer table: create_computer_table makes it (private, 2-player,
-  // regular scoring) and seats this player and the computer. The same code
-  // retry as above -- the function raises 23505 on a collision, like the
-  // direct insert does.
-  async function handleCreateComputerTable() {
-    if (!session) return;
-
-    setStatus("creating");
-    setMessage(null);
-
-    for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
-      const code = generateCode();
-
-      const { data, error } = await supabase.rpc("create_computer_table", {
-        p_level: level,
-        p_code: code,
-      });
-
-      if (!error) {
-        const row = (data as { table_id: string; code: string }[] | null)?.[0];
-        setStatus("success");
-        router.replace(`/tables/${row?.code ?? code}`);
-        return;
-      }
-
-      if (error.code === UNIQUE_VIOLATION) {
-        continue;
-      }
-
-      setStatus("error");
-      setMessage(
-        error.message.includes("not set up yet")
-          ? `${LEVEL_INFO[level].name} isn't ready to play yet. Try another level, or try again later.`
-          : error.message
-      );
-      return;
-    }
-
-    setStatus("error");
-    setMessage("Couldn't generate a unique table code, please try again.");
-  }
-
   if (loading) {
     return (
       <CardRoomFrame backHome={false}>
@@ -161,32 +113,20 @@ export default function NewTablePage() {
   }
 
   return (
-    <CardRoomFrame title="Start a Table">
-      <OpponentOptions opponent={opponent} onOpponentChange={setOpponent} />
-
-      {opponent === "players" ? (
-        <TableOptions
-          isPublic={isPublic}
-          onVisibilityChange={setIsPublic}
-          isMuggins={isMuggins}
-          onMugginsChange={setIsMuggins}
-          maxPlayers={maxPlayers}
-          onMaxPlayersChange={setMaxPlayers}
-        />
-      ) : (
-        <ComputerLevels level={level} onLevelChange={setLevel} />
-      )}
+    <CardRoomFrame title="Start a Table" compact>
+      <TableOptions
+        isPublic={isPublic}
+        onVisibilityChange={setIsPublic}
+        isMuggins={isMuggins}
+        onMugginsChange={setIsMuggins}
+        maxPlayers={maxPlayers}
+        onMaxPlayersChange={setMaxPlayers}
+      />
 
       {/* Stays disabled once created, while the table page loads -- a second
           tap would open a second table. A Muggins table asks first. */}
       <button
-        onClick={() =>
-          opponent === "computer"
-            ? handleCreateComputerTable()
-            : isMuggins
-              ? setMugginsNoticeOpen(true)
-              : handleCreateTable()
-        }
+        onClick={() => (isMuggins ? setMugginsNoticeOpen(true) : handleCreateTable())}
         disabled={status === "creating" || status === "success"}
         className="peg-btn peg-btn--brass disabled:opacity-60"
       >
@@ -194,9 +134,7 @@ export default function NewTablePage() {
           ? "Creating..."
           : status === "success"
             ? "Opening table..."
-            : opponent === "computer"
-              ? `Play ${LEVEL_INFO[level].name}`
-              : "Start a Table"}
+            : "Start a Table"}
       </button>
 
       {status === "error" && message && (
@@ -333,86 +271,6 @@ function TableOptions({
         </p>
       </fieldset>
     </div>
-  );
-}
-
-// WHO YOU PLAY: other players (the table options) or the computer. The same
-// option cards as every other choice on this screen.
-function OpponentOptions({
-  opponent,
-  onOpponentChange,
-}: {
-  opponent: "players" | "computer";
-  onOpponentChange: (opponent: "players" | "computer") => void;
-}) {
-  return (
-    <fieldset
-      className="flex flex-col gap-1.5"
-      aria-describedby={opponent === "computer" ? "opponent-help" : undefined}
-    >
-      <legend className="mb-1.5 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
-        Opponent
-      </legend>
-      <div className="grid grid-cols-2 gap-2">
-        <OptionCard
-          name="opponent"
-          label="Other players"
-          checked={opponent === "players"}
-          onChange={() => onOpponentChange("players")}
-        />
-        <OptionCard
-          name="opponent"
-          label="The computer"
-          checked={opponent === "computer"}
-          onChange={() => onOpponentChange("computer")}
-        />
-      </div>
-      {/* Only for the computer: with other players the table options follow
-          straight away, and the screen needs the room. */}
-      {opponent === "computer" && (
-        <p id="opponent-help" className="text-sm">
-          A private table for you and the computer
-        </p>
-      )}
-    </fieldset>
-  );
-}
-
-// THE COMPUTER'S LEVEL: three option cards, each with the computer's name
-// first, then the level and its tagline (LEVEL_INFO, lib/computer/config.ts).
-function ComputerLevels({
-  level,
-  onLevelChange,
-}: {
-  level: ComputerLevel;
-  onLevelChange: (level: ComputerLevel) => void;
-}) {
-  return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
-        Computer
-      </legend>
-      <div className="grid gap-2 sm:grid-cols-3">
-        {(["easy", "medium", "hard"] as const).map((id) => (
-          <label key={id} className="option-card">
-            <input
-              type="radio"
-              name="computer-level"
-              value={id}
-              checked={level === id}
-              onChange={() => onLevelChange(id)}
-              className="sr-only"
-            />
-            <span className="option-dot" aria-hidden="true" />
-            <span className="flex flex-col leading-tight">
-              <span className="text-lg font-bold">{LEVEL_INFO[id].name}</span>
-              <span className="text-sm font-semibold">{LEVEL_INFO[id].label}</span>
-              <span className="text-xs font-semibold text-[var(--brass-light)]">{LEVEL_INFO[id].tagline}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
   );
 }
 

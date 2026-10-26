@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { DealerChip } from "@/components/table/OpponentBand";
+import { Avatar } from "@/components/Avatar";
 import { isCountReason } from "@/components/table/countingView";
 
 export type PlateMember = {
@@ -48,7 +49,7 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
           >
             <div className="flex shrink-0 -space-x-2">
               {plate.members.map((m) => (
-                <Avatar key={m.userId} member={m} />
+                <Avatar key={m.userId} name={m.name} url={m.avatarUrl} size="sm" tone="table" />
               ))}
             </div>
             <div className="flex min-w-0 flex-1 flex-col leading-tight">
@@ -78,26 +79,6 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
   );
 }
 
-function Avatar({ member }: { member: PlateMember }) {
-  if (member.avatarUrl) {
-    return (
-      // A plain img, not next/image: these are user uploads from Supabase
-      // Storage at 28px, and next/image would need the storage host added to
-      // the config for no real gain at this size.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={member.avatarUrl}
-        alt=""
-        className="h-7 w-7 rounded-full border-2 border-background object-cover"
-      />
-    );
-  }
-  return (
-    <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background bg-zinc-400 text-xs font-bold text-white dark:bg-zinc-600">
-      {member.name.slice(0, 1).toUpperCase()}
-    </span>
-  );
-}
 
 // ONE flash for the table: "Elsa +2 — pair", naming the player the way PRD
 // Section 8 asks ("Sam +2 — pair"). Shown in the middle of the pile row,

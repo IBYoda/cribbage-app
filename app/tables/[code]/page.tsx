@@ -2233,6 +2233,7 @@ export default function TablePage() {
     return {
       userId: opponent.user_id,
       name: displayName(opponent),
+      avatarUrl: opponent.avatar_url,
       isDealer: handDealerId === opponent.user_id,
       // In counting the hand is in the middle: the strip keeps no cards.
       // The final board: the hand face-up when readable, else face-down.

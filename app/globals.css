@@ -1364,16 +1364,16 @@ section.felt-panel {
 }
 
 /* OPEN TABLES (the home page's list, components/brand/HomeMenu.tsx).
-   Capped in height so Start a Table and Join stay in the lower third, and
-   scrolling inside itself: a thin brass scrollbar, and the last rows fade
-   out while there is more below (data-more, set by HomeMenu). Focusable
-   (tabindex="0") so the keyboard can scroll it; Tab moves on as usual.
-   The cap follows the screen -- about 2.5 rows at 375x667 (the most that
-   fits there), 3.3 at 1280x720, 3.5 at 390x844 and up -- and always lands
-   partway through a row, so a cut-off row under the fade shows there is
-   more. It gives up the error line's height when that line shows. */
+   Capped in height so the play buttons (Play Single Player Game, Create
+   Multiplayer Table) and Join stay in the lower third, and scrolling inside
+   itself: a thin brass scrollbar, and the last rows fade out while there is
+   more below (data-more, set by HomeMenu). Focusable (tabindex="0") so the
+   keyboard can scroll it; Tab moves on as usual. The cap follows the screen
+   -- the 140px floor at 375x667 (the most that fits there), 3.5 rows at
+   390x844 and up -- and leaves room for both buttons, so the page itself
+   never scrolls. It gives up the error line's height when that line shows. */
 .open-tables-list {
-  --open-tables-cap: clamp(140px, calc(100dvh - 477px), 258px);
+  --open-tables-cap: clamp(140px, calc(100dvh - 539px), 258px);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;

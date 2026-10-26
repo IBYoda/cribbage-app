@@ -7,6 +7,7 @@ import { SiteFooter } from "@/components/brand/SiteFooter";
 import { JoinTableForm } from "@/components/brand/JoinTableForm";
 import type { JoinableTable, MyTable } from "@/lib/openTables";
 import { MugginsTag } from "@/components/MugginsTag";
+import { Avatar } from "@/components/Avatar";
 
 // What the Open Tables list shows (read by HomeView, lib/openTables.ts).
 export type OpenTablesState = {
@@ -19,9 +20,11 @@ export type OpenTablesState = {
 };
 
 // THE MAIN MENU (signed in), as plain props -- HomeView reads the data. A
-// card room like the landing page: the wordmark and the small Profile / Log
-// out / Admin links at the top, the greeting, "Open Tables", and the two big
-// actions -- Start a Table and Join -- at the bottom, in thumb reach.
+// card room like the landing page: the wordmark and the small Admin / Log
+// out links at the top; the greeting with a brass "Update Profile and
+// Visuals" button beside it; "Open Tables"; and the actions at the bottom,
+// in thumb reach -- Play Single Player Game (the opponent chooser), Create
+// Multiplayer Table (Start a Table), and Join by code.
 export function HomeMenu({
   name,
   avatarUrl,
@@ -46,9 +49,6 @@ export function HomeMenu({
                 Admin
               </Link>
             )}
-            <Link href="/profile" className="footer-link">
-              Profile
-            </Link>
             <button type="button" onClick={onLogout} className="footer-link">
               Log out
             </button>
@@ -57,21 +57,30 @@ export function HomeMenu({
 
         <section className="flex items-center gap-3">
           <Avatar name={name} url={avatarUrl} />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-sm">
               <TimeOfDayGreeting />,
             </p>
             <p className="truncate font-display text-2xl font-bold">{name}</p>
           </div>
+          <Link
+            href="/profile"
+            className="peg-btn peg-btn--brass peg-btn--small max-w-[10rem] shrink-0 text-center leading-tight"
+          >
+            Update Profile and Visuals
+          </Link>
         </section>
 
         <OpenTables state={openTables} viewerName={name} viewerAvatar={avatarUrl} />
 
-        {/* The two big actions, pushed to the bottom: in the lower third of a
-            375x667 screen. */}
+        {/* The actions, pushed to the bottom: in the lower third of a 375x667
+            screen. */}
         <section className="mt-auto flex flex-col gap-2.5 pt-2" aria-label="Play">
+          <Link href="/single-player" className="peg-btn peg-btn--brass">
+            Play Single Player Game
+          </Link>
           <Link href="/tables/new" className="peg-btn peg-btn--brass">
-            Start a Table
+            Create Multiplayer Table
           </Link>
           <JoinTableForm />
         </section>
@@ -97,24 +106,6 @@ const subscribeNever = () => () => {};
 function TimeOfDayGreeting() {
   const greeting = useSyncExternalStore(subscribeNever, timeOfDayGreeting, () => "Welcome back");
   return <>{greeting}</>;
-}
-
-export function Avatar({ name, url }: { name: string; url: string | null }) {
-  if (url) {
-    return (
-      // A plain img, as on the score plates: a Supabase Storage upload.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={url} alt="" className="h-12 w-12 shrink-0 rounded-full border-2 border-[var(--brass)] object-cover" />
-    );
-  }
-  return (
-    <span
-      aria-hidden="true"
-      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-[var(--brass)] bg-[#2a6a44] text-lg font-bold"
-    >
-      {name.slice(0, 1).toUpperCase()}
-    </span>
-  );
 }
 
 // OPEN TABLES: one list, two kinds of row. First, pinned and in brass, every
