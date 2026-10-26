@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { OpponentChooser } from "@/components/brand/OpponentChooser";
-import { LEVEL_INFO, type ComputerLevel } from "@/lib/computer/config";
+import { LEVEL_INFO, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -22,10 +22,10 @@ function generateCode() {
 // choose a computer opponent and play it. A computer table is always
 // private, 2-player and regular scoring, so there are no other options.
 //
-// The avatars: each computer's profiles.avatar_url, found by its nickname
-// (the computer accounts themselves can't be read by the app). Used only
-// when exactly one profile has that nickname; otherwise -- or if the read
-// fails -- the initial shows.
+// The avatars: each computer's profiles.avatar_url, from
+// get_computer_profiles() -- found by account id through computer_accounts
+// (which the app can't read directly), one row per level. If the call fails
+// or a level is missing, that computer shows its initial.
 export default function SinglePlayerPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
@@ -45,20 +45,17 @@ export default function SinglePlayerPage() {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    const levels = Object.keys(LEVEL_INFO) as ComputerLevel[];
-    supabase
-      .from("profiles")
-      .select("nickname, avatar_url")
-      .in("nickname", levels.map((l) => LEVEL_INFO[l].name))
-      .then(({ data }) => {
-        if (cancelled || !data) return;
+    supabase.rpc("get_computer_profiles").then(
+      ({ data, error }) => {
+        if (cancelled || error || !Array.isArray(data)) return;
         const found: Partial<Record<ComputerLevel, string | null>> = {};
-        for (const l of levels) {
-          const rows = data.filter((p) => p.nickname === LEVEL_INFO[l].name);
-          if (rows.length === 1) found[l] = rows[0].avatar_url ?? null;
+        for (const row of data as { level: string; avatar_url: string | null }[]) {
+          if (isComputerLevel(row.level)) found[row.level] = row.avatar_url ?? null;
         }
         setAvatars(found);
-      });
+      },
+      () => {} // a network failure: the initials stay
+    );
     return () => {
       cancelled = true;
     };

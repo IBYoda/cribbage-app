@@ -70,9 +70,35 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!session) return;
 
+    // Saved trimmed. Nicknames are unique in the database (case-insensitive,
+    // trimmed), so a taken one is refused there (23505, below).
+    const trimmedNickname = nickname.trim();
+    if (!trimmedNickname) {
+      setStatus("error");
+      setMessage("Please enter a nickname.");
+      return;
+    }
+
     setStatus("saving");
     setMessage(null);
 
+    // 1. The profile row first, with the CURRENT picture: a refused nickname
+    // stops here, before anything is uploaded, so the picture never changes
+    // and the chosen file and preview stay on the page.
+    const { error: upsertError } = await supabase
+      .from("profiles")
+      .upsert({ id: session.user.id, nickname: trimmedNickname, avatar_url: avatarUrl });
+
+    if (upsertError) {
+      setStatus("error");
+      setMessage(upsertError.code === "23505" ? "That nickname is taken." : upsertError.message);
+      return;
+    }
+    setNickname(trimmedNickname);
+
+    // 2. Then a new picture, if one was chosen: upload it, then point the
+    // (now existing) row at it. If either fails the nickname has still
+    // saved; the error shows and the file stays chosen for another try.
     let newAvatarUrl = avatarUrl;
 
     if (avatarFile) {
@@ -92,16 +118,17 @@ export default function ProfilePage() {
       const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
       // cache-bust so the new image shows immediately instead of a browser-cached old one
       newAvatarUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
-    }
 
-    const { error: upsertError } = await supabase
-      .from("profiles")
-      .upsert({ id: session.user.id, nickname, avatar_url: newAvatarUrl });
+      const { error: avatarError } = await supabase
+        .from("profiles")
+        .update({ avatar_url: newAvatarUrl })
+        .eq("id", session.user.id);
 
-    if (upsertError) {
-      setStatus("error");
-      setMessage(upsertError.message);
-      return;
+      if (avatarError) {
+        setStatus("error");
+        setMessage(avatarError.message);
+        return;
+      }
     }
 
     setAvatarUrl(newAvatarUrl);
