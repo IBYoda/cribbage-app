@@ -24,8 +24,9 @@
 --     on a re-run); anything else stops it with a clear message and changes
 --     nothing;
 --   * writes each account's profile: nickname "Shortbus" (easy),
---     "Normie" (medium), "God" (hard), avatar left null (the app
---     shows its usual fallback); an existing profile row is overwritten;
+--     "Normie" (medium), "God" (hard). A new profile starts with a null
+--     avatar (the app shows its usual fallback); an existing profile row
+--     keeps its avatar (only nickname and updated_at are refreshed);
 --   * records the three in public.computer_accounts (a level already
 --     recorded is pointed at the new id).
 -- ===========================================================================
@@ -79,11 +80,14 @@ begin
   end loop;
 
   for i in 1 .. 3 loop
+    -- A new profile starts with no avatar; an existing one keeps its avatar
+    -- (re-running this file keeps the computers' avatars). Nicknames are
+    -- unique (profiles_nickname_unique_idx), so if a human holds a computer
+    -- name, a re-run now fails on that clash -- the safe outcome.
     insert into public.profiles (id, nickname, avatar_url, updated_at)
     values (v_ids[i], v_names[i], null, now())
     on conflict (id) do update
       set nickname = excluded.nickname,
-          avatar_url = null,
           updated_at = now();
 
     insert into public.computer_accounts (level, user_id)
