@@ -28,6 +28,7 @@ import { countingViewN } from "@/lib/countingN";
 import { CountStage, SlotCards } from "@/components/table/CountStage";
 import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
 import { useComputerDriver } from "@/components/table/useComputerDriver";
+import { Splash, useSplash } from "@/components/table/Splash";
 
 type TableRow = {
   id: string;
@@ -474,6 +475,9 @@ export default function TablePage() {
   const membersRef = useRef<Member[]>([]);
   const activeGameRef = useRef<Game | null>(null);
   const errorRef = useRef<string | null>(null);
+  // THE SPLASHES ("19" and GO), fired from the realtime handlers only -- see
+  // components/table/Splash.tsx.
+  const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({ noZero: hideCountNumbers });
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -1364,6 +1368,35 @@ export default function TablePage() {
             last_awarded_at: string | null;
           };
 
+          // THE "19" SPLASH: a hand or crib just counted for 0 (confirm_count
+          // awards 0 as "hand: nothing" / "crib: nothing"). Only while a game
+          // is live, and only an award made by THIS change: its time (now()
+          // in the awarding transaction) within seconds of the commit. A
+          // seat move, or a Teams partner's row (award_points moves the
+          // partner's score but keeps their last award), re-sends an older
+          // one. NOT compared with the award on screen -- after a confirm
+          // (mine, or the computer's from this tab) the re-read can put this
+          // very award there before this event arrives. The key stops a
+          // repeat.
+          const shown = membersRef.current.find((m) => m.user_id === updated.user_id);
+          const awardAge = updated.last_awarded_at
+            ? Date.parse(payload.commit_timestamp) - Date.parse(updated.last_awarded_at)
+            : NaN;
+          if (
+            updated.last_points === 0 &&
+            isCountReason(updated.last_reason) &&
+            updated.last_awarded_at &&
+            activeGameRef.current?.status === "active" &&
+            // An unreadable commit time doesn't block the splash.
+            (Number.isNaN(awardAge) || Math.abs(awardAge) < 10_000)
+          ) {
+            showZero(
+              `zero:${updated.user_id}:${Date.parse(updated.last_awarded_at)}`,
+              displayName(shown),
+              updated.last_reason!.startsWith("crib:")
+            );
+          }
+
           setMembers((current) =>
             current.map((m) =>
               m.user_id === updated.user_id
@@ -1413,6 +1446,12 @@ export default function TablePage() {
           // as the profiles UPDATE listener: at this scale, letting the client
           // discard what isn't its own is simpler than re-subscribing.
           if (event.game_id !== activeGameIdRef.current) return;
+
+          // THE GO SPLASH: once per player per run -- a player stuck for
+          // several plays logs a go each time, like the one Go label.
+          if (event.kind === "go") {
+            showGo(`go:${event.game_id}:${activeGameRef.current?.hand_no}:${event.segment}:${event.user_id}`);
+          }
 
           setPlays((current) => {
             if (current.some((p) => p.seq === event.seq)) return current; // already have it
@@ -1748,7 +1787,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame]);
+  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo]);
 
   // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
   // comes back online -- the same full refresh as on subscribe. A hidden tab
@@ -2760,6 +2799,7 @@ export default function TablePage() {
     ) : null;
 
   return (
+    <>
     <TableShell
       header={header}
       // Phase 3 (3 and 4 players): the waiting room leaves out the
@@ -2799,5 +2839,9 @@ export default function TablePage() {
       surface={appearance.surface}
       back={appearance.back}
     />
+    {/* The splash: outside the shell, since the middle's size container
+        would pin a fixed overlay to the middle instead of the screen. */}
+    <Splash splash={splash} onDone={dismissSplash} />
+    </>
   );
 }
