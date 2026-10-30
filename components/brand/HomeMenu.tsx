@@ -20,8 +20,8 @@ export type OpenTablesState = {
 };
 
 // THE MAIN MENU (signed in), as plain props -- HomeView reads the data. A
-// card room like the landing page: the wordmark and the small Admin / Log
-// out links at the top; the greeting with a brass "Update Profile and
+// card room like the landing page: the wordmark, a Leaderboard pill and the
+// small Admin / Log out links at the top; the greeting with a brass "Update Profile and
 // Visuals" button beside it; "Open Tables"; and the actions at the bottom,
 // in thumb reach -- Play Single Player Game (the opponent chooser), Create
 // Multiplayer Table (Start a Table), and Join by code.
@@ -43,7 +43,14 @@ export function HomeMenu({
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 pt-4">
         <header className="flex items-center justify-between gap-3">
           <Wordmark size="small" />
-          <nav className="flex items-center gap-4 text-sm" aria-label="Account">
+          <nav className="flex items-center gap-4 text-sm" aria-label="Menu">
+            {/* In the header, not under Update Profile: the page is already
+                exactly 667px tall at 375x667 (the Open Tables cap's floor),
+                so anything taller below would make it scroll. The header
+                row is 40px for the wordmark, and the pill fits inside. */}
+            <Link href="/leaderboard" className="header-pill">
+              Leaderboard
+            </Link>
             {isAdmin && (
               <Link href="/admin" className="footer-link">
                 Admin
