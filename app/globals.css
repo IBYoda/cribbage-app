@@ -86,6 +86,75 @@ body {
   }
 }
 
+/* The table splashes (components/table/Splash.tsx): a quick pop-in, a hold,
+   a fade-out. "forwards" holds the hidden last frame until animationend
+   clears the element. The dark shadow keeps them legible on any surface.
+   Reduced motion: the same timing, fade only, no scale. */
+@keyframes splash-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  20% {
+    transform: scale(1);
+  }
+  75% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes splash-fade {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.splash-zero,
+.splash-go {
+  animation-name: splash-pop;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+  text-shadow:
+    0 0.06em 0 rgb(0 0 0 / 0.55),
+    0 0 0.4em rgb(0 0 0 / 0.5);
+}
+
+.splash-zero {
+  animation-duration: 2s;
+}
+
+.splash-zero > :first-child {
+  color: #fff;
+  -webkit-text-stroke: 0.02em #b91c1c;
+}
+
+.splash-go {
+  animation-duration: 1.2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-zero,
+  .splash-go {
+    animation-name: splash-fade;
+  }
+}
+
 /* ===========================================================================
    THE TABLE SHELL -- the game table always fits exactly one screen.
 
