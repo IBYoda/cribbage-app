@@ -1492,6 +1492,49 @@ section.felt-panel {
   outline-offset: 2px;
 }
 
+/* THE LEADERBOARD (components/brand/Leaderboard.tsx): one card per player,
+   drawn like an Open Tables row; the signed-in player's card gets the same
+   brass highlight as "Your table". */
+.leaderboard-card {
+  padding: 0.625rem 0.75rem;
+  border: 1px solid rgb(226 193 125 / 0.4);
+  border-radius: 12px;
+  background: rgb(0 0 0 / 0.25);
+}
+.leaderboard-card--me {
+  border-color: var(--brass);
+  background: linear-gradient(rgb(226 193 125 / 0.12), rgb(226 193 125 / 0.12)), rgb(0 0 0 / 0.25);
+}
+/* A stat chip under the card's name line. */
+.leaderboard-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 28px;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid rgb(226 193 125 / 0.4);
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.25);
+  font-size: 0.75rem;
+}
+/* The main menu's Leaderboard link: a small outlined pill in the header,
+   so it adds no height to the page (see HomeMenu). */
+.header-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding-inline: 0.75rem;
+  border: 2px solid var(--brass);
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.25);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.header-pill:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+
 /* Reduced motion: no deal-in, no peg drop, no fade. */
 @media (prefers-reduced-motion: reduce) {
   .hero-card {
