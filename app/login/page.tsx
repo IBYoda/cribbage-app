@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { AuthCard } from "@/components/brand/AuthCard";
@@ -76,6 +77,10 @@ export default function LoginPage() {
 
         {message && <p className="text-sm text-[var(--error-on-felt)]">{message}</p>}
       </form>
+
+      <Link href="/forgot-password" className="footer-link self-center text-sm">
+        Forgot password?
+      </Link>
     </AuthCard>
   );
 }
