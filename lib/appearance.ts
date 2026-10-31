@@ -2,11 +2,13 @@
 // each player picks for their OWN screen. Purely cosmetic and purely local:
 // nothing here reaches the game tables or realtime.
 //
-// "classic" is the default and looks exactly like the app did before this
-// feature: the page's own light/dark background, following the device.
+// Green Felt is the default -- the same felt as every other screen. The old
+// "classic" surface (the plain page) is gone: it is no longer an option, so
+// a stored "classic" -- in the database or this device's cached copy -- is
+// unknown and reads as Green Felt (normalizeAppearance). The database still
+// allows the value; nothing here writes it.
 
 export const TABLE_SURFACES = [
-  { id: "classic", label: "Classic (current)" },
   { id: "black", label: "Black" },
   { id: "green-felt", label: "Green Felt" },
   { id: "blue-felt", label: "Blue Felt" },
@@ -15,25 +17,26 @@ export const TABLE_SURFACES = [
 
 export type TableSurface = (typeof TABLE_SURFACES)[number]["id"];
 
-export const DEFAULT_TABLE_SURFACE: TableSurface = "classic";
+export const DEFAULT_TABLE_SURFACE: TableSurface = "green-felt";
 
 export function isTableSurface(value: unknown): value is TableSurface {
   return TABLE_SURFACES.some((s) => s.id === value);
 }
 
-// Every surface except Classic is dark, so the table forces the dark palette
-// on it (white text, the dark: variants) whatever the device's mode. Classic
-// keeps following the device, exactly as before.
+// Every surface is dark, so the table always takes the dark palette (white
+// text, the dark: variants) whatever the device's mode.
 export function surfaceIsDark(surface: TableSurface) {
-  return surface !== "classic";
+  return isTableSurface(surface);
 }
 
 // CARD BACKS: what every face-down card on MY screen looks like. Classic is
 // the original red CSS stripes and loads nothing; the others are 5:7 WebP
 // art in public/cards/backs/. Painted by app/globals.css ("CARD BACKS") from
 // data-back on an ancestor -- the table shell, or the Profile preview.
+// "classic" stays the stored id (the database's check constraint lists it);
+// only its label changed.
 export const CARD_BACKS = [
-  { id: "classic", label: "Classic (current)" },
+  { id: "classic", label: "Classic Red" },
   { id: "metallic-black", label: "Modern Metallic Black" },
   { id: "vintage", label: "Vintage" },
   { id: "oktoberfish", label: "Oktoberfish" },
@@ -59,7 +62,7 @@ export function cardBackUrl(back: CardBack) {
 // ---------------------------------------------------------------------------
 // A player's whole appearance, as saved in public.user_appearance
 // (docs/sql/appearance-settings.sql, docs/sql/hide-counts.sql). No row means
-// Classic for both, with counts shown.
+// the defaults: Green Felt, the Classic Red back, counts shown.
 //
 // hideCounts: hide the hand and crib COUNT numbers on this player's own
 // screen (the recap lines, the count flashes, a count win's breakdown). The
@@ -68,15 +71,15 @@ export function cardBackUrl(back: CardBack) {
 // ---------------------------------------------------------------------------
 export type Appearance = { surface: TableSurface; back: CardBack; hideCounts: boolean };
 
-export const CLASSIC_APPEARANCE: Appearance = {
+export const DEFAULT_APPEARANCE: Appearance = {
   surface: DEFAULT_TABLE_SURFACE,
   back: DEFAULT_CARD_BACK,
   hideCounts: false,
 };
 
-// Anything unknown -- an old value, a typo, a missing row -- is Classic. A
-// missing or non-boolean hideCounts (a per-device copy cached before the
-// setting existed) is false.
+// Anything unknown -- an old value (the removed "classic" surface), a typo,
+// a missing row -- is the default. A missing or non-boolean hideCounts (a
+// per-device copy cached before the setting existed) is false.
 export function normalizeAppearance(value: unknown): Appearance {
   const v = (value ?? {}) as { surface?: unknown; back?: unknown; hideCounts?: unknown };
   return {
@@ -143,14 +146,17 @@ export const HTML_SURFACE_ATTRIBUTE = "data-appearance-surface";
 
 // THE INLINE SCRIPT for app/layout.tsx's <head>. Runs synchronously while the
 // HTML is parsed, before the first paint: reads the cached copy for the
-// device's last user and, if it holds a known non-Classic surface, sets the
-// attribute above. It can't throw (everything is in try/catch) and it only
-// reads storage and sets one attribute, so it never blocks the page.
+// device's last user and, if it holds a known surface, sets the attribute
+// above. No cached copy, or one holding the removed "classic" (no longer in
+// the list), sets nothing -- and with nothing set the Loading screen is
+// Green Felt anyway (app/globals.css), so there is no flash. It can't throw
+// (everything is in try/catch) and it only reads storage and sets one
+// attribute, so it never blocks the page.
 export const APPEARANCE_INLINE_SCRIPT = `(function(){try{var u=localStorage.getItem(${JSON.stringify(
   LAST_USER_KEY
 )});if(!u)return;var v=JSON.parse(localStorage.getItem(${JSON.stringify(
   `${CACHE_PREFIX}user.`
-)}+u)||"null");if(v&&v.surface!=="classic"&&${JSON.stringify(
+)}+u)||"null");if(v&&${JSON.stringify(
   TABLE_SURFACES.map((s) => s.id)
 )}.indexOf(v.surface)>=0)document.documentElement.setAttribute(${JSON.stringify(
   HTML_SURFACE_ATTRIBUTE

@@ -141,7 +141,7 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <CardRoomFrame backHome={false} followDeviceScheme>
+      <CardRoomFrame backHome={false}>
         <p className="text-center">Loading...</p>
       </CardRoomFrame>
     );
@@ -149,7 +149,7 @@ export default function ProfilePage() {
 
   if (!session) {
     return (
-      <CardRoomFrame backHome={false} followDeviceScheme>
+      <CardRoomFrame backHome={false}>
         <p>You need to be logged in to edit your profile.</p>
         <Link href="/login" className="peg-btn peg-btn--brass">
           Log in
@@ -161,11 +161,8 @@ export default function ProfilePage() {
   const displayedAvatar = avatarPreview ?? avatarUrl;
 
   return (
-    // followDeviceScheme: the Appearance preview and swatches below must look
-    // exactly as on a plain page (see CardRoomFrame).
     <CardRoomFrame
       title="Your Profile"
-      followDeviceScheme
       after={
         // Card back and table surface: a section of its own, with its own
         // Save (components/AppearanceSettings.tsx).

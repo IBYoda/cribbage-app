@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { preload } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import {
-  CLASSIC_APPEARANCE,
+  DEFAULT_APPEARANCE,
   HTML_SURFACE_ATTRIBUTE,
   cardBackUrl,
   clearCachedAppearance,
@@ -27,8 +27,9 @@ import {
 //   * The cached copy is keyed by user id (lib/appearance.ts), cleared on
 //     sign-out and when someone else signs in.
 //   * The database wins: a fetched value replaces a cached one.
-//   * No row means Classic. A failed read is quiet: the cached copy if there
-//     is one, else Classic -- and a failed read never overwrites the cache.
+//   * No row means the defaults (Green Felt). A failed read is quiet: the
+//     cached copy if there is one, else the defaults -- and a failed read
+//     never overwrites the cache.
 type AppearanceState = Appearance & { userId: string | null; ready: boolean };
 
 type AppearanceContextValue = AppearanceState & {
@@ -39,9 +40,9 @@ type AppearanceContextValue = AppearanceState & {
   save: (next: Appearance) => Promise<string | null>;
 };
 
-// Without a provider (the layout mock), Classic and ready.
+// Without a provider (the layout mock), the defaults and ready.
 const AppearanceContext = createContext<AppearanceContextValue>({
-  ...CLASSIC_APPEARANCE,
+  ...DEFAULT_APPEARANCE,
   userId: null,
   ready: true,
   save: async () => "Appearance settings are not available here.",
@@ -53,7 +54,7 @@ export function useAppearance() {
 
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppearanceState>({
-    ...CLASSIC_APPEARANCE,
+    ...DEFAULT_APPEARANCE,
     userId: null,
     ready: false,
   });
@@ -71,10 +72,11 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       loadedUserRef.current = userId;
       const ticket = ++loadSeqRef.current;
 
-      // Signed out: Classic, and no trace of the last player on this device.
+      // Signed out: the defaults, and no trace of the last player on this
+      // device.
       if (!userId) {
         clearCachedAppearance();
-        setState({ ...CLASSIC_APPEARANCE, userId: null, ready: true });
+        setState({ ...DEFAULT_APPEARANCE, userId: null, ready: true });
         return;
       }
 
@@ -84,7 +86,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       setState(
         cached
           ? { ...cached, userId, ready: true }
-          : { ...CLASSIC_APPEARANCE, userId, ready: false }
+          : { ...DEFAULT_APPEARANCE, userId, ready: false }
       );
 
       const { data, error } = await supabase
@@ -95,7 +97,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       if (ticket !== loadSeqRef.current) return; // superseded
 
       if (error) {
-        setState({ ...(cached ?? CLASSIC_APPEARANCE), userId, ready: true });
+        setState({ ...(cached ?? DEFAULT_APPEARANCE), userId, ready: true });
         return;
       }
       const fetched = normalizeAppearance(
@@ -117,7 +119,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   // on sign-out.
   useEffect(() => {
     const root = document.documentElement;
-    if (state.userId && state.surface !== "classic") {
+    if (state.userId) {
       root.setAttribute(HTML_SURFACE_ATTRIBUTE, state.surface);
     } else {
       root.removeAttribute(HTML_SURFACE_ATTRIBUTE);

@@ -90,7 +90,7 @@ export function AppearanceSettings() {
 
       <fieldset className="flex flex-col gap-2" disabled={!appearance.ready || status === "saving"}>
         <legend className="mb-2 text-sm font-medium">Table surface</legend>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           {TABLE_SURFACES.map((surface) => (
             <label key={surface.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
               <input
