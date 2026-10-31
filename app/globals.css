@@ -27,8 +27,9 @@ body {
 
 /* The dark: variant. Tailwind's default follows only the device's setting;
    this keeps that, and ALSO turns it on inside anything marked
-   data-scheme="dark" -- the table, on every surface but Classic (see TABLE
-   SURFACES below). With no such attribute, it's exactly the default. */
+   data-scheme="dark" -- the table, on every surface (see TABLE SURFACES
+   below), and the card room. With no such attribute, it's exactly the
+   default. */
 @custom-variant dark {
   @media (prefers-color-scheme: dark) {
     @slot;
@@ -38,12 +39,12 @@ body {
   }
 }
 
-/* surface: -- only on a non-Classic table surface; Classic, in either mode,
-   never sees it. Declared after dark: so it wins over it. Used for:
+/* surface: -- inside anything marked data-scheme="dark" (every table
+   surface, the card room). Declared after dark: so it wins over it. Used for:
      - the coloured labels (Go, Reconnecting) whose dark-mode shade sinks
        into felt or wood;
-     - THE ACCENT: Classic's green becomes violet on every surface (green
-       loses contrast on Green Felt), one family everywhere -- violet-600
+     - THE ACCENT: the plain page's green becomes violet on every surface
+       (green loses contrast on Green Felt), one family everywhere -- violet-600
        fills ("Your turn", the score flash), violet-300 borders (the win
        banner), violet-200 text (the Counting marker). */
 @custom-variant surface (&:where([data-scheme="dark"] *));
@@ -818,10 +819,10 @@ body {
    TABLE SURFACES -- each player's own choice, for their own screen only
    (lib/appearance.ts; data-surface on .table-shell, set by TableShell).
 
-   Classic paints nothing: the page keeps its own light/dark background, so
-   the table looks exactly as it did before. Every other surface is dark, so
-   the shell also carries data-scheme="dark": the dark palette (white text,
-   every dark: variant) applies to the whole table whatever the device's mode.
+   Green Felt is the default (the old "classic" surface, the plain page, is
+   gone). Every surface is dark, so the shell also carries data-scheme="dark":
+   the dark palette (white text, every dark: variant) applies to the whole
+   table whatever the device's mode.
 
    Black and the two felts are CSS only (gradients plus a fine grain); Wood
    is a photo (public/textures/wood-cedar.webp) under a scrim, with the same
@@ -844,10 +845,15 @@ body {
                                     from this device's cached choice (set on
                                     <html> by the inline script in
                                     app/layout.tsx before first paint), so a
-                                    refresh never flashes Classic;
+                                    refresh never flashes the wrong surface;
      - .surface-swatch[...]         the Profile page's preview and swatches;
-     - body:has(.card-room)         Green Felt only: the landing page and the
-                                    main menu ("CARD ROOM", below). */
+     - body:has(.card-room)         Green Felt only: the landing page, the
+                                    main menu and the other card-room pages
+                                    ("CARD ROOM", below);
+     - body:has(.table-loading)     Green Felt only: the Loading screen with
+                                    no cached surface (a new device, a new
+                                    player). A cached surface's rule above
+                                    is more specific, so it wins. */
 body:has(.table-shell[data-surface="black"]),
 html[data-appearance-surface="black"] body:has(.table-loading),
 .surface-swatch[data-surface="black"] {
@@ -859,7 +865,8 @@ html[data-appearance-surface="black"] body:has(.table-loading),
 body:has(.table-shell[data-surface="green-felt"]),
 html[data-appearance-surface="green-felt"] body:has(.table-loading),
 .surface-swatch[data-surface="green-felt"],
-body:has(.card-room) {
+body:has(.card-room),
+body:has(.table-loading) {
   background:
     var(--surface-grain),
     radial-gradient(ellipse at 50% 40%, #276b43 0%, #1b5232 55%, #123a23 100%) fixed;
@@ -893,15 +900,10 @@ html[data-appearance-surface="wood"] body:has(.table-loading),
 .surface-swatch[data-surface] {
   background-attachment: scroll;
 }
-/* Classic has no painted surface: the table shows the plain page. A Classic
-   swatch shows that page colour itself, so the Profile preview stays the
-   same on the felt panel as it was on the plain page. */
-.surface-swatch[data-surface="classic"] {
-  background-color: var(--background);
-}
 
-/* The Loading screen on a cached dark surface: light text, like the table. */
-html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-loading {
+/* The Loading screen is always on a dark surface: light text, like the
+   table. */
+.table-loading {
   color: #ededed;
 }
 
@@ -923,8 +925,8 @@ html[data-appearance-surface]:not([data-appearance-surface="classic"]) .table-lo
   --color-zinc-500: #dadadf;
 }
 
-/* The cut for deal draws its own dark panel on Classic; on a surface, the
-   surface shows through, with a faint shade to keep the panel's shape. */
+/* The cut for deal draws its own dark panel; on a surface, the surface
+   shows through, with a faint shade to keep the panel's shape. */
 .table-shell[data-scheme="dark"] .cut-view {
   background-color: rgb(0 0 0 / 0.18);
 }
