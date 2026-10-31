@@ -6,6 +6,7 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
 
 const NICKNAME_MAX_LENGTH = 30;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
@@ -218,6 +219,8 @@ export default function ProfilePage() {
           {status === "saving" ? "Saving..." : "Save Profile"}
         </button>
 
+        <ChangePassword />
+
         {message && (
           <p
             className={
@@ -231,5 +234,141 @@ export default function ProfilePage() {
         )}
       </form>
     </CardRoomFrame>
+  );
+}
+
+// CHANGE PASSWORD, for the signed-in player, under Save Profile: one button
+// that opens the two fields ("Change Password"), then saves them ("Save
+// Password"); Cancel closes them. supabase.auth.updateUser on the account
+// itself -- the profile row is never read or written here. If Supabase wants
+// a recent login first, the message says how to get one.
+//
+// It sits INSIDE the profile form, so nothing here may submit it: every
+// button is type="button", Enter in a field saves the password instead, and
+// the fields have no required/minLength (the browser would then block Save
+// Profile) -- the rules are checked in code (lib/passwordForm.ts).
+function ChangePassword() {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [status, setStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+
+  function close() {
+    setOpen(false);
+    setPassword("");
+    setConfirm("");
+  }
+
+  function handleButton() {
+    if (!open) {
+      setOpen(true);
+      setStatus("idle");
+      setMessage(null);
+      return;
+    }
+    savePassword();
+  }
+
+  function handleCancel() {
+    close();
+    setStatus("idle");
+    setMessage(null);
+  }
+
+  function saveOnEnter(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Enter") return;
+    e.preventDefault(); // never the profile form's submit
+    savePassword();
+  }
+
+  async function savePassword() {
+    if (status === "saving") return;
+    const problem = passwordPairProblem(password, confirm);
+    if (problem) {
+      setStatus("error");
+      setMessage(problem);
+      return;
+    }
+
+    setStatus("saving");
+    setMessage(null);
+    const { error } = await supabase.auth.updateUser({ password });
+
+    if (error) {
+      setStatus("error");
+      setMessage(passwordUpdateErrorMessage(error));
+      return;
+    }
+
+    close();
+    setStatus("success");
+    setMessage("Password updated.");
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={handleButton}
+        disabled={status === "saving"}
+        aria-expanded={open}
+        aria-controls="change-password-fields"
+        className="peg-btn peg-btn--ghost disabled:opacity-60"
+      >
+        {status === "saving" ? "Saving..." : open ? "Save Password" : "Change Password"}
+      </button>
+
+      {open && (
+        <div id="change-password-fields" className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="new-password" className="text-sm font-medium">
+              New password
+            </label>
+            <input
+              id="new-password"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={saveOnEnter}
+              className="felt-input"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="confirm-password" className="text-sm font-medium">
+              Confirm new password
+            </label>
+            <input
+              id="confirm-password"
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              onKeyDown={saveOnEnter}
+              className="felt-input"
+            />
+          </div>
+
+          <button type="button" onClick={handleCancel} className="footer-link self-center text-sm">
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {message && (
+        <p
+          role={status === "error" ? "alert" : "status"}
+          className={
+            status === "error"
+              ? "text-sm text-[var(--error-on-felt)]"
+              : "text-sm text-[var(--success-on-felt)]"
+          }
+        >
+          {message}
+        </p>
+      )}
+    </>
   );
 }
