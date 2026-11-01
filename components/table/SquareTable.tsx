@@ -27,6 +27,8 @@ export function SquareTableShell({
   scores,
   surface = "green-felt",
   back = "classic",
+  dealing = false,
+  overlay,
 }: {
   header: ReactNode;
   opponent: ReactNode;
@@ -39,10 +41,14 @@ export function SquareTableShell({
   scores: ReactNode;
   surface?: TableSurface;
   back?: CardBack;
+  // THE DEALING ANIMATION: a deal is on -- the hand-card slots are hidden
+  // (.sq-dealing) and `overlay` (DealAnimation) flies the cards in.
+  dealing?: boolean;
+  overlay?: ReactNode;
 }) {
   return (
     <main
-      className="table-shell table-shell--square mx-auto w-full max-w-4xl"
+      className={`table-shell table-shell--square mx-auto w-full max-w-4xl ${dealing ? "sq-dealing" : ""}`}
       data-surface={surface}
       data-scheme={surfaceIsDark(surface) ? "dark" : undefined}
       data-back={back}
@@ -57,6 +63,7 @@ export function SquareTableShell({
         {board}
       </div>
       <div className="min-w-0">{scores}</div>
+      {overlay}
     </main>
   );
 }

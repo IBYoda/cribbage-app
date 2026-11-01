@@ -35,6 +35,18 @@ import {
   laneOf,
   nextPegs,
 } from "../lib/boardLayout";
+import {
+  DEAL_CARD_MS,
+  DEAL_TOTAL_MS,
+  FAN_TOTAL_MS,
+  TOSS_CARD_MS,
+  TOSS_STAGGER_MS,
+  dealLength,
+  dealPlan,
+  discardPlan,
+  liveDealStep,
+  liveDiscardStep,
+} from "../lib/dealAnimation";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -576,6 +588,191 @@ check("board: pegs -- front on the score, back on the score before the last awar
   deepStrictEqual(nextPegs([121, 118], 0, null), [0, 0]);
   // Negative or odd data never puts the back peg ahead of the front.
   deepStrictEqual(nextPegs(null, 10, -4), [0, 10]);
+});
+
+// THE DEALING ANIMATION (lib/dealAnimation.ts).
+type Plan = ReturnType<typeof dealPlan>;
+const dealTargets = (plan: Plan) => plan.deal.map((s) => s.target);
+const dealCounts = (plan: Plan) =>
+  plan.deal.reduce<Record<string, number>>((c, s) => ({ ...c, [String(s.target)]: (c[String(s.target)] ?? 0) + 1 }), {});
+const increasing = (steps: { delayMs: number }[], what: string) => {
+  for (let i = 1; i < steps.length; i++) strictEqual(steps[i].delayMs > steps[i - 1].delayMs, true, `${what} ${i}`);
+};
+const checkTiming = (plan: Plan) => {
+  increasing(plan.deal, "deal delay");
+  increasing(plan.fan, "fan delay");
+  strictEqual(plan.deal[0].delayMs, 0);
+  strictEqual(plan.dealMs <= DEAL_TOTAL_MS + 0.01, true, `deal ${plan.dealMs}`);
+  strictEqual(dealLength(plan.deal), plan.dealMs);
+  // The fan starts when the last card is down and keeps to its own cap.
+  if (plan.fan.length) {
+    strictEqual(plan.fan[0].delayMs, plan.dealMs);
+    strictEqual(dealLength(plan.fan) <= plan.dealMs + FAN_TOTAL_MS + 0.01, true, `fan ${dealLength(plan.fan)}`);
+    strictEqual(plan.totalMs, plan.dealMs + FAN_TOTAL_MS);
+  } else {
+    strictEqual(plan.totalMs, plan.dealMs);
+  }
+};
+check("deal: 2 seats -- the dealer's opponent first, alternating, 6 each; my 6 stack, then fan", () => {
+  const fromSeat0 = dealPlan({ seatCount: 2, dealerIndex: 0, cardsPerSeat: 6, stackSeat: 0 });
+  deepStrictEqual(dealTargets(fromSeat0), [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]);
+  const fromSeat1 = dealPlan({ seatCount: 2, dealerIndex: 1, cardsPerSeat: 6, stackSeat: 0 });
+  deepStrictEqual(dealTargets(fromSeat1), [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]);
+  deepStrictEqual(dealCounts(fromSeat0), { 0: 6, 1: 6 });
+  // Each seat's cards numbered 0..5 in the order they arrive.
+  deepStrictEqual(fromSeat0.deal.filter((s) => s.target === 1).map((s) => s.cardIndex), [0, 1, 2, 3, 4, 5]);
+  // Only my seat stacks (and fans).
+  deepStrictEqual(fromSeat0.deal.filter((s) => s.stack).map((s) => s.target), [0, 0, 0, 0, 0, 0]);
+  deepStrictEqual(fromSeat0.fan.map((f) => f.cardIndex), [0, 1, 2, 3, 4, 5]);
+  checkTiming(fromSeat0);
+  checkTiming(fromSeat1);
+  // 450ms flights, the last landing at 3000: 11 gaps of 231.8ms; the fan
+  // runs 3000-4000, each card 600ms, 80ms apart.
+  strictEqual(fromSeat0.deal[0].durationMs, DEAL_CARD_MS);
+  strictEqual(Math.abs(fromSeat0.deal[1].delayMs - 2550 / 11) < 0.001, true);
+  strictEqual(Math.abs(fromSeat0.dealMs - 3000) < 0.01, true);
+  strictEqual(Math.abs(fromSeat0.fan[0].delayMs - 3000) < 0.01, true);
+  strictEqual(Math.abs(fromSeat0.fan[1].delayMs - fromSeat0.fan[0].delayMs - 80) < 0.01, true);
+  strictEqual(Math.abs(fromSeat0.totalMs - 4000) < 0.01, true);
+});
+check("deal: no stack seat (a spectator) -- no stack, no fan", () => {
+  const plan = dealPlan({ seatCount: 2, dealerIndex: 0, cardsPerSeat: 6 });
+  strictEqual(plan.deal.some((s) => s.stack), false);
+  deepStrictEqual(plan.fan, []);
+  checkTiming(plan);
+});
+check("deal: 3 seats -- clockwise from the dealer's left, 5 each, then one to the crib", () => {
+  const plan = dealPlan({ seatCount: 3, dealerIndex: 1, cardsPerSeat: 5, cribExtras: 1, stackSeat: 2 });
+  deepStrictEqual(dealTargets(plan).slice(0, 6), [2, 0, 1, 2, 0, 1]);
+  deepStrictEqual(plan.deal[plan.deal.length - 1].target, "crib");
+  deepStrictEqual(dealCounts(plan), { 0: 5, 1: 5, 2: 5, crib: 1 });
+  strictEqual(plan.deal.length, 16);
+  // The crib's card never stacks; only seat 2's five do.
+  deepStrictEqual(plan.deal.filter((s) => s.stack).length, 5);
+  strictEqual(plan.fan.length, 5);
+  checkTiming(plan);
+});
+check("deal: 4 seats -- 5 each, 20 cards still within the cap", () => {
+  const plan = dealPlan({ seatCount: 4, dealerIndex: 3, cardsPerSeat: 5, stackSeat: 1 });
+  deepStrictEqual(dealTargets(plan).slice(0, 5), [0, 1, 2, 3, 0]);
+  deepStrictEqual(dealCounts(plan), { 0: 5, 1: 5, 2: 5, 3: 5 });
+  checkTiming(plan);
+  strictEqual(Math.abs(plan.dealMs - DEAL_TOTAL_MS) < 0.01, true);
+  strictEqual(plan.deal[1].delayMs < plan.deal[1].durationMs, true); // overlapping in the air
+});
+check("deal: odd inputs -- a wrapped dealer index, no seats, a custom cap", () => {
+  deepStrictEqual(dealTargets(dealPlan({ seatCount: 2, dealerIndex: 3, cardsPerSeat: 1 })), [0, 1]);
+  deepStrictEqual(dealTargets(dealPlan({ seatCount: 2, dealerIndex: -1, cardsPerSeat: 1 })), [0, 1]);
+  deepStrictEqual(dealPlan({ seatCount: 0, dealerIndex: 0, cardsPerSeat: 6 }), { deal: [], fan: [], dealMs: 0, totalMs: 0 });
+  const fast = dealPlan({ seatCount: 2, dealerIndex: 0, cardsPerSeat: 6, totalMs: 1000 });
+  strictEqual(fast.dealMs <= 1000, true);
+  strictEqual(fast.deal.length, 12);
+});
+
+// THE DISCARD TOSS.
+check("toss: one seat's two cards, then several seats in order, staggered", () => {
+  const mine = discardPlan([{ seat: "me", cards: 2 }]);
+  deepStrictEqual(
+    mine.map((s) => [s.seat, s.cardIndex, s.delayMs, s.durationMs]),
+    [["me", 0, 0, TOSS_CARD_MS], ["me", 1, TOSS_STAGGER_MS, TOSS_CARD_MS]]
+  );
+  const three = discardPlan([{ seat: 2, cards: 1 }, { seat: 0, cards: 1 }, { seat: 1, cards: 1 }]);
+  deepStrictEqual(three.map((s) => s.seat), [2, 0, 1]);
+  increasing(three, "toss delay");
+  const four = discardPlan([{ seat: "a", cards: 1 }, { seat: "b", cards: 1 }, { seat: "c", cards: 1 }, { seat: "d", cards: 1 }]);
+  strictEqual(four.length, 4);
+  increasing(four, "toss delay");
+  deepStrictEqual(discardPlan([]), []);
+  deepStrictEqual(discardPlan([{ seat: "x", cards: 0 }]), []);
+});
+
+// A LIVE DISCARD: a screen's renders, as liveDiscardStep sees them.
+type DiscardFrame = { tableRead?: boolean; hand: string | null; by: string[]; dealing?: boolean; on?: boolean };
+const discardsThrown = (frames: DiscardFrame[]) => {
+  let seen: Parameters<typeof liveDiscardStep>[0]["seen"] = undefined;
+  const thrown: string[][] = [];
+  for (const f of frames) {
+    const step = liveDiscardStep({
+      tableRead: f.tableRead ?? true,
+      seen,
+      handKey: f.hand,
+      discardedBy: f.by,
+      dealInFlight: f.dealing ?? false,
+      animationOn: f.on ?? true,
+    });
+    if (step.live.length) thrown.push(step.live);
+    seen = step.seen;
+  }
+  return thrown;
+};
+check("live discard: a reload, a late join or a hand past the discard throws nothing", () => {
+  deepStrictEqual(discardsThrown([{ tableRead: false, hand: null, by: [] }, { hand: "g:3", by: ["op"] }, { hand: "g:3", by: ["op"] }]), []);
+  deepStrictEqual(discardsThrown([{ hand: "g:3", by: ["me", "op"] }, { hand: "g:3", by: ["me", "op"] }]), []);
+  // A new hand that turns up with discards already in it (missed while away).
+  deepStrictEqual(discardsThrown([{ hand: "g:3", by: [] }, { hand: "g:4", by: ["op"] }]), []);
+});
+check("live discard: each discard seen live is thrown once, echoes or not", () => {
+  deepStrictEqual(
+    discardsThrown([{ hand: "g:3", by: [] }, { hand: "g:3", by: ["op"] }, { hand: "g:3", by: ["op"] }, { hand: "g:3", by: ["op", "me"] }]),
+    [["op"], ["me"]]
+  );
+  // Next hand: its discards are live again.
+  deepStrictEqual(
+    discardsThrown([{ hand: "g:3", by: ["op", "me"] }, { hand: "g:4", by: [] }, { hand: "g:4", by: ["op"] }]),
+    [["op"]]
+  );
+});
+check("live discard: not while a deal is shown, not with the animations off -- and never later", () => {
+  deepStrictEqual(
+    discardsThrown([{ hand: "g:3", by: [] }, { hand: "g:3", by: ["op"], dealing: true }, { hand: "g:3", by: ["op"] }]),
+    []
+  );
+  deepStrictEqual(discardsThrown([{ hand: "g:3", by: [] }, { hand: "g:3", by: ["op"], on: false }, { hand: "g:3", by: ["op"] }]), []);
+});
+
+// A LIVE DEAL: a screen's renders, one after another, as liveDealStep sees
+// them. Returns the hands it would animate.
+type DealFrame = { tableRead?: boolean; hand: string | null; phase?: string; discarded?: boolean; on?: boolean };
+const dealsAnimated = (frames: DealFrame[]) => {
+  let seenKey: string | null | undefined = undefined;
+  const live: string[] = [];
+  for (const f of frames) {
+    const step = liveDealStep({
+      tableRead: f.tableRead ?? true,
+      seenKey,
+      handKey: f.hand,
+      phase: f.phase ?? "discard",
+      iHaveDiscarded: f.discarded ?? false,
+      animationOn: f.on ?? true,
+    });
+    if (step.liveKey) live.push(step.liveKey);
+    seenKey = step.seenKey;
+  }
+  return live;
+};
+check("live deal: a load, reload or late join mid-hand never animates", () => {
+  // Loading straight into a freshly dealt hand (a reload right after the deal).
+  deepStrictEqual(dealsAnimated([{ tableRead: false, hand: null }, { hand: "g:3" }, { hand: "g:3" }]), []);
+  // The hand before the first read is in: still not live.
+  deepStrictEqual(dealsAnimated([{ tableRead: false, hand: "g:3" }, { hand: "g:3" }]), []);
+  // A late join in pegging, then counting.
+  deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "play" }, { hand: "g:3", phase: "counting" }]), []);
+});
+check("live deal: Next Hand, the first hand after the cut, New Game -- once each", () => {
+  // Next Hand while watching, with realtime echoes of the same row.
+  deepStrictEqual(
+    dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4" }, { hand: "g:4" }, { hand: "g:4", discarded: true }]),
+    ["g:4"]
+  );
+  // The cut (no dealt hand) then the deal.
+  deepStrictEqual(dealsAnimated([{ hand: null }, { hand: null }, { hand: "g:1" }]), ["g:1"]);
+  // A won game's board (no hand), then New Game.
+  deepStrictEqual(dealsAnimated([{ hand: "g:9", phase: "done" }, { hand: null }, { hand: "h:1" }]), ["h:1"]);
+});
+check("live deal: not once I've discarded, not past the discard, not with the animation off", () => {
+  deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4", discarded: true }]), []);
+  deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4", phase: "play" }]), []);
+  deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4", on: false }, { hand: "g:4" }]), []);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
