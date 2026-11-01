@@ -782,9 +782,11 @@ body {
 .sq-hand-row {
   margin-top: 2px;
 }
-/* The board strip's height is --sq-board-h, so it can be switched off
-   (.table-shell--no-board: zero height, the middle takes the room) and back
-   on by the board slice. */
+/* The board strip (CribbageBoard): the full width, --sq-board-h tall --
+   108px at 502x919, 84px at 390x844. A short phone (PRD item 31: the board
+   may shrink, the cards first keep their size) gets at most 10% of the
+   height: 67px at 375x667. The board only brings its rows closer; its hole
+   pitch comes from the width. */
 .table-shell--square {
   --sq-board-h: min(calc(100vw / 4.65), 12vh);
 }
@@ -793,12 +795,32 @@ body {
     --sq-board-h: min(calc(100dvw / 4.65), 12dvh);
   }
 }
-.table-shell--square.table-shell--no-board {
-  --sq-board-h: 0px;
+@media (max-height: 700px) {
+  .table-shell--square {
+    --sq-board-h: min(calc(100vw / 4.65), 10vh);
+  }
+  @supports (height: 100dvh) {
+    .table-shell--square {
+      --sq-board-h: min(calc(100dvw / 4.65), 10dvh);
+    }
+  }
 }
 .sq-board {
   height: var(--sq-board-h);
   margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
+}
+/* A peg slides to its new hole; with reduced motion it just moves. While
+   the board is redrawn at a new size (.board-peg--still) it never slides. */
+.board-peg {
+  transition: transform 400ms ease-in-out;
+}
+.board-peg--still {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-peg {
+    transition: none;
+  }
 }
 .sq-plates {
   margin-top: 2px;

@@ -24,24 +24,38 @@ const TONES = {
   table: { ring: "border-2 border-background", fill: "bg-zinc-400 text-white dark:bg-zinc-600" },
 };
 
+// ringColor: the square table only -- the ring in this player's board-lane
+// colour (lib/boardSkins.ts), the same 2px border, with a 1px light hairline
+// outside it so a blue or green ring still reads on the blue and green felt.
+// It takes no extra room. Unset: the tone's ring, as always.
 export function Avatar({
   name,
   url,
   size = "md",
   tone = "felt",
+  ringColor,
 }: {
   name: string;
   url: string | null | undefined;
   size?: AvatarSize;
   tone?: keyof typeof TONES;
+  ringColor?: string;
 }) {
   const box = `${SIZES[size]} shrink-0 rounded-full ${TONES[tone].ring}`;
+  const ring = ringColor
+    ? { borderColor: ringColor, boxShadow: "0 0 0 1px rgba(255, 255, 255, 0.7)" }
+    : undefined;
   if (url) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt="" className={`${box} object-cover`} />;
+    return <img src={url} alt="" className={`${box} object-cover`} style={ring} data-lane-ring={ringColor ? "" : undefined} />;
   }
   return (
-    <span aria-hidden="true" className={`${box} ${TONES[tone].fill} flex items-center justify-center font-bold`}>
+    <span
+      aria-hidden="true"
+      className={`${box} ${TONES[tone].fill} flex items-center justify-center font-bold`}
+      style={ring}
+      data-lane-ring={ringColor ? "" : undefined}
+    >
       {name.slice(0, 1).toUpperCase()}
     </span>
   );
