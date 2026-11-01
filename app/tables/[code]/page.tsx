@@ -23,7 +23,7 @@ import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
-import { countingView, type CountingView } from "@/components/table/countingView";
+import { countingView, type CardSlot, type CountingView } from "@/components/table/countingView";
 import { countingViewN } from "@/lib/countingN";
 import { CountStage, SlotCards } from "@/components/table/CountStage";
 import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
@@ -2452,6 +2452,61 @@ export default function TablePage() {
     </p>
   );
 
+  // The counting stage in the middle: headline, the hand being counted
+  // (`subject`), Confirm / Next Hand, the recap. The square view passes no
+  // subject (its cards stay at the seats); everything else is the same.
+  const countActions = view
+    ? isDone ? (
+            <>
+              {/* NEXT HAND. Every state comes from ready_by on the
+                  game row, so a refresh shows the same thing. The tap
+                  that completes the set deals; the hand_no change
+                  then resets both screens. */}
+              {!iAmReady && othersReady.length > 0 && (
+                <p className="text-sm font-medium">
+                  {othersReady.map(nameOf).join(", ")} {othersReady.length === 1 ? "is" : "are"} ready
+                </p>
+              )}
+              <button
+                onClick={handleNextHand}
+                disabled={countBusy || iAmReady}
+                className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
+              >
+                {countBusy ? "Sending..." : "Next Hand"}
+              </button>
+              {iAmReady && (
+                <p className="text-sm text-zinc-500">
+                  Waiting for {othersNotReady.map(nameOf).join(", ")}…
+                </p>
+              )}
+            </>
+          ) : view.myTurn ? (
+            <button
+              onClick={() => handleConfirmCount(countStep)}
+              disabled={!view.canConfirm || countBusy}
+              className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
+            >
+              {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
+            </button>
+          ) : view.waitingOn ? (
+            <p className="text-sm text-zinc-500">{view.waitingOn}</p>
+          ) : undefined
+    : undefined;
+  const countStageFor = (subject: CardSlot) =>
+    view ? (
+      <CountStage
+        headline={view.headline}
+        hint={isDone ? `Next dealer: ${nextDealerName}` : view.hint}
+        subject={subject}
+        subjectLabel={view.middleLabel}
+        recap={view.recap}
+        recapKeys={viewN ? viewN.recap.map((r) => r.key) : undefined}
+        variant={viewN ? "n" : undefined}
+        error={countStatus === "error" ? countMessage : null}
+        actions={countActions}
+      />
+    ) : null;
+
   const middle = (
     <>
       {middleOverlays}
@@ -2500,55 +2555,7 @@ export default function TablePage() {
                 face-up throughout (the opponent's here, mine in my hand
                 row); each confirmed count leaves a small recap line -- and
                 nothing shows a count's points before its confirm. */}
-            {view && (
-              <CountStage
-                headline={view.headline}
-                hint={isDone ? `Next dealer: ${nextDealerName}` : view.hint}
-                subject={view.middle}
-                subjectLabel={view.middleLabel}
-                recap={view.recap}
-                recapKeys={viewN ? viewN.recap.map((r) => r.key) : undefined}
-                variant={viewN ? "n" : undefined}
-                error={countStatus === "error" ? countMessage : null}
-                actions={
-                  isDone ? (
-                    <>
-                      {/* NEXT HAND. Every state comes from ready_by on the
-                          game row, so a refresh shows the same thing. The tap
-                          that completes the set deals; the hand_no change
-                          then resets both screens. */}
-                      {!iAmReady && othersReady.length > 0 && (
-                        <p className="text-sm font-medium">
-                          {othersReady.map(nameOf).join(", ")} {othersReady.length === 1 ? "is" : "are"} ready
-                        </p>
-                      )}
-                      <button
-                        onClick={handleNextHand}
-                        disabled={countBusy || iAmReady}
-                        className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
-                      >
-                        {countBusy ? "Sending..." : "Next Hand"}
-                      </button>
-                      {iAmReady && (
-                        <p className="text-sm text-zinc-500">
-                          Waiting for {othersNotReady.map(nameOf).join(", ")}…
-                        </p>
-                      )}
-                    </>
-                  ) : view.myTurn ? (
-                    <button
-                      onClick={() => handleConfirmCount(countStep)}
-                      disabled={!view.canConfirm || countBusy}
-                      className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
-                    >
-                      {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
-                    </button>
-                  ) : view.waitingOn ? (
-                    <p className="text-sm text-zinc-500">{view.waitingOn}</p>
-                  ) : undefined
-                }
-              />
-            )}
+            {view && countStageFor(view.middle)}
           </>
         )
       ) : inWaitingRoom ? (
@@ -2837,10 +2844,11 @@ export default function TablePage() {
     ) : null;
 
   // THE SQUARE SCREEN (PRD item 31, slice 1) -- only with ?layout=square,
-  // only on a 2-player table that isn't Muggins, and only from the discard
-  // until pegging ends (see below). Everything else -- the cut for the deal,
-  // counting, the final board, Muggins, 3 and 4 players -- is the table
-  // below, unchanged.
+  // only on a 2-player table that isn't Muggins, and only for a dealt hand:
+  // the discard, pegging and its hold, and counting through Next Hand (see
+  // below). Everything else -- the cut for the deal, the waiting room, the
+  // final board after a win, Muggins, 3 and 4 players -- is the table below,
+  // unchanged.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
   // the count, whose turn, Go, the hold, the score flash, my hand and its
@@ -2849,9 +2857,10 @@ export default function TablePage() {
   // deck on the right, from their side); no "D" anywhere. The board strip is
   // collapsed (showBoard={false}) until the board slice.
   //
-  // From the deal until pegging ends: the discard (phase 'discard'; the
-  // starter is cut inside the last discard, so there is no step between),
-  // pegging (phase 'play'), and the hold after it. In the discard the middle
+  // The whole dealt hand: the discard (phase 'discard'; the starter is cut
+  // inside the last discard, so there is no step between), pegging (phase
+  // 'play'), the hold after it, and counting ('counting', 'done') once
+  // Count hands is tapped -- until Next Hand deals. In the discard the middle
   // keeps the same shape -- the seats' (empty) rows, and CenterCount with the
   // discard's prompt in place of its pill -- so nothing moves when pegging
   // starts, and the score flash stays mounted across that change.
@@ -2861,9 +2870,23 @@ export default function TablePage() {
     isTwoPlayerTable &&
     !isMuggins &&
     isActive &&
-    (phase === "discard" || pegView) &&
+    (phase === "discard" || pegView || (isCountingOrDone && !!view)) &&
     !!squareOpponent;
   if (squareView && activeGame && squareOpponent) {
+    // COUNTING (counting and done, after Count hands): no cards in the
+    // middle. Each hand at its seat -- mine face-up in my hand row (the same
+    // `hand` as the classic screen), theirs at the top, turned face-up in
+    // place once their hand's count comes up (the pone counts at step 0, the
+    // dealer at step 1) and staying up; the crib at the dealer's seat,
+    // face-up there from its count on (view.cribFan); the starter on the
+    // deck throughout. The middle keeps the classic counting stage's text,
+    // recap and buttons (countStageFor, with no subject).
+    const squareCount = isCountingOrDone && !!view;
+    const oppCountStep = handDealerId === squareOpponent.user_id ? 1 : 0;
+    const oppHand =
+      squareCount && view && view.middle.kind === "full" ? view.middle.cards : null;
+    const oppHandUp = isDone || countStep >= oppCountStep;
+    const cribFan = squareCount && view ? view.cribFan : null;
     const iDealHand = handDealerId === session.user.id;
     const oppName = displayName(squareOpponent);
     const cribCount = cribCountDuringDiscard(playerCount, discardedBy.length);
@@ -2890,13 +2913,32 @@ export default function TablePage() {
           }
           opponent={
             <SquareOpponentHand
-              cardCount={opponentCardCount(squareOpponent.user_id)}
+              cardCount={squareCount ? sizes.kept : opponentCardCount(squareOpponent.user_id)}
+              counting={squareCount ? { cards: oppHand, revealed: oppHandUp } : undefined}
               // They deal: their crib and deck on their side, crib on their
               // left -- my right (seatGeometry("top").crib).
-              piles={iDealHand ? null : { cribCount, starter: starterCard, cribSide: across.crib }}
+              piles={
+                iDealHand
+                  ? null
+                  : {
+                      cribCount: squareCount ? sizes.kept : cribCount,
+                      starter: starterCard,
+                      cribSide: across.crib,
+                      cribCards: cribFan,
+                    }
+              }
             />
           }
           middle={
+            squareCount ? (
+              <>
+                {middleOverlays}
+                <div className="square-middle square-middle--count">
+                  <div className="sq-count-flash">{scoreFlash}</div>
+                  {countStageFor({ kind: "none" })}
+                </div>
+              </>
+            ) : (
             <>
               {middleOverlays}
               <div className="square-middle">
@@ -2929,11 +2971,20 @@ export default function TablePage() {
                 />
               </div>
             </>
+            )
           }
           piles={
             <div className="sq-piles">
               <PileRow
-                crib={iDealHand ? { faceDownCount: cribCount, shownCards: null, dealerIsMe: false } : null}
+                crib={
+                  iDealHand
+                    ? {
+                        faceDownCount: squareCount ? sizes.kept : cribCount,
+                        shownCards: cribFan,
+                        dealerIsMe: false,
+                      }
+                    : null
+                }
                 starter={iDealHand ? { card: starterCard } : null}
               >
                 {pileButtons}

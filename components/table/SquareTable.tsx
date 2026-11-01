@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
-import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
+import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
 import type { ScreenSide } from "@/lib/tableLayout";
 
@@ -103,28 +103,65 @@ export function SquareTableHeader({
 // right -- on my screen, the crib on my right and the deck on my left. The
 // caller passes the crib's side from seatGeometry("top").crib; the deck takes
 // the other side. Drawn smaller than mine, beside their hand row.
-export type AcrossPiles = { cribCount: number; starter: string | null; cribSide: ScreenSide };
+//   cribCards: the crib face-up (its count is up): its four cards fanned in
+//   place of the pile, each showing its corner, the last one whole.
+export type AcrossPiles = {
+  cribCount: number;
+  starter: string | null;
+  cribSide: ScreenSide;
+  cribCards?: string[] | null;
+};
 
 // The across player's hand: whole card backs (or the shown cards), overlapped
 // by half a card, centred, never cut off. The first card is on top, as in
 // the mockups. With piles, the crib and the deck sit either side.
+//
+// counting: the counting phase -- their four kept cards, spread a little
+// wider (two-thirds of each card shows) with the newer card on top, so a
+// face-up card's corner always shows. Face-down until `revealed` (their
+// hand's count is up), then each card turns over in place (FlipCard); a page
+// loaded later shows them face-up at once. cards null: not readable yet,
+// face-down.
 export function SquareOpponentHand({
   cardCount,
   shownCards,
   piles,
+  counting,
 }: {
   cardCount: number;
   shownCards?: string[];
   piles?: AcrossPiles | null;
+  counting?: { cards: string[] | null; revealed: boolean };
 }) {
   const cards: (string | null)[] = shownCards ?? Array.from({ length: cardCount }, () => null);
   return (
-    <div className="sq-opp-hand" style={{ "--n": Math.max(cards.length, 1) } as CSSProperties}>
-      {cards.map((card, i) => (
-        <div key={card ?? i} className="sq-opp-card" style={{ zIndex: cards.length - i }}>
-          {card ? <PlayingCard card={card} sizing="w-full aspect-[5/7]" /> : <FaceDownCard sizing="w-full aspect-[5/7]" />}
-        </div>
-      ))}
+    <div
+      className={`sq-opp-hand ${counting ? "sq-opp-hand--open" : ""}`}
+      style={{ "--n": Math.max(cards.length, 1) } as CSSProperties}
+    >
+      {counting
+        ? cards.map((_, i) => {
+            const card = counting.cards?.[i] ?? null;
+            return (
+              <div key={i} className="sq-opp-card">
+                {card ? (
+                  <FlipCard
+                    card={card}
+                    revealed={counting.revealed}
+                    label={counting.revealed ? card : "Face-down card"}
+                    sizing="w-full aspect-[5/7]"
+                  />
+                ) : (
+                  <FaceDownCard sizing="w-full aspect-[5/7]" />
+                )}
+              </div>
+            );
+          })
+        : cards.map((card, i) => (
+            <div key={card ?? i} className="sq-opp-card" style={{ zIndex: cards.length - i }}>
+              {card ? <PlayingCard card={card} sizing="w-full aspect-[5/7]" /> : <FaceDownCard sizing="w-full aspect-[5/7]" />}
+            </div>
+          ))}
       {piles && (
         <>
           <div className={`sq-across-pile sq-across-pile--deck sq-across-pile--${piles.cribSide === "left" ? "right" : "left"}`}>
@@ -142,7 +179,15 @@ export function SquareOpponentHand({
             {/* As the classic crib pile (PileRow): with cards in it, a pile
                 with a hint of depth; empty (nobody has discarded yet), an
                 outline where it will go. */}
-            {piles.cribCount > 0 ? (
+            {piles.cribCards ? (
+              <div className="sq-across-crib-fan">
+                {piles.cribCards.map((card) => (
+                  <div key={card} className="sq-across-crib-card">
+                    <PlayingCard card={card} sizing="w-full aspect-[5/7]" />
+                  </div>
+                ))}
+              </div>
+            ) : piles.cribCount > 0 ? (
               <div className="relative">
                 <div className="absolute left-0.5 top-0.5 w-full">
                   <FaceDownCard sizing="w-full aspect-[5/7]" />
