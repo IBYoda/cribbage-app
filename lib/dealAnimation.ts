@@ -21,6 +21,15 @@
 // it (2 players: 12 cards, ~232ms apart -- about two in the air at once).
 export const DEAL_TOTAL_MS = 3000;
 export const DEAL_CARD_MS = 450;
+// 4 seats deal 20 cards in the same 3s: at 450ms a card that is ~134ms apart,
+// three or four in the air at once; a shorter flight keeps it nearer the 2-
+// and 3-player look (~138ms apart, under three in the air).
+export const DEAL_CARD_MS_FOUR = 380;
+
+// Each card's flight for a table of `seatCount` seats.
+export function dealCardMsFor(seatCount: number): number {
+  return seatCount >= 4 ? DEAL_CARD_MS_FOUR : DEAL_CARD_MS;
+}
 // Each dealt card's turn in the plane, in degrees.
 export const DEAL_SPIN_DEG = 180;
 // The fan: my stack spreads into my hand, turning face-up, in FAN_TOTAL_MS;
@@ -81,7 +90,7 @@ export function dealPlan(input: {
   const { seatCount, cardsPerSeat } = input;
   const cribExtras = Math.max(0, input.cribExtras ?? 0);
   const totalMs = input.totalMs ?? DEAL_TOTAL_MS;
-  const cardMs = Math.min(input.cardMs ?? DEAL_CARD_MS, totalMs);
+  const cardMs = Math.min(input.cardMs ?? dealCardMsFor(input.seatCount), totalMs);
   if (seatCount < 1 || cardsPerSeat < 0) return { deal: [], fan: [], dealMs: 0, totalMs: 0 };
   const dealer = ((input.dealerIndex % seatCount) + seatCount) % seatCount;
   const stackSeat = input.stackSeat ?? null;

@@ -5,9 +5,10 @@
 // by scripts/test-phase3.ts. The square layout is the default for 2- and
 // 3-player tables that aren't Muggins (chooseTableLayout, at the end).
 
+import { laneOf } from "@/lib/boardLayout";
 import { countingOrder } from "@/lib/countingN";
 import { displayedRun, type PlayEvent } from "@/lib/pegging";
-import { seatPlaces } from "@/lib/phase3";
+import { seatPlaces, teamOfPosition } from "@/lib/phase3";
 
 // Where a seat is on MY screen: me at the bottom, then clockwise -- the next
 // player on my left, the one across at the top, the last on my right.
@@ -124,6 +125,53 @@ export function countingReveals(input: {
   return { hands, crib: done || step >= players.length };
 }
 
+// EACH PLAYER'S BOARD LANE (CribbageBoard) and so their avatar ring colour,
+// from the game's own players list (seat order), the same on every screen --
+// never "me first":
+//   * 2 and 3 players: by seat (laneOf) -- the first seat lane 0 (red), the
+//     second lane 1 (blue), the third lane 2 (green);
+//   * 4-player Teams: by team (teamOfPosition: seats 1 and 3 against 2 and
+//     4) -- team 1 lane 0 (red), team 2 lane 1 (blue), both partners alike,
+//     each team pegging its team score; the third lane stays drawn but empty.
+// null: not a player in that list.
+export function laneForPlayer(input: { players: readonly string[]; userId: string; teams: boolean }): number | null {
+  const { players, userId, teams } = input;
+  if (teams && players.length === 4) {
+    const team = teamOfPosition([...players], userId);
+    return team === null ? null : team - 1;
+  }
+  return laneOf(players, userId);
+}
+
+// THE SQUARE TABLE'S SEATS AROUND THE MIDDLE, keyed on whether the top
+// (across) seat is filled alongside the side seats (4 players):
+//   * no top seat (3 players): the side players' name tags along the top of
+//     the middle -- just under the header, as the 3-player layout has them;
+//     the side columns stop above my played cards; the across dealer's piles
+//     (2 players only) hang below their hand as in mockup 03;
+//   * a top seat (4 players): the top player's hand row takes the row under
+//     the header, so the side tags sit under that row, just above each side
+//     column (mockups 04 and 05); the top dealer's piles sit level with
+//     their hand, as big as their card backs, so nothing hangs into the tags;
+//     and each side column runs the middle's full height (beside my played
+//     cards), which keeps the side cards at the 3-player size.
+export type RingLayout = {
+  hasTop: boolean;
+  sideTags: "under-header" | "under-top-row";
+  sideColumns: "above-mine" | "full-height";
+  acrossPiles: "hanging" | "level";
+};
+
+export function ringLayout(input: { top: boolean; sides: boolean }): RingLayout {
+  const fourSeats = input.top && input.sides;
+  return {
+    hasTop: input.top,
+    sideTags: fourSeats ? "under-top-row" : "under-header",
+    sideColumns: fourSeats ? "full-height" : "above-mine",
+    acrossPiles: fourSeats ? "level" : "hanging",
+  };
+}
+
 // THE STARTER IN COUNTING (and on a final board's counting picture): where
 // the cut starter sits, from the DEALER's seat on my screen -- not the player
 // count, so any table size reads it the same way.
@@ -144,10 +192,13 @@ export function countingStarterPlace(dealer: SeatPosition | null, counting: bool
 // discard, pegging and its hold, counting through Next Hand) and a won
 // game's final board; everything else is the classic table: the waiting
 // room, the cut for the deal, a game that ended any other way, Muggins and
-// 4 players.
+// (by default) 4 players.
 //   * 2 and 3 players: square by default; ?layout=classic on the page's URL
 //     gives the classic table (?layout=square, a missing or any other value
 //     is the default). URL only, nothing saved.
+//   * 4 players: classic by default; square only for Teams with
+//     ?layout=square (the 4-player square layout is still being tried out;
+//     4-player Solo has no square layout).
 export type TableLayoutChoice = "square" | "classic";
 
 export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "counting" | "won" | "ended" | "other";
@@ -155,16 +206,24 @@ export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "coun
 const SQUARE_SCREENS: ReadonlySet<TableScreen> = new Set(["discard", "pegging", "counting", "won"]);
 
 // The table as a whole uses the square layout (for the screens it covers).
-export function isSquareTable(input: { layoutParam: string | null; playerCount: number; isMuggins: boolean }): boolean {
+export function isSquareTable(input: {
+  layoutParam: string | null;
+  playerCount: number;
+  isMuggins: boolean;
+  // A 4-player table in team_mode 'teams'.
+  teams?: boolean;
+}): boolean {
   if (input.isMuggins) return false;
-  if (input.playerCount !== 2 && input.playerCount !== 3) return false;
-  return input.layoutParam !== "classic";
+  if (input.playerCount === 2 || input.playerCount === 3) return input.layoutParam !== "classic";
+  if (input.playerCount === 4) return !!input.teams && input.layoutParam === "square";
+  return false;
 }
 
 export function chooseTableLayout(input: {
   layoutParam: string | null;
   playerCount: number;
   isMuggins: boolean;
+  teams?: boolean;
   screen: TableScreen;
 }): TableLayoutChoice {
   return isSquareTable(input) && SQUARE_SCREENS.has(input.screen) ? "square" : "classic";

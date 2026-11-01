@@ -32,6 +32,8 @@ import {
   seatGeometry,
   countingReveals,
   countingStarterPlace,
+  laneForPlayer,
+  ringLayout,
   seatPositionOf,
   seatsOnScreen,
   type TableScreen,
@@ -47,6 +49,8 @@ import {
 } from "../lib/boardLayout";
 import {
   DEAL_CARD_MS,
+  DEAL_CARD_MS_FOUR,
+  dealCardMsFor,
   DEAL_TOTAL_MS,
   FAN_TOTAL_MS,
   TOSS_CARD_MS,
@@ -572,6 +576,129 @@ check("layout: 2 and 3 players follow the same rule; other table sizes never squ
     }
   }
 });
+check("layout: 4-player Teams -- square only with ?layout=square, on its screens", () => {
+  const teams4 = (layoutParam: string | null, screen: TableScreen, isMuggins = false) =>
+    chooseTableLayout({ layoutParam, playerCount: 4, isMuggins, teams: true, screen });
+  for (const s of SQUARE_SCREENS) strictEqual(teams4("square", s), "square", s);
+  for (const s of CLASSIC_SCREENS) strictEqual(teams4("square", s), "classic", s);
+  // By default (and any other value, and ?layout=classic): classic.
+  for (const param of [null, "classic", "x", "", "Square"]) {
+    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(teams4(param, s), "classic", `${param} ${s}`);
+  }
+  // Muggins never; 4-player Solo (not Teams) never.
+  for (const s of SQUARE_SCREENS) {
+    strictEqual(teams4("square", s, true), "classic", s);
+    strictEqual(chooseTableLayout({ layoutParam: "square", playerCount: 4, isMuggins: false, teams: false, screen: s }), "classic");
+  }
+  strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false, teams: true }), true);
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false, teams: true }), false);
+  // The teams flag changes nothing for 2 and 3 players.
+  for (const param of [null, "square", "classic"]) {
+    for (const n of [2, 3]) {
+      strictEqual(
+        isSquareTable({ layoutParam: param, playerCount: n, isMuggins: false, teams: true }),
+        isSquareTable({ layoutParam: param, playerCount: n, isMuggins: false }),
+        `${n}p ${param}`
+      );
+    }
+  }
+});
+
+// 4-PLAYER TEAMS ON THE SQUARE TABLE: me at the bottom, then clockwise left,
+// top (my partner) and right. (Its own block: P4 here is a different list.)
+{
+const P4 = ["a", "b", "c", "d"];
+check("square table, 4 players: left, top (partner), right from every viewpoint", () => {
+  deepStrictEqual(seatsOnScreen(P4, "a"), { bottom: "a", left: "b", top: "c", right: "d" });
+  deepStrictEqual(seatsOnScreen(P4, "b"), { bottom: "b", left: "c", top: "d", right: "a" });
+  deepStrictEqual(seatsOnScreen(P4, "c"), { bottom: "c", left: "d", top: "a", right: "b" });
+  deepStrictEqual(seatsOnScreen(P4, "d"), { bottom: "d", left: "a", top: "b", right: "c" });
+  for (const me of P4) {
+    // My partner (same team) is always across.
+    const top = seatsOnScreen(P4, me).top!;
+    strictEqual(teamOfPosition(P4, top), teamOfPosition(P4, me), me);
+    strictEqual(seatPositionOf(P4, me, me), "bottom");
+  }
+});
+check("board lanes: Teams by team (red 0 / blue 1) for every seat and viewer; 2/3 players by seat", () => {
+  for (const id of ["a", "c"]) strictEqual(laneForPlayer({ players: P4, userId: id, teams: true }), 0, id);
+  for (const id of ["b", "d"]) strictEqual(laneForPlayer({ players: P4, userId: id, teams: true }), 1, id);
+  strictEqual(laneForPlayer({ players: P4, userId: "z", teams: true }), null);
+  // From the game's own list (the same array on every screen), never from a
+  // viewer's "me first" order: seatOrderFrom(P4, me) would put every viewer
+  // in lane 0.
+  for (const me of P4) {
+    const meFirst = seatOrderFrom(P4, me);
+    strictEqual(laneForPlayer({ players: meFirst, userId: me, teams: true }), 0);
+  }
+  strictEqual(laneForPlayer({ players: P4, userId: "b", teams: true }), 1);
+  // 2 and 3 players (and teams off): the seat lanes, as before.
+  deepStrictEqual(["a", "b", "c"].map((id) => laneForPlayer({ players: ["a", "b", "c"], userId: id, teams: false })), [0, 1, 2]);
+  deepStrictEqual(["a", "b"].map((id) => laneForPlayer({ players: ["a", "b"], userId: id, teams: true })), [0, 1]);
+  strictEqual(laneForPlayer({ players: P4, userId: "d", teams: false }), null);
+});
+check("ring layout: side names and columns keyed on whether the top seat is filled", () => {
+  deepStrictEqual(ringLayout({ top: false, sides: true }), {
+    hasTop: false,
+    sideTags: "under-header",
+    sideColumns: "above-mine",
+    acrossPiles: "hanging",
+  });
+  deepStrictEqual(ringLayout({ top: true, sides: true }), {
+    hasTop: true,
+    sideTags: "under-top-row",
+    sideColumns: "full-height",
+    acrossPiles: "level",
+  });
+  // 2 players: the top seat alone -- its piles hang, as always.
+  strictEqual(ringLayout({ top: true, sides: false }).acrossPiles, "hanging");
+});
+check("square table, 4 players: each seat's played cards, from every view", () => {
+  // Dealer d: a leads. One run: a b c d a.
+  const plays: PlayEvent[] = ["a", "b", "c", "d", "a"].map((u, i) => ({
+    seq: i + 1, segment: 0, user_id: u, kind: "play", card: ["AH", "2H", "3H", "4H", "5H"][i], count_after: 0,
+  }));
+  for (const me of P4) {
+    const { seats } = playedBySeat({ plays, playSegment: 0, handOver: false, players: P4, myId: me });
+    const on = seatsOnScreen(P4, me);
+    for (const pos of ["bottom", "left", "top", "right"] as const) {
+      deepStrictEqual(seats[pos].cards, plays.filter((p) => p.user_id === on[pos]).map((p) => p.card), `${me} ${pos}`);
+    }
+  }
+});
+check("counting reveals, 4 players: clockwise from the dealer's left, the dealer last, crib at step 4", () => {
+  for (const dealer of P4) {
+    const order = countingOrder(P4, dealer);
+    strictEqual(order.at(-1), dealer);
+    strictEqual(order[0], P4[(P4.indexOf(dealer) + 1) % 4]);
+    for (let step = 0; step <= 4; step++) {
+      const r = countingReveals({ players: P4, dealerId: dealer, step, done: false });
+      order.forEach((id, k) => strictEqual(r.hands[id], step >= k, `${dealer} ${step} ${id}`));
+      strictEqual(r.crib, step >= 4);
+    }
+    const done = countingReveals({ players: P4, dealerId: dealer, step: 0, done: true });
+    strictEqual(Object.values(done.hands).every(Boolean) && done.crib, true);
+  }
+});
+check("starter in counting, 4 players: my deal above my hand; left, top or right in the middle", () => {
+  for (const me of P4) {
+    for (const dealer of P4) {
+      strictEqual(
+        countingStarterPlace(seatPositionOf(P4, me, dealer), true),
+        dealer === me ? "above-hand" : "middle",
+        `${me} ${dealer}`
+      );
+    }
+  }
+});
+check("discard toss, 4 players: one card from each of the other three seats, in order", () => {
+  const steps = discardPlan([{ seat: "left", cards: 1 }, { seat: "top", cards: 1 }, { seat: "right", cards: 1 }]);
+  deepStrictEqual(steps.map((s) => s.seat), ["left", "top", "right"]);
+  strictEqual(handSizes(4).discard, 1);
+  strictEqual(cribCountDuringDiscard(4, 0), 0);
+  strictEqual(cribCountDuringDiscard(4, 4), 4);
+});
+}
 
 // 3 PLAYERS ON THE SQUARE TABLE: me at the bottom, the next player clockwise
 // on my left, the one after on my right, nobody across.
@@ -802,6 +929,30 @@ check("deal: 3 seats -- clockwise from the dealer's left, 5 each, then one to th
   deepStrictEqual(plan.deal.filter((s) => s.stack).length, 5);
   strictEqual(plan.fan.length, 5);
   checkTiming(plan);
+});
+check("deal: 4 seats -- 20 cards clockwise from the dealer's left, my 5 stack then fan, 380ms flights", () => {
+  strictEqual(dealCardMsFor(2), DEAL_CARD_MS);
+  strictEqual(dealCardMsFor(3), DEAL_CARD_MS);
+  strictEqual(dealCardMsFor(4), DEAL_CARD_MS_FOUR);
+  // Seats a, b, c, d; I am a (stack seat 0): b left, c top, d right.
+  for (const [dealerIndex, firstFour] of [
+    [0, [1, 2, 3, 0]], // I deal: left, top, right, me
+    [1, [2, 3, 0, 1]], // left deals: top first
+    [2, [3, 0, 1, 2]], // top deals: right first
+    [3, [0, 1, 2, 3]], // right deals: me first
+  ] as const) {
+    const plan = dealPlan({ seatCount: 4, dealerIndex, cardsPerSeat: 5, cribExtras: cribCountDuringDiscard(4, 0), stackSeat: 0 });
+    strictEqual(plan.deal.length, 20);
+    deepStrictEqual(dealTargets(plan).slice(0, 4), [...firstFour], `dealer ${dealerIndex}`);
+    deepStrictEqual(dealCounts(plan), { 0: 5, 1: 5, 2: 5, 3: 5 });
+    deepStrictEqual(plan.deal.filter((s) => s.stack).map((s) => s.target), [0, 0, 0, 0, 0]);
+    strictEqual(plan.fan.length, 5);
+    strictEqual(plan.deal[0].durationMs, 380);
+    // 19 gaps of (3000 - 380) / 19 = ~137.9ms; the last lands at 3000.
+    strictEqual(Math.abs(plan.deal[1].delayMs - 2620 / 19) < 0.001, true);
+    strictEqual(Math.abs(plan.dealMs - 3000) < 0.01, true);
+    checkTiming(plan);
+  }
 });
 check("deal: 3 seats, the dealer at each of my bottom/left/right -- clockwise from the dealer's left, then the crib card", () => {
   // Seats in order a, b, c; I am a (stack seat 0). On my screen b is left, c right.

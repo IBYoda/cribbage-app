@@ -692,6 +692,12 @@ body {
   padding-inline: 5px;
   font-size: 0.875rem;
 }
+/* 4 players: the top player's status word ("Discarded", "Picking…") widens
+   the centre, so the controls keep their own width (never overlapped) and
+   the columns stay equal -- the centre centred -- whenever there's room. */
+.sq-header--seat-status {
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+}
 /* The across player's hand. Its piles (when they deal) hang below it, at
    the sides, over the top of the middle -- hence the z-index. */
 .sq-opponent-row {
@@ -1167,6 +1173,126 @@ body {
 .sq-ring--final .center-count__pill {
   height: 0;
   min-height: 0;
+}
+/* -- 4 PLAYERS (Teams, ?layout=square; ringLayout in lib/tableLayout.ts).
+      The top player's hand is the across row (as with 2 players), so the
+      side tags at the top of the middle sit just under it, above each side
+      column (mockups 04 and 05). Two changes keep that clear and the side
+      cards at their 3-player size:
+        * the top dealer's crib and starter sit level with the top hand, as
+          big as its backs (0.72 of a hand card, not 2 players' 0.88 /
+          0.76), so they never hang into the tag row;
+        * each side column runs the middle's full height, beside my played
+          cards: a dealer's column (pile, 5-card stack, pile: 4.92 side cards
+          plus two 4px gaps) needs ~227px at 375x667 against ~247px there.
+      The centre: the top player's played cards (upside down) above the
+      side seats' and the count, mine below -- 1.25 + 2.68 + 1.4 = 5.33
+      played-card bases down the middle. */
+.sq-across-pile.sq-across-pile--level {
+  --pile-w: var(--sq-back-w);
+  top: 0;
+}
+.sq-ring--four {
+  --ring-card-w: min(calc(var(--hand-w) * 0.79), calc((100cqh - var(--ring-tag-h)) / 5.1));
+}
+.sq-ring--four .sq-ring__seat {
+  grid-row: 1 / 3;
+}
+.sq-ring__top {
+  display: flex;
+  justify-content: center;
+}
+.sq-ring--four .seat-played {
+  --spc-base: min(
+    var(--hand-w),
+    calc((100cqw - 2 * var(--ring-side-w) - 2 * var(--ring-gap) - 8px - var(--ring-center-w)) / 2.49),
+    calc((100cqh - var(--ring-tag-h) - 16px) / 5.33)
+  );
+}
+.sq-ring--four.sq-ring--final .seat-played {
+  --spc-base: min(
+    var(--hand-w),
+    calc((100cqw - 2 * var(--ring-side-w) - 2 * var(--ring-gap) - 8px - var(--ring-center-w)) / 2.49),
+    calc((100cqh - var(--ring-tag-h) - 110px) / 5.33)
+  );
+}
+/* The 4-player final boards (a pegging win carries four seats of run cards,
+   a count win every hand and the starter) use the compact result, as the
+   classic short-screen final board: a one-line banner, the ready line beside
+   New Game -- ~90px, not ~180px. */
+.sq-ring--four .result-stage {
+  gap: 6px;
+  /* Never wider than the centre column (the side stacks are either side). */
+  max-width: 100%;
+  min-width: 0;
+}
+.sq-ring--four .result-stage > * {
+  max-width: 100%;
+}
+.sq-ring--four .result-stage__actions {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  min-width: 0;
+  gap: 8px;
+}
+.sq-ring--four .result-stage__actions > p,
+.sq-ring--four .result-banner,
+.sq-ring--four .result-banner p {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sq-ring--four .result-stage__actions > button {
+  flex-shrink: 0;
+}
+.sq-ring--four .result-banner {
+  padding: 4px 12px;
+}
+.sq-ring--four .result-banner p {
+  font-size: 14px;
+}
+/* Counting: when the crib is fanned at a side dealer's seat, its empty deck
+   place closes up (SidePile), and the column -- fan (2.44 side cards) and
+   hand (2.92) -- keeps within the middle. */
+.sq-ring--four .sq-side__pile-slot:empty {
+  min-height: 0;
+}
+.sq-ring--four.sq-ring--count {
+  --ring-card-w: min(calc(var(--hand-w) * 0.79), calc((100cqh - var(--ring-tag-h) - 10px) / 5.36));
+}
+/* Very long names: the recap and the ready / waiting lines keep to one line
+   each (ellipsis), so the counting text never runs past the middle -- nor
+   sideways over the side stacks (the column keeps to the centre's width). */
+.sq-ring--four .sq-count-column {
+  min-width: 0;
+  max-width: 100%;
+}
+.sq-ring--four .count-stage,
+.sq-ring--four .count-stage__text,
+.sq-ring--four .count-stage__recap,
+.sq-ring--four .count-stage__actions {
+  min-width: 0;
+  max-width: 100%;
+}
+/* The ready line beside Next Hand, never on a line of its own. */
+.sq-ring--four .count-stage__actions {
+  flex-wrap: nowrap;
+}
+.sq-ring--four .count-stage__actions > button {
+  flex-shrink: 0;
+}
+.sq-ring--four .count-stage__recap > *,
+.sq-ring--four .count-stage__text > p + p,
+.sq-ring--four .count-stage__actions > p {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sq-side {
   display: flex;
