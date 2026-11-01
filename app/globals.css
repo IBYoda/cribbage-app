@@ -714,6 +714,20 @@ body {
 .sq-opp-card + .sq-opp-card {
   margin-left: calc(var(--sq-back-w) * -0.5);
 }
+/* Counting: their four kept cards spread wider -- two-thirds of each card
+   shows, the newer card on top -- so a face-up card's corner always reads. */
+.sq-opp-hand--open {
+  width: calc(var(--sq-back-w) + (var(--n, 1) - 1) * var(--sq-back-w) * 0.67);
+}
+.sq-opp-hand--open .sq-opp-card + .sq-opp-card {
+  margin-left: calc(var(--sq-back-w) * -0.33);
+}
+/* The turn-over (FlipCard): instant with reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .sq-opp-hand .transition-transform {
+    transition: none;
+  }
+}
 /* The across dealer's piles, placed from the table's centre line (not from
    their hand, whose width changes as they play): the deck on my left, the
    crib on my right, a little below the top of their hand. */
@@ -736,6 +750,20 @@ body {
 }
 .sq-across-pile--right {
   left: calc(50% + var(--hand-w) * 1.84 - var(--pile-w) / 2);
+}
+/* The across crib face-up (its count is up): its four cards fanned from the
+   pile's place, each showing its corner (36% of a card, as the classic crib
+   fan), the last one whole -- about 123px wide at 502px, 90px at 375px, so
+   it stays on screen from the crib's place on my right. */
+.sq-across-crib-fan {
+  display: flex;
+}
+.sq-across-crib-card {
+  flex-shrink: 0;
+  width: var(--pile-w);
+}
+.sq-across-crib-card + .sq-across-crib-card {
+  margin-left: calc(var(--pile-w) * -0.64);
 }
 .sq-middle {
   container-type: size;
@@ -795,6 +823,41 @@ body {
 }
 .square-middle > :last-child {
   margin-bottom: calc(var(--hand-w) * -0.155);
+}
+/* Counting: no cards here -- the score flash's place, then the counting
+   stage's text, buttons and recap, centred. */
+.square-middle--count {
+  justify-content: center;
+  gap: 8px;
+}
+.square-middle--count > :last-child {
+  margin-bottom: 0;
+}
+.sq-count-flash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+}
+/* The final board after a pegging win: the run in front of each seat, the
+   count, then the result (banner, ready lines, New Game) in the centre --
+   so the played cards leave room for the result (~230px with the count and
+   a "Waiting for..." line), and my row doesn't reach into the pile row.
+   The count has no pill here: its line takes no height, and the score flash
+   (the winning peg's) shows over it while it lasts. */
+.square-middle--final .seat-played {
+  --spc-base: min(var(--hand-w), calc((100cqh - 230px) / 2.69), calc(100cqw / 3.01));
+}
+.square-middle--final > .center-count,
+.square-middle--final > :last-child {
+  margin-bottom: 0;
+}
+.square-middle--final > .center-count {
+  gap: 0;
+}
+.square-middle--final .center-count__pill {
+  height: 0;
+  min-height: 0;
 }
 .seat-played {
   /* The base card: a hand card, unless the middle is too short for both

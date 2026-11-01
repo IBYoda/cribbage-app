@@ -23,7 +23,7 @@ import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
-import { countingView, type CountingView } from "@/components/table/countingView";
+import { countingView, type CardSlot, type CountingView } from "@/components/table/countingView";
 import { countingViewN } from "@/lib/countingN";
 import { CountStage, SlotCards } from "@/components/table/CountStage";
 import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
@@ -2452,6 +2452,147 @@ export default function TablePage() {
     </p>
   );
 
+  // The counting stage in the middle: headline, the hand being counted
+  // (`subject`), Confirm / Next Hand, the recap. The square view passes no
+  // subject (its cards stay at the seats); everything else is the same.
+  const countActions = view
+    ? isDone ? (
+            <>
+              {/* NEXT HAND. Every state comes from ready_by on the
+                  game row, so a refresh shows the same thing. The tap
+                  that completes the set deals; the hand_no change
+                  then resets both screens. */}
+              {!iAmReady && othersReady.length > 0 && (
+                <p className="text-sm font-medium">
+                  {othersReady.map(nameOf).join(", ")} {othersReady.length === 1 ? "is" : "are"} ready
+                </p>
+              )}
+              <button
+                onClick={handleNextHand}
+                disabled={countBusy || iAmReady}
+                className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
+              >
+                {countBusy ? "Sending..." : "Next Hand"}
+              </button>
+              {iAmReady && (
+                <p className="text-sm text-zinc-500">
+                  Waiting for {othersNotReady.map(nameOf).join(", ")}…
+                </p>
+              )}
+            </>
+          ) : view.myTurn ? (
+            <button
+              onClick={() => handleConfirmCount(countStep)}
+              disabled={!view.canConfirm || countBusy}
+              className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
+            >
+              {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
+            </button>
+          ) : view.waitingOn ? (
+            <p className="text-sm text-zinc-500">{view.waitingOn}</p>
+          ) : undefined
+    : undefined;
+  const countStageFor = (subject: CardSlot) =>
+    view ? (
+      <CountStage
+        headline={view.headline}
+        hint={isDone ? `Next dealer: ${nextDealerName}` : view.hint}
+        subject={subject}
+        subjectLabel={view.middleLabel}
+        recap={view.recap}
+        recapKeys={viewN ? viewN.recap.map((r) => r.key) : undefined}
+        variant={viewN ? "n" : undefined}
+        error={countStatus === "error" ? countMessage : null}
+        actions={countActions}
+      />
+    ) : null;
+
+  // THE RESULT and New Game, below the final board's run -- the same in the
+  // square view's final board.
+  const resultStage = (
+    <div className="result-stage">
+      {/* THE RESULT. Shown once a game has ended by a win and nothing
+          has replaced it -- a reload or a late reconnect finds it via
+          refreshTableState. Scores are read live from the roster, so
+          the winner's 121 shows even if its UPDATE lands after this. */}
+      {finishedGame && (
+        <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 surface:border-violet-300 px-6 py-3 text-center">
+          <p className="text-lg font-semibold">
+            {isPhase3Table
+              ? winHeadline({
+                  players: finishedGame.players,
+                  winnerId: finishedGame.winner_id,
+                  myId: session.user.id,
+                  nameOf: (id) => {
+                    const m = members.find((x) => x.user_id === id);
+                    return m ? displayName(m) : null;
+                  },
+                  teams: isTeams,
+                })
+              : finishedGame.winner_id === session.user.id
+                ? "You win!"
+                : `${winner ? displayName(winner) : "A player who has left"} wins!`}
+            {/* How it ended: the winner's last award IS the winning one,
+                since nothing can score after the game ends. */}
+            {/* Not on a Muggins table: it shows no score anywhere. */}
+            {winner && !isMuggins && (
+              <>
+                {" "}
+                {winner.score}
+                {/* With count numbers hidden, a count win shows
+                    only the score: no breakdown, no (+N). */}
+                {winner.last_reason &&
+                  !(hideCountNumbers && isCountReason(winner.last_reason)) &&
+                  ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
+              </>
+            )}
+          </p>
+        </div>
+      )}
+      {/* NEW GAME, after a won match: the Next Hand pattern. The other
+          player's tap shows above the button; mine greys it out, with
+          who we're waiting for below. A repeat tap is quiet server-side
+          too. Leave stays available throughout. */}
+      <>
+        <div className="result-stage__actions">
+          {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
+            <p className="text-sm font-medium">
+              {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
+              {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
+            </p>
+          )}
+          <button
+            onClick={handleStartNewGame}
+            disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
+            className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
+          >
+            {gameStatus === "creating"
+              ? newGameGated && othersNotReadyForNewGame.length > 0
+                ? "Sending..."
+                : "Dealing..."
+              : "New Game"}
+          </button>
+          {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
+            <p className="text-sm text-zinc-500">
+              Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
+            </p>
+          )}
+          {/* 3 and 4 players: who deals the rematch (no cut). */}
+          {rematchDealerId && (
+            <p className="text-xs text-zinc-500">
+              Next dealer: {rematchDealerId === session.user.id ? "you" : nameOf(rematchDealerId)}
+            </p>
+          )}
+        </div>
+        {!canStartGame && (
+          <p className="text-sm text-zinc-500">
+            Needs exactly {capacity} players ({members.length} here).
+          </p>
+        )}
+      </>
+    </div>
+  );
+
   const middle = (
     <>
       {middleOverlays}
@@ -2500,55 +2641,7 @@ export default function TablePage() {
                 face-up throughout (the opponent's here, mine in my hand
                 row); each confirmed count leaves a small recap line -- and
                 nothing shows a count's points before its confirm. */}
-            {view && (
-              <CountStage
-                headline={view.headline}
-                hint={isDone ? `Next dealer: ${nextDealerName}` : view.hint}
-                subject={view.middle}
-                subjectLabel={view.middleLabel}
-                recap={view.recap}
-                recapKeys={viewN ? viewN.recap.map((r) => r.key) : undefined}
-                variant={viewN ? "n" : undefined}
-                error={countStatus === "error" ? countMessage : null}
-                actions={
-                  isDone ? (
-                    <>
-                      {/* NEXT HAND. Every state comes from ready_by on the
-                          game row, so a refresh shows the same thing. The tap
-                          that completes the set deals; the hand_no change
-                          then resets both screens. */}
-                      {!iAmReady && othersReady.length > 0 && (
-                        <p className="text-sm font-medium">
-                          {othersReady.map(nameOf).join(", ")} {othersReady.length === 1 ? "is" : "are"} ready
-                        </p>
-                      )}
-                      <button
-                        onClick={handleNextHand}
-                        disabled={countBusy || iAmReady}
-                        className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
-                      >
-                        {countBusy ? "Sending..." : "Next Hand"}
-                      </button>
-                      {iAmReady && (
-                        <p className="text-sm text-zinc-500">
-                          Waiting for {othersNotReady.map(nameOf).join(", ")}…
-                        </p>
-                      )}
-                    </>
-                  ) : view.myTurn ? (
-                    <button
-                      onClick={() => handleConfirmCount(countStep)}
-                      disabled={!view.canConfirm || countBusy}
-                      className="min-h-10 rounded bg-foreground px-4 text-sm font-medium text-background disabled:opacity-40"
-                    >
-                      {countBusy && view.canConfirm ? "Confirming..." : "Confirm Count"}
-                    </button>
-                  ) : view.waitingOn ? (
-                    <p className="text-sm text-zinc-500">{view.waitingOn}</p>
-                  ) : undefined
-                }
-              />
-            )}
+            {view && countStageFor(view.middle)}
           </>
         )
       ) : inWaitingRoom ? (
@@ -2599,87 +2692,7 @@ export default function TablePage() {
               nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
             />
           )}
-          <div className="result-stage">
-            {/* THE RESULT. Shown once a game has ended by a win and nothing
-                has replaced it -- a reload or a late reconnect finds it via
-                refreshTableState. Scores are read live from the roster, so
-                the winner's 121 shows even if its UPDATE lands after this. */}
-            {finishedGame && (
-              <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 surface:border-violet-300 px-6 py-3 text-center">
-                <p className="text-lg font-semibold">
-                  {isPhase3Table
-                    ? winHeadline({
-                        players: finishedGame.players,
-                        winnerId: finishedGame.winner_id,
-                        myId: session.user.id,
-                        nameOf: (id) => {
-                          const m = members.find((x) => x.user_id === id);
-                          return m ? displayName(m) : null;
-                        },
-                        teams: isTeams,
-                      })
-                    : finishedGame.winner_id === session.user.id
-                      ? "You win!"
-                      : `${winner ? displayName(winner) : "A player who has left"} wins!`}
-                  {/* How it ended: the winner's last award IS the winning one,
-                      since nothing can score after the game ends. */}
-                  {/* Not on a Muggins table: it shows no score anywhere. */}
-                  {winner && !isMuggins && (
-                    <>
-                      {" "}
-                      {winner.score}
-                      {/* With count numbers hidden, a count win shows
-                          only the score: no breakdown, no (+N). */}
-                      {winner.last_reason &&
-                        !(hideCountNumbers && isCountReason(winner.last_reason)) &&
-                        ` — ${winner.last_reason} (+${winner.last_points ?? 0})`}
-                    </>
-                  )}
-                </p>
-              </div>
-            )}
-            {/* NEW GAME, after a won match: the Next Hand pattern. The other
-                player's tap shows above the button; mine greys it out, with
-                who we're waiting for below. A repeat tap is quiet server-side
-                too. Leave stays available throughout. */}
-            <>
-              <div className="result-stage__actions">
-                {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
-                  <p className="text-sm font-medium">
-                    {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
-                    {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
-                  </p>
-                )}
-                <button
-                  onClick={handleStartNewGame}
-                  disabled={gameStatus === "creating" || !canStartGame || iAmReadyForNewGame}
-                  className="min-h-11 rounded bg-foreground px-6 text-lg text-background disabled:opacity-40"
-                >
-                  {gameStatus === "creating"
-                    ? newGameGated && othersNotReadyForNewGame.length > 0
-                      ? "Sending..."
-                      : "Dealing..."
-                    : "New Game"}
-                </button>
-                {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
-                  <p className="text-sm text-zinc-500">
-                    Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
-                  </p>
-                )}
-                {/* 3 and 4 players: who deals the rematch (no cut). */}
-                {rematchDealerId && (
-                  <p className="text-xs text-zinc-500">
-                    Next dealer: {rematchDealerId === session.user.id ? "you" : nameOf(rematchDealerId)}
-                  </p>
-                )}
-              </div>
-              {!canStartGame && (
-                <p className="text-sm text-zinc-500">
-                  Needs exactly {capacity} players ({members.length} here).
-                </p>
-              )}
-            </>
-          </div>
+          {resultStage}
         </div>
       )}
     </>
@@ -2837,10 +2850,11 @@ export default function TablePage() {
     ) : null;
 
   // THE SQUARE SCREEN (PRD item 31, slice 1) -- only with ?layout=square,
-  // only on a 2-player table that isn't Muggins, and only from the discard
-  // until pegging ends (see below). Everything else -- the cut for the deal,
-  // counting, the final board, Muggins, 3 and 4 players -- is the table
-  // below, unchanged.
+  // only on a 2-player table that isn't Muggins, and only for a dealt hand:
+  // the discard, pegging and its hold, and counting through Next Hand (see
+  // below). Everything else -- the cut for the deal, the waiting room, the
+  // final board after a win, Muggins, 3 and 4 players -- is the table below,
+  // unchanged.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
   // the count, whose turn, Go, the hold, the score flash, my hand and its
@@ -2849,9 +2863,10 @@ export default function TablePage() {
   // deck on the right, from their side); no "D" anywhere. The board strip is
   // collapsed (showBoard={false}) until the board slice.
   //
-  // From the deal until pegging ends: the discard (phase 'discard'; the
-  // starter is cut inside the last discard, so there is no step between),
-  // pegging (phase 'play'), and the hold after it. In the discard the middle
+  // The whole dealt hand: the discard (phase 'discard'; the starter is cut
+  // inside the last discard, so there is no step between), pegging (phase
+  // 'play'), the hold after it, and counting ('counting', 'done') once
+  // Count hands is tapped -- until Next Hand deals. In the discard the middle
   // keeps the same shape -- the seats' (empty) rows, and CenterCount with the
   // discard's prompt in place of its pill -- so nothing moves when pegging
   // starts, and the score flash stays mounted across that change.
@@ -2861,9 +2876,23 @@ export default function TablePage() {
     isTwoPlayerTable &&
     !isMuggins &&
     isActive &&
-    (phase === "discard" || pegView) &&
+    (phase === "discard" || pegView || (isCountingOrDone && !!view)) &&
     !!squareOpponent;
   if (squareView && activeGame && squareOpponent) {
+    // COUNTING (counting and done, after Count hands): no cards in the
+    // middle. Each hand at its seat -- mine face-up in my hand row (the same
+    // `hand` as the classic screen), theirs at the top, turned face-up in
+    // place once their hand's count comes up (the pone counts at step 0, the
+    // dealer at step 1) and staying up; the crib at the dealer's seat,
+    // face-up there from its count on (view.cribFan); the starter on the
+    // deck throughout. The middle keeps the classic counting stage's text,
+    // recap and buttons (countStageFor, with no subject).
+    const squareCount = isCountingOrDone && !!view;
+    const oppCountStep = handDealerId === squareOpponent.user_id ? 1 : 0;
+    const oppHand =
+      squareCount && view && view.middle.kind === "full" ? view.middle.cards : null;
+    const oppHandUp = isDone || countStep >= oppCountStep;
+    const cribFan = squareCount && view ? view.cribFan : null;
     const iDealHand = handDealerId === session.user.id;
     const oppName = displayName(squareOpponent);
     const cribCount = cribCountDuringDiscard(playerCount, discardedBy.length);
@@ -2890,13 +2919,32 @@ export default function TablePage() {
           }
           opponent={
             <SquareOpponentHand
-              cardCount={opponentCardCount(squareOpponent.user_id)}
+              cardCount={squareCount ? sizes.kept : opponentCardCount(squareOpponent.user_id)}
+              counting={squareCount ? { cards: oppHand, revealed: oppHandUp } : undefined}
               // They deal: their crib and deck on their side, crib on their
               // left -- my right (seatGeometry("top").crib).
-              piles={iDealHand ? null : { cribCount, starter: starterCard, cribSide: across.crib }}
+              piles={
+                iDealHand
+                  ? null
+                  : {
+                      cribCount: squareCount ? sizes.kept : cribCount,
+                      starter: starterCard,
+                      cribSide: across.crib,
+                      cribCards: cribFan,
+                    }
+              }
             />
           }
           middle={
+            squareCount ? (
+              <>
+                {middleOverlays}
+                <div className="square-middle square-middle--count">
+                  <div className="sq-count-flash">{scoreFlash}</div>
+                  {countStageFor({ kind: "none" })}
+                </div>
+              </>
+            ) : (
             <>
               {middleOverlays}
               <div className="square-middle">
@@ -2929,11 +2977,20 @@ export default function TablePage() {
                 />
               </div>
             </>
+            )
           }
           piles={
             <div className="sq-piles">
               <PileRow
-                crib={iDealHand ? { faceDownCount: cribCount, shownCards: null, dealerIsMe: false } : null}
+                crib={
+                  iDealHand
+                    ? {
+                        faceDownCount: squareCount ? sizes.kept : cribCount,
+                        shownCards: cribFan,
+                        dealerIsMe: false,
+                      }
+                    : null
+                }
                 starter={iDealHand ? { card: starterCard } : null}
               >
                 {pileButtons}
@@ -2941,6 +2998,159 @@ export default function TablePage() {
             </div>
           }
           hand={<div className="sq-hand-row">{hand}</div>}
+          scores={
+            <div className="sq-plates">
+              <ScoreStrip plates={plates.map((p) => ({ ...p, hasDealer: false }))} />
+            </div>
+          }
+          surface={appearance.surface}
+          back={appearance.back}
+        />
+        <Splash splash={splash} onDone={dismissSplash} />
+      </>
+    );
+  }
+
+  // THE SQUARE FINAL BOARD (?layout=square, 2 players, not Muggins): a won
+  // game, from the same finalBoard data as the classic final board. How it
+  // was won picks the picture -- the winner's last award IS the winning one:
+  //   * a hand or crib count, or his heels: the counting picture -- every
+  //     hand face-up at its seat, the crib fanned at the dealer's seat, the
+  //     starter on the deck; no pegging cards and no count;
+  //   * a peg: the pegging picture -- the run on the table in front of its
+  //     players with its count in the centre, the crib face-down at the
+  //     dealer's seat, and at each seat the rest of that hand (the four kept
+  //     minus that player's cards in the run: the board keeps only the last
+  //     run, so cards played in an earlier run of that hand still show here).
+  // The centre is the classic result: the banner, the ready lines, New Game.
+  // No "D". The table below (classic) instead: a game that ended any other
+  // way (no board), a won game whose winner or other player has left the
+  // table, or one with no dealer recorded.
+  const finalWinner = finalBoard ? members.find((m) => m.user_id === finalBoard.winner_id) : undefined;
+  const squareFinal =
+    squareLayout &&
+    isTwoPlayerTable &&
+    !isMuggins &&
+    !!finalBoard &&
+    !!finalBoard.dealer_id &&
+    !!squareOpponent &&
+    !!finalWinner &&
+    finalBoard.players.length === 2 &&
+    finalBoard.players.includes(session.user.id) &&
+    finalBoard.players.includes(squareOpponent.user_id);
+  if (squareFinal && finalBoard && squareOpponent && finalWinner) {
+    const board = finalBoard.board;
+    const winReason = finalWinner.last_reason;
+    const pegWin =
+      !!winReason && !isCountReason(winReason) && winReason !== "his heels" && board.finalRun.length > 0;
+    const iDealt = finalBoard.dealer_id === session.user.id;
+    const across = seatGeometry("top");
+    const oppName = displayName(squareOpponent);
+    const { seats: run } = playedBySeat({
+      plays: board.finalRun,
+      playSegment: 0,
+      handOver: true,
+      players: finalBoard.players,
+      myId: session.user.id,
+    });
+    const myKept = board.hands[session.user.id] ?? null;
+    const oppKept = board.hands[squareOpponent.user_id] ?? null;
+    // At each seat: the whole hand (counting picture), or the rest of it
+    // (pegging picture).
+    const myCards = myKept
+      ? sortHand(pegWin ? myKept.filter((c) => !run.bottom.cards.includes(c)) : myKept)
+      : null;
+    const oppCards = oppKept
+      ? sortHand(pegWin ? oppKept.filter((c) => !run.top.cards.includes(c)) : oppKept)
+      : null;
+    const cribFanned = !pegWin && board.crib ? sortHand(board.crib) : null;
+    const faceDownLeft = (inRun: number) => (pegWin ? Math.max(sizes.kept - inRun, 0) : sizes.kept);
+    return (
+      <>
+        <SquareTableShell
+          showBoard={false}
+          header={
+            <SquareTableHeader
+              code={code}
+              handNo={null}
+              opponent={{ name: oppName, avatarUrl: squareOpponent.avatar_url, saidGo: false }}
+              right={headerRight}
+            />
+          }
+          opponent={
+            <SquareOpponentHand
+              cardCount={oppCards ? oppCards.length : faceDownLeft(run.top.cards.length)}
+              counting={{ cards: oppCards, revealed: true }}
+              piles={
+                iDealt
+                  ? null
+                  : {
+                      cribCount: sizes.kept,
+                      starter: finalBoard.starter_card,
+                      cribSide: across.crib,
+                      cribCards: cribFanned,
+                    }
+              }
+            />
+          }
+          middle={
+            pegWin ? (
+              <>
+                {middleOverlays}
+                <div className="square-middle square-middle--final">
+                  <SeatPlayedCards
+                    cards={run.top.cards}
+                    rotation={across.rotation}
+                    label={`${oppName}'s played cards`}
+                    scale={0.89}
+                  />
+                  <CenterCount
+                    ended
+                    plays={board.finalRun}
+                    playCount={0}
+                    playSegment={0}
+                    currentPlayer={null}
+                    myUserId={session.user.id}
+                    nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+                    flash={scoreFlash}
+                  />
+                  {resultStage}
+                  <SeatPlayedCards
+                    cards={run.bottom.cards}
+                    rotation={seatGeometry("bottom").rotation}
+                    label="Your played cards"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                {middleOverlays}
+                <div className="square-middle square-middle--count">
+                  <div className="sq-count-flash">{scoreFlash}</div>
+                  {resultStage}
+                </div>
+              </>
+            )
+          }
+          piles={
+            <div className="sq-piles">
+              <PileRow
+                crib={iDealt ? { faceDownCount: sizes.kept, shownCards: cribFanned, dealerIsMe: false } : null}
+                starter={iDealt && finalBoard.starter_card ? { card: finalBoard.starter_card } : null}
+              />
+            </div>
+          }
+          hand={
+            <div className="sq-hand-row">
+              <HandRow>
+                {myCards
+                  ? myCards.map((card) => <PlayingCard key={card} card={card} sizing={HAND_CARD} />)
+                  : Array.from({ length: faceDownLeft(run.bottom.cards.length) }, (_, i) => (
+                      <FaceDownCard key={i} sizing={HAND_CARD} />
+                    ))}
+              </HandRow>
+            </div>
+          }
           scores={
             <div className="sq-plates">
               <ScoreStrip plates={plates.map((p) => ({ ...p, hasDealer: false }))} />

@@ -61,9 +61,12 @@ export function CenterCount({
         {hasCards ? shownCount : ""}
       </span>
 
-      {!ended && (
+      {/* Ended (the final board): no pill, but the score flash still has
+          its place, so the winning peg's flash carries over. The pill's slot
+          stays (as false), so the flash keeps its place in the tree. */}
+      {(!ended || flash) && (
         <div className="center-count__pill">
-          {prompt ?? (
+          {!ended && (prompt ?? (
             <p
               className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
                 isMyTurn
@@ -79,7 +82,7 @@ export function CenterCount({
                     ? `${nameFor(currentPlayer)}'s turn`
                     : "Waiting..."}
             </p>
-          )}
+          ))}
           {flash && <div className="center-count__flash">{flash}</div>}
         </div>
       )}
