@@ -25,6 +25,7 @@ import {
   teamOfPosition,
   type PlateRow,
 } from "../lib/phase3";
+import { playedBySeat, seatGeometry, seatsOnScreen } from "../lib/tableLayout";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -392,6 +393,86 @@ check("win headline: a winner or partner who has left; a winner not in the game"
   // Not in the game's players (shouldn't happen): the plain wording.
   strictEqual(winHeadline({ players, winnerId: "z", myId: "a", nameOf: seatedName, teams: true }), "A player who has left wins!");
   strictEqual(winHeadline({ players, winnerId: null, myId: "a", nameOf: seatedName, teams: true }), "A player who has left wins!");
+});
+
+// ---- The square table (lib/tableLayout.ts) -------------------------------------
+check("square table: each seat's rotation and pile sides", () => {
+  deepStrictEqual(seatGeometry("bottom"), { rotation: 0, crib: "left", deck: "right" });
+  deepStrictEqual(seatGeometry("left"), { rotation: 90, crib: "top", deck: "bottom" });
+  deepStrictEqual(seatGeometry("top"), { rotation: 180, crib: "right", deck: "left" });
+  deepStrictEqual(seatGeometry("right"), { rotation: -90, crib: "bottom", deck: "top" });
+});
+check("square table: who sits where (2, 3 and 4 players; a non-player viewer)", () => {
+  deepStrictEqual(seatsOnScreen(["a", "b"], "a"), { bottom: "a", left: null, top: "b", right: null });
+  deepStrictEqual(seatsOnScreen(["a", "b"], "b"), { bottom: "b", left: null, top: "a", right: null });
+  deepStrictEqual(seatsOnScreen(["a", "b", "c"], "b"), { bottom: "b", left: "c", top: null, right: "a" });
+  deepStrictEqual(seatsOnScreen(P4, "s3"), { bottom: "s3", left: "s4", top: "s1", right: "s2" });
+  strictEqual(seatsOnScreen(["a", "b"], "z").bottom, null);
+});
+
+// Plays for the square-table checks: "me" and "op", either one dealing.
+const sq = (seq: number, segment: number, user_id: string, card: string | null, count_after = 0): PlayEvent => ({
+  seq, segment, user_id, kind: card ? "play" : "go", card, count_after,
+});
+const seatCards = (r: ReturnType<typeof playedBySeat>) => ({
+  bottom: r.seats.bottom.cards, top: r.seats.top.cards, left: r.seats.left.cards, right: r.seats.right.cards,
+});
+check("square table, 2 players: I deal (the opponent leads) -- each seat's cards in play order", () => {
+  const plays = [sq(1, 0, "op", "KH", 10), sq(2, 0, "me", "5D", 15), sq(3, 0, "op", "4C", 19), sq(4, 0, "me", "2S", 21)];
+  for (const players of [["me", "op"], ["op", "me"]]) {
+    const r = playedBySeat({ plays, playSegment: 0, handOver: false, players, myId: "me" });
+    deepStrictEqual(seatCards(r), { bottom: ["5D", "2S"], top: ["KH", "4C"], left: [], right: [] });
+    strictEqual(r.seats.bottom.userId, "me");
+    strictEqual(r.seats.top.userId, "op");
+    strictEqual(r.finished, false);
+  }
+  // The other screen: the same run, the seats swapped.
+  const theirs = playedBySeat({ plays, playSegment: 0, handOver: false, players: ["me", "op"], myId: "op" });
+  deepStrictEqual(seatCards(theirs), { bottom: ["KH", "4C"], top: ["5D", "2S"], left: [], right: [] });
+});
+check("square table, 2 players: the opponent deals (I lead)", () => {
+  const plays = [sq(1, 0, "me", "7H", 7), sq(2, 0, "op", "8D", 15), sq(3, 0, "me", "9C", 24)];
+  const r = playedBySeat({ plays, playSegment: 0, handOver: false, players: ["op", "me"], myId: "me" });
+  deepStrictEqual(seatCards(r), { bottom: ["7H", "9C"], top: ["8D"], left: [], right: [] });
+});
+check("square table: a run that reset after 31 -- only the new run's cards", () => {
+  const plays = [
+    sq(1, 0, "op", "KH", 10), sq(2, 0, "me", "TD", 20), sq(3, 0, "op", "5C", 25), sq(4, 0, "me", "6S", 31),
+    sq(5, 1, "op", "9H", 9), sq(6, 1, "me", "8D", 17),
+  ];
+  const r = playedBySeat({ plays, playSegment: 1, handOver: false, players: ["me", "op"], myId: "me" });
+  deepStrictEqual(seatCards(r), { bottom: ["8D"], top: ["9H"], left: [], right: [] });
+  strictEqual(r.finished, false);
+  // Between runs (31 made, nothing in the new run yet): the finished run stays up.
+  const between = playedBySeat({ plays: plays.slice(0, 4), playSegment: 1, handOver: false, players: ["me", "op"], myId: "me" });
+  deepStrictEqual(seatCards(between), { bottom: ["TD", "6S"], top: ["KH", "5C"], left: [], right: [] });
+  strictEqual(between.finished, true);
+});
+check("square table: a run that reset after a Go -- the go is not a card, and the old run clears", () => {
+  const plays = [
+    sq(1, 0, "op", "KH", 10), sq(2, 0, "me", "QD", 20), sq(3, 0, "op", "9C", 29), sq(4, 0, "me", null, 29),
+  ];
+  const ended = playedBySeat({ plays, playSegment: 1, handOver: false, players: ["me", "op"], myId: "me" });
+  deepStrictEqual(seatCards(ended), { bottom: ["QD"], top: ["KH", "9C"], left: [], right: [] });
+  strictEqual(ended.finished, true);
+  const next = playedBySeat({
+    plays: [...plays, sq(5, 1, "me", "4S", 4)], playSegment: 1, handOver: false, players: ["me", "op"], myId: "me",
+  });
+  deepStrictEqual(seatCards(next), { bottom: ["4S"], top: [], left: [], right: [] });
+});
+check("square table: the hold after the last card makes 31 -- the run that made it", () => {
+  const plays = [
+    sq(1, 0, "op", "KH", 10), sq(2, 0, "me", "TD", 20), sq(3, 0, "op", "9C", 29), sq(4, 0, "me", null, 29),
+    sq(5, 1, "me", "9H", 9), sq(6, 1, "op", "8D", 17), sq(7, 1, "me", "7C", 24), sq(8, 1, "op", "7S", 31),
+  ];
+  const r = playedBySeat({ plays, playSegment: 2, handOver: true, players: ["me", "op"], myId: "me" });
+  deepStrictEqual(seatCards(r), { bottom: ["9H", "7C"], top: ["8D", "7S"], left: [], right: [] });
+  strictEqual(r.finished, true);
+});
+check("square table: plays arriving out of order are shown in play order; 4 players fill every seat", () => {
+  const plays = [sq(3, 0, "s3", "3C"), sq(1, 0, "s1", "AC"), sq(4, 0, "s4", "4C"), sq(2, 0, "s2", "2C"), sq(5, 0, "s1", "5C")];
+  const r = playedBySeat({ plays, playSegment: 0, handOver: false, players: P4, myId: "s1" });
+  deepStrictEqual(seatCards(r), { bottom: ["AC", "5C"], left: ["2C"], top: ["3C"], right: ["4C"] });
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
