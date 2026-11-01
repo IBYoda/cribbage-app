@@ -23,6 +23,8 @@ Phone portrait, about 500 px wide. Players in every mockup: Yoda (you, bottom), 
   - Right player: crib bottom, deck top.
 - Each player's played pegging cards sit in front of them, turned to face them (side players sideways, across player upside down). The running count and score pill sit in the center.
 - A 3-player game is the 4-player layout with the across seat empty.
+- The wooden cribbage board strip above the score plates is part of the design, not a placeholder: it stays, sized and placed as shown, with the plates beneath it.
+- Other players' hands and played cards are intentionally drawn smaller than your own hand.
 
 ## Known gaps in these mockups (do not copy these as-is)
 
