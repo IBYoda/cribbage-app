@@ -74,9 +74,9 @@ import {
 } from "@/lib/dealAnimation";
 
 // THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
-// 2-player table that isn't Muggins (chooseTableLayout, lib/tableLayout.ts);
-// ?layout=classic on the page's URL forces the classic table, and a 3-player
-// table shows the square one only with ?layout=square. Read through
+// 2- or 3-player table that isn't Muggins (chooseTableLayout,
+// lib/tableLayout.ts); ?layout=classic on the page's URL forces the classic
+// table. Read through
 // useSyncExternalStore with no param on the server and in the hydrating
 // render. That render is always the "Loading..." screen (the session is read
 // in an effect, so `loading` starts true on both sides), so the param can
@@ -2075,8 +2075,9 @@ export default function TablePage() {
 
   // THE FIRST READ, on a table that will draw square: until the table's first
   // full read is in, the same "Loading..." as above -- not the classic table
-  // with nothing on it, which would flash before the square one. A classic
-  // table (3 or 4 players, Muggins, ?layout=classic) draws as it always has.
+  // with nothing on it, which would flash before the square one (2 and 3
+  // players). A classic table (4 players, Muggins, ?layout=classic) draws as
+  // it always has.
   if (
     !tableRead &&
     isSquareTable({ layoutParam, playerCount: table?.max_players ?? 2, isMuggins: table?.is_muggins === true })
@@ -2228,12 +2229,20 @@ export default function TablePage() {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
-  // The square table (by default for 2 players, not Muggins, without
-  // ?layout=classic; 3 players with ?layout=square): only it shows the deal
-  // and the discard tosses -- with every seat filled, as its screens need.
+  // The square table (by default for 2 and 3 players, not Muggins, without
+  // ?layout=classic): only it shows the deal and the discard tosses -- with
+  // every seat filled, as its screens need (3 players: every game player
+  // still at the table, as THE SQUARE SCREEN, 3 PLAYERS requires, so a deal
+  // is never held for a screen that draws classic).
   const squareTable = isSquareTable({ layoutParam, playerCount: capacity, isMuggins });
   const squareDealTable =
-    squareTable && (capacity === 2 ? opponents.length === 1 : capacity === 3 && opponents.length === 2);
+    squareTable &&
+    (capacity === 2
+      ? opponents.length === 1
+      : capacity === 3 &&
+        opponents.length === 2 &&
+        gamePlayers?.length === 3 &&
+        gamePlayers.every((id) => members.some((m) => m.user_id === id)));
   const dealInFlight =
     squareDealTable &&
     dealAnimationOn &&
@@ -3116,10 +3125,10 @@ export default function TablePage() {
   // isn't Muggins, unless ?layout=classic (chooseTableLayout), for a dealt
   // hand: the discard, pegging and its hold, and counting through Next Hand
   // (see below); the final board after a win is the next block. 3 players
-  // with ?layout=square have their own square screen (THE SQUARE SCREEN, 3
+  // (also by default) have their own square screen (THE SQUARE SCREEN, 3
   // PLAYERS, after the board helpers). Everything else -- the cut for the
-  // deal, the waiting room, Muggins, 3 players by default, 4 players,
-  // ?layout=classic -- is the table below, unchanged.
+  // deal, the waiting room, Muggins, 4 players, ?layout=classic -- is the
+  // table below, unchanged.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
   // the count, whose turn, Go, the hold, the score flash, my hand and its
@@ -3226,8 +3235,8 @@ export default function TablePage() {
   };
 
   // THE SQUARE SCREEN, 3 PLAYERS (PRD item 31; mockups 04 and 05 with the
-  // across seat empty) -- only with ?layout=square (chooseTableLayout), every
-  // seat filled, me among the game's players. Me at the bottom, the next
+  // across seat empty) -- the default (chooseTableLayout; ?layout=classic for
+  // the classic table), every seat filled, me among the game's players. Me at the bottom, the next
   // player clockwise on my LEFT, the one after on my RIGHT (seatsOnScreen),
   // nobody across. Drawing only, from the same data and handlers as the
   // 2-player square screen below and the classic table: the side seats
@@ -3405,7 +3414,7 @@ export default function TablePage() {
     );
   }
 
-  // THE SQUARE FINAL BOARD, 3 PLAYERS (?layout=square): a won game, as the
+  // THE SQUARE FINAL BOARD, 3 PLAYERS (the default): a won game, as the
   // 2-player square final board below does it -- a pegging win shows the
   // run in front of its players with its count, and the rest of each hand
   // at its seat; a count win (or his heels) every hand face-up at its seat

@@ -6,8 +6,8 @@ import { seatGeometry, type SeatPosition } from "@/lib/tableLayout";
 
 // THE SQUARE TABLE WITH SIDE SEATS (PRD item 31; mockups 04 and 05): the
 // middle of a 3-player table -- and, with the top seat added, a 4-player
-// one. 3 players see it with ?layout=square (chooseTableLayout); the dev mock
-// shows it with &players=3. The rest of the screen is the 2-player square
+// one. 3 players see it by default (chooseTableLayout; ?layout=classic for
+// the classic table); the dev mock shows it with &players=3. The rest of the screen is the 2-player square
 // table's (SquareTableShell, with no across row): my pile row, my hand, the
 // board strip and the plates. Sizes are in app/globals.css ("SIDE SEATS").
 //

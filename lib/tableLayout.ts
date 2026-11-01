@@ -2,9 +2,8 @@
 // rules its layout is built on. Everyone sits around a square table facing
 // the centre, each player's played cards lie in front of them, turned to face
 // them, and the dealer's crib and deck sit beside the dealer's hand. Tested
-// by scripts/test-phase3.ts. The square layout is the default for 2-player
-// tables that aren't Muggins, and 3-player tables have it with ?layout=square
-// (chooseTableLayout, at the end).
+// by scripts/test-phase3.ts. The square layout is the default for 2- and
+// 3-player tables that aren't Muggins (chooseTableLayout, at the end).
 
 import { countingOrder } from "@/lib/countingN";
 import { displayedRun, type PlayEvent } from "@/lib/pegging";
@@ -146,11 +145,9 @@ export function countingStarterPlace(dealer: SeatPosition | null, counting: bool
 // game's final board; everything else is the classic table: the waiting
 // room, the cut for the deal, a game that ended any other way, Muggins and
 // 4 players.
-//   * 2 players: square by default; ?layout=classic on the page's URL gives
-//     the classic table (?layout=square, a missing or any other value is
-//     the default).
-//   * 3 players: classic by default; square only with ?layout=square (the
-//     3-player square layout is still being tried out).
+//   * 2 and 3 players: square by default; ?layout=classic on the page's URL
+//     gives the classic table (?layout=square, a missing or any other value
+//     is the default). URL only, nothing saved.
 export type TableLayoutChoice = "square" | "classic";
 
 export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "counting" | "won" | "ended" | "other";
@@ -160,9 +157,8 @@ const SQUARE_SCREENS: ReadonlySet<TableScreen> = new Set(["discard", "pegging", 
 // The table as a whole uses the square layout (for the screens it covers).
 export function isSquareTable(input: { layoutParam: string | null; playerCount: number; isMuggins: boolean }): boolean {
   if (input.isMuggins) return false;
-  if (input.playerCount === 2) return input.layoutParam !== "classic";
-  if (input.playerCount === 3) return input.layoutParam === "square";
-  return false;
+  if (input.playerCount !== 2 && input.playerCount !== 3) return false;
+  return input.layoutParam !== "classic";
 }
 
 export function chooseTableLayout(input: {

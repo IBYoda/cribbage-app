@@ -517,8 +517,8 @@ check("square table: plays arriving out of order are shown in play order; 4 play
   deepStrictEqual(seatCards(r), { bottom: ["AC", "5C"], left: ["2C"], top: ["3C"], right: ["4C"] });
 });
 
-// WHICH LAYOUT (chooseTableLayout): square by default for 2 players, not
-// Muggins, on its screens; ?layout=classic is the way out.
+// WHICH LAYOUT (chooseTableLayout): square by default for 2 and 3 players,
+// not Muggins, on its screens; ?layout=classic is the way out.
 const layoutFor = (layoutParam: string | null, playerCount: number, isMuggins: boolean, screen: TableScreen) =>
   chooseTableLayout({ layoutParam, playerCount, isMuggins, screen });
 const SQUARE_SCREENS: TableScreen[] = ["discard", "pegging", "counting", "won"];
@@ -551,17 +551,26 @@ check("layout: 4 players, and Muggins (any size), are classic with or without th
   strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false }), false);
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: true }), false);
 });
-check("layout: 3 players -- classic by default, square only with ?layout=square (on its screens)", () => {
-  for (const param of [null, "classic", "x", "", "Square"]) {
+check("layout: 3 players -- square by default on its screens, classic elsewhere", () => {
+  // No param, ?layout=square and unknown values are all the default.
+  for (const param of [null, "square", "x", "", "Square"]) {
+    for (const s of SQUARE_SCREENS) strictEqual(layoutFor(param, 3, false, s), "square", `3p ${param} ${s}`);
+    for (const s of CLASSIC_SCREENS) strictEqual(layoutFor(param, 3, false, s), "classic", `3p ${param} ${s}`);
+  }
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 3, isMuggins: false }), true);
+  strictEqual(isSquareTable({ layoutParam: "square", playerCount: 3, isMuggins: false }), true);
+});
+check("layout: 3 players -- ?layout=classic always classic", () => {
+  for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(layoutFor("classic", 3, false, s), "classic", s);
+  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 3, isMuggins: false }), false);
+});
+check("layout: 2 and 3 players follow the same rule; other table sizes never square", () => {
+  for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
-      strictEqual(layoutFor(param, 3, false, s), "classic", `3p ${param} ${s}`);
+      strictEqual(layoutFor(param, 3, false, s), layoutFor(param, 2, false, s), `${param} ${s}`);
+      for (const n of [0, 1, 4, 5]) strictEqual(layoutFor(param, n, false, s), "classic", `${n}p ${param} ${s}`);
     }
   }
-  for (const s of SQUARE_SCREENS) strictEqual(layoutFor("square", 3, false, s), "square", s);
-  for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 3, false, s), "classic", s);
-  strictEqual(isSquareTable({ layoutParam: "square", playerCount: 3, isMuggins: false }), true);
-  strictEqual(isSquareTable({ layoutParam: null, playerCount: 3, isMuggins: false }), false);
-  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 3, isMuggins: false }), false);
 });
 
 // 3 PLAYERS ON THE SQUARE TABLE: me at the bottom, the next player clockwise
