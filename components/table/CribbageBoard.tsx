@@ -136,6 +136,27 @@ export function CribbageBoard({
   );
 }
 
+// THE SELF-SCORING BANNER (a Muggins table): in the board strip's own slot
+// and size (.sq-board), in the board skin's palette and rim -- the wood's
+// colours, its dark edge and lit inner bevel, the same corner -- but flat:
+// no grain, holes, lanes or pegs. The players keep their own board.
+export function SelfScoringBanner({ skin = DEFAULT_BOARD_SKIN }: { skin?: BoardSkin }) {
+  return (
+    <div
+      className="self-scoring-banner"
+      style={{
+        background: `linear-gradient(${skin.wood.top}, ${skin.wood.bottom})`,
+        borderColor: skin.rim.edge,
+        boxShadow: `inset 0 0 0 3px ${skin.rim.highlight}55, inset 0 0 0 4px ${skin.rim.edge}73`,
+        color: skin.rim.edge,
+      }}
+    >
+      <p className="self-scoring-banner__title">SELF SCORING</p>
+      <p className="self-scoring-banner__note">Keep your own board</p>
+    </div>
+  );
+}
+
 // The wood, the lanes' paint and every hole: drawn once per size and skin,
 // so a score change re-renders only the pegs.
 const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; skin: BoardSkin; uid: string }) {

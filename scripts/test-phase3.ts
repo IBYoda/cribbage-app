@@ -540,20 +540,38 @@ check("layout: ?layout=classic always classic; ?layout=square and unknown values
   }
   for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 2, false, s), "classic", s);
 });
-check("layout: 4-player Solo (not Teams), and Muggins (any size), are classic with or without the param", () => {
+check("layout: 4-player Solo (not Teams), and 3- or 4-player Muggins, are classic with or without the param", () => {
   for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
       strictEqual(layoutFor(param, 4, false, s), "classic", `4p ${param} ${s}`);
-      strictEqual(layoutFor(param, 2, true, s), "classic", `muggins ${param} ${s}`);
       strictEqual(layoutFor(param, 3, true, s), "classic", `3p muggins ${param} ${s}`);
       strictEqual(layoutFor(param, 4, true, s), "classic", `4p muggins ${param} ${s}`);
+      strictEqual(
+        chooseTableLayout({ layoutParam: param, playerCount: 4, isMuggins: true, teams: true, screen: s }),
+        "classic",
+        `4p teams muggins ${param} ${s}`
+      );
     }
   }
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: false }), true);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 2, isMuggins: false }), false);
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false }), false);
   strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false }), false);
-  strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: true }), false);
+});
+check("layout: 2-player self-scoring (Muggins) -- the 2-player rule: square by default, ?layout=classic classic", () => {
+  for (const param of [null, "square", "x", "", "Square"]) {
+    for (const s of SQUARE_SCREENS) strictEqual(layoutFor(param, 2, true, s), "square", `muggins ${param} ${s}`);
+    for (const s of CLASSIC_SCREENS) strictEqual(layoutFor(param, 2, true, s), "classic", `muggins ${param} ${s}`);
+  }
+  for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(layoutFor("classic", 2, true, s), "classic", s);
+  // Exactly the 2-player rule.
+  for (const param of [null, "square", "classic", "x"]) {
+    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
+      strictEqual(layoutFor(param, 2, true, s), layoutFor(param, 2, false, s), `${param} ${s}`);
+    }
+  }
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: true }), true);
+  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 2, isMuggins: true }), false);
 });
 check("layout: 3 players -- square by default on its screens, classic elsewhere", () => {
   // No param, ?layout=square and unknown values are all the default.

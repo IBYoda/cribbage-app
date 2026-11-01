@@ -94,7 +94,7 @@ export function TableHeader({
 }: {
   code: string;
   handNo: number | null;
-  // A Muggins table: the "Muggins · no scoring" tag under the header line.
+  // A Muggins table: the "Self-Scoring (Muggins)" tag under the header line.
   muggins?: boolean;
   right: ReactNode;
 }) {

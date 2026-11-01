@@ -17,8 +17,8 @@ import { useEffect, useState } from "react";
 // The note is positioned under the header, so neither it nor the button
 // adds any height to the table.
 //
-// LOCKED (a Muggins table): a disabled button reading "Muggins: scoring is
-// off". It never calls onSave, so nothing is saved -- the player's own
+// LOCKED (a Muggins table): a disabled button reading "Self-Scoring
+// (Muggins)" (its title: "...: scoring is off"). It never calls onSave, so nothing is saved -- the player's own
 // setting is left exactly as it was, for their other tables.
 export function CountsToggle({
   hidden,
@@ -58,8 +58,9 @@ export function CountsToggle({
         type="button"
         disabled
         className="tap-40 whitespace-nowrap px-1 text-xs text-zinc-600 dark:text-zinc-400"
+        title="Self-Scoring (Muggins): scoring is off"
       >
-        Muggins: scoring is off
+        Self-Scoring (Muggins)
       </button>
     );
   }

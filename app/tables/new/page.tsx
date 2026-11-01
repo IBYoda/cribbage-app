@@ -32,7 +32,7 @@ export default function NewTablePage() {
   // Defaults to Regular and is always sent; the database default is false
   // too. Fixed once the table exists.
   const [isMuggins, setIsMuggins] = useState(false);
-  // The Muggins confirmation (MugginsNotice). Only its "Start Muggins table"
+  // The Muggins confirmation (MugginsNotice). Only its "Start Self-Scoring (Muggins) table"
   // creates the table; a Regular table never sees it.
   const [mugginsNoticeOpen, setMugginsNoticeOpen] = useState(false);
   // How many players: 2, 3 or 4. Muggins is 2-player only (the database
@@ -179,7 +179,7 @@ function TableOptions({
   // Muggins is 2-player only.
   const mugginsBlocked = maxPlayers !== 2;
   // 3 or 4: never with Muggins.
-  const morePlayersNote = isMuggins ? "Not with Muggins" : null;
+  const morePlayersNote = isMuggins ? "Not with Self-Scoring (Muggins)" : null;
   const morePlayersDisabled = isMuggins;
   return (
     <div className="flex flex-col gap-4">
@@ -219,7 +219,7 @@ function TableOptions({
           />
           <OptionCard
             name="scoring"
-            label="Muggins play"
+            label="Self-Scoring (Muggins)"
             checked={isMuggins}
             onChange={() => onMugginsChange(true)}
             disabled={mugginsBlocked}
