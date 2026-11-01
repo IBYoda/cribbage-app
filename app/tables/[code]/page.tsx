@@ -32,19 +32,25 @@ import { Splash, useSplash } from "@/components/table/Splash";
 import { SquareOpponentHand, SquareTableHeader, SquareTableShell } from "@/components/table/SquareTable";
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
 import { CenterCount } from "@/components/table/CenterCount";
+import { SeatStatus, SquareRingMiddle, type RingSeat } from "@/components/table/SquareRing";
 import {
-  SEAT_POSITIONS,
   chooseTableLayout,
+  countingReveals,
+  countingStarterPlace,
   isSquareTable,
   playedBySeat,
   seatGeometry,
+  seatPositionOf,
   seatsOnScreen,
+  type SeatPosition,
   type TableScreen,
 } from "@/lib/tableLayout";
 import { CribbageBoard } from "@/components/table/CribbageBoard";
 import { laneOf } from "@/lib/boardLayout";
 import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
 import {
+  ComputerDiscardClock,
+  CountingStarter,
   DealAnimation,
   DealStandby,
   DiscardToss,
@@ -52,11 +58,25 @@ import {
   useDealAnimationOn,
   usePrefersReducedMotion,
 } from "@/components/table/DealAnimation";
-import { dealPlan, liveDealStep, liveDiscardStep, type DiscardSeen } from "@/lib/dealAnimation";
+import {
+  STARTER_SLIDE_MS,
+  dealPlan,
+  discardShown,
+  fireDiscardShow,
+  liveDealStep,
+  liveDiscardStep,
+  liveStarterStep,
+  markDiscardSeen,
+  shownCribIds,
+  writeDiscardShown,
+  type DiscardSeen,
+  type DiscardShow,
+} from "@/lib/dealAnimation";
 
 // THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
 // 2-player table that isn't Muggins (chooseTableLayout, lib/tableLayout.ts);
-// ?layout=classic on the page's URL forces the classic table. Read through
+// ?layout=classic on the page's URL forces the classic table, and a 3-player
+// table shows the square one only with ?layout=square. Read through
 // useSyncExternalStore with no param on the server and in the hydrating
 // render. That render is always the "Loading..." screen (the session is read
 // in an effect, so `loading` starts true on both sides), so the param can
@@ -458,6 +478,14 @@ export default function TablePage() {
   const [discardSeen, setDiscardSeen] = useState<DiscardSeen | undefined>(undefined);
   const [tosses, setTosses] = useState<{ id: string; handKey: string; seats: TossSeat[] }[]>([]);
   const [myTossKey, setMyTossKey] = useState<string | null>(null);
+  // THE STARTER'S SLIDE (square table): see "THE STARTER IN COUNTING" below.
+  // starterSeenKey: "<hand>:count" or "<hand>:other" last seen;
+  // starterLiveKey: the hand whose starter is sliding now.
+  const [starterSeenKey, setStarterSeenKey] = useState<string | null | undefined>(undefined);
+  const [starterLiveKey, setStarterLiveKey] = useState<string | null>(null);
+  // THE COMPUTER'S DISCARD, SHOWN ON TIME (2-player square table with a
+  // computer opponent): see below.
+  const [discardShow, setDiscardShow] = useState<DiscardShow>(null);
   // The revealKey last fetched for. A ref for the same reason as
   // lastGameStatusRef: it's read inside the realtime handler.
   const revealKeyRef = useRef<string | null>(null);
@@ -1940,6 +1968,14 @@ export default function TablePage() {
     activeGameIdRef.current = activeGame?.id ?? null;
   }, [activeGame?.id]);
 
+  // The starter's slide is over once it has had its time: a starter mounted
+  // again later in the same count just sits in its place.
+  useEffect(() => {
+    if (!starterLiveKey) return;
+    const timer = window.setTimeout(() => setStarterLiveKey(null), STARTER_SLIDE_MS + 100);
+    return () => window.clearTimeout(timer);
+  }, [starterLiveKey]);
+
   // THE COMPUTER OPPONENT (a computer table this user created): its moves,
   // made from this browser. Only while the table is open on this screen and
   // not being left. The other seated member is the computer; the server's
@@ -2193,9 +2229,11 @@ export default function TablePage() {
     setDealSeenKey(dealStep.seenKey);
   }
   // The square table (by default for 2 players, not Muggins, without
-  // ?layout=classic): only it shows the deal and the discard tosses.
+  // ?layout=classic; 3 players with ?layout=square): only it shows the deal
+  // and the discard tosses -- with every seat filled, as its screens need.
   const squareTable = isSquareTable({ layoutParam, playerCount: capacity, isMuggins });
-  const squareDealTable = squareTable && opponents.length === 1;
+  const squareDealTable =
+    squareTable && (capacity === 2 ? opponents.length === 1 : capacity === 3 && opponents.length === 2);
   const dealInFlight =
     squareDealTable &&
     dealAnimationOn &&
@@ -2218,13 +2256,44 @@ export default function TablePage() {
   // or the animations are off. Mine is thrown when I tap Send to Crib
   // (startMyToss), so here only the other players' are.
   const cardAnimationsOn = squareDealTable && dealAnimationOn && !reducedMotion;
-  const squarePositionOf = (userId: string) => {
-    const onScreen = gamePlayers ? seatsOnScreen(gamePlayers, session.user.id) : null;
-    return onScreen ? (SEAT_POSITIONS.find((p) => onScreen[p] === userId) ?? null) : null;
+  const squarePositionOf = (userId: string) =>
+    gamePlayers ? seatPositionOf(gamePlayers, session.user.id, userId) : null;
+  // THE COMPUTER'S DISCARD, SHOWN ON TIME (lib/dealAnimation.ts): at a
+  // 2-player square table with a computer opponent (computerTable, as the
+  // computer driver knows it), 7 s after my dealt hand first appears here
+  // (the deal's start, or the hand showing) without its real discard -- never
+  // mid-deal -- it is shown as discarded: display only; the game waits for
+  // the real one as before. Its clock is ComputerDiscardClock (the square
+  // screen); once shown, its hand shows the kept four, the crib its cards,
+  // and its real discard is never thrown again (markDiscardSeen) or counted
+  // twice (shownCribIds).
+  const shownComputerId =
+    computerTable && capacity === 2 && squareDealTable ? (opponents[0]?.user_id ?? null) : null;
+  const discardShowInput = {
+    eligible: !!shownComputerId,
+    handKey: dealHandKey,
+    phase,
+    handShown: myHand.length === sizes.dealt && !!gamePlayers?.includes(session.user.id),
+    dealInFlight,
+    computerDiscarded: !!shownComputerId && discardedBy.includes(shownComputerId),
+    iDiscarding: iHaveDiscarded || discardStatus === "sending",
+  };
+  const computerShown = discardShown({ ...discardShowInput, state: discardShow });
+  const showComputerDiscard = (handKey: string) => {
+    if (!shownComputerId || handKey !== dealHandKey || discardShowInput.computerDiscarded) return;
+    if (!discardShow || discardShow.handKey !== handKey || discardShow.fired || discardShow.cancelled) return;
+    setDiscardShow((current) => fireDiscardShow(current, handKey));
+    writeDiscardShown(handKey);
+    // Its two cards thrown to the crib, as a real discard is (animations on).
+    if (cardAnimationsOn) {
+      const id = `${handKey}:shown`;
+      const seats: TossSeat[] = [{ key: shownComputerId, position: "top", cards: sizes.discard }];
+      setTosses((current) => (current.some((t) => t.id === id) ? current : [...current, { id, handKey, seats }]));
+    }
   };
   const discardStep = liveDiscardStep({
     tableRead,
-    seen: discardSeen,
+    seen: computerShown ? markDiscardSeen(discardSeen, dealHandKey, shownComputerId) : discardSeen,
     handKey: dealHandKey,
     discardedBy,
     dealInFlight,
@@ -2261,12 +2330,18 @@ export default function TablePage() {
   };
   // THE CRIB PILE on the square table: empty while a deal is shown here, and
   // without the cards still flying to it; mine count from the moment they
-  // land, even if the server hasn't answered yet (until it refuses).
+  // land, even if the server hasn't answered yet (until it refuses); the
+  // computer's once shown as discarded (each player once).
   const tossingIds = new Set(tosses.flatMap((t) => t.seats.map((s) => s.key)));
-  const cribIds = new Set(discardedBy);
-  if (discardStatus === "sending" && myTossKey === dealHandKey) cribIds.add(session.user.id);
-  for (const id of tossingIds) cribIds.delete(id);
+  const cribIds = shownCribIds({
+    discardedBy,
+    mineSending: discardStatus === "sending" && myTossKey === dealHandKey ? session.user.id : null,
+    shownComputer: computerShown ? shownComputerId : null,
+    tossing: tossingIds,
+  });
   const squareCribCount = dealInFlight ? 0 : cribCountDuringDiscard(playerCount, cribIds.size);
+  // Every discard in, as the square screen shows it (the prompt's line).
+  const cribShownComplete = cribComplete || (computerShown && iHaveDiscarded);
 
   // The cut phase. Only the table's FIRST game cuts -- later games alternate
   // the deal, are created straight into 'active', and never enter this.
@@ -2372,6 +2447,32 @@ export default function TablePage() {
       }
     : view2;
 
+  // THE STARTER IN COUNTING (square table; countingStarterPlace,
+  // lib/tableLayout.ts): from the dealer's deck to just above my hand (my
+  // crib) or the middle (anyone else's). It slides there only when this
+  // screen sees counting begin (liveStarterStep: the same guard as the deal
+  // -- never on a load, a reload or a late join), with the animations on;
+  // otherwise it is just there.
+  const countingPicture = squareDealTable && isCountingOrDone && !!view;
+  const starterStep = liveStarterStep({
+    tableRead,
+    seenKey: starterSeenKey,
+    handKey: dealHandKey,
+    counting: countingPicture,
+    animationOn: cardAnimationsOn,
+  });
+  if (starterStep.seenKey !== starterSeenKey) {
+    if (starterStep.liveKey) setStarterLiveKey(starterStep.liveKey);
+    setStarterSeenKey(starterStep.seenKey);
+  }
+  const starterSlides = cardAnimationsOn && !!dealHandKey && starterLiveKey === dealHandKey;
+  // The starter in its counting place, for `place` (above my hand, or the
+  // middle); null on the deck.
+  const countingStarterFor = (place: ReturnType<typeof countingStarterPlace>, card: string | null, slide: boolean) =>
+    place === "deck" || !card ? null : (
+      <CountingStarter card={card} sizing={place === "above-hand" ? HAND_CARD : "w-full aspect-[5/7]"} slide={slide} />
+    );
+
   const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
   // THE FINAL BOARD: the won game's result, while no game is live.
   const finalBoard = activeGame ? null : finishedGame;
@@ -2417,6 +2518,7 @@ export default function TablePage() {
       return cardsLeft(sizes.kept, plays, opponentId);
     }
     if (isCountingOrDone) return sizes.kept;
+    if (computerShown && opponentId === shownComputerId) return sizes.kept;
     return discardedBy.includes(opponentId) ? sizes.kept : sizes.dealt;
   }
 
@@ -3013,9 +3115,11 @@ export default function TablePage() {
   // THE SQUARE SCREEN (PRD item 31) -- the default on a 2-player table that
   // isn't Muggins, unless ?layout=classic (chooseTableLayout), for a dealt
   // hand: the discard, pegging and its hold, and counting through Next Hand
-  // (see below); the final board after a win is the next block. Everything
-  // else -- the cut for the deal, the waiting room, Muggins, 3 and 4
-  // players, ?layout=classic -- is the table below, unchanged.
+  // (see below); the final board after a win is the next block. 3 players
+  // with ?layout=square have their own square screen (THE SQUARE SCREEN, 3
+  // PLAYERS, after the board helpers). Everything else -- the cut for the
+  // deal, the waiting room, Muggins, 3 players by default, 4 players,
+  // ?layout=classic -- is the table below, unchanged.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
   // the count, whose turn, Go, the hold, the score flash, my hand and its
@@ -3075,46 +3179,14 @@ export default function TablePage() {
         : isCountingOrDone && !!view
           ? "counting"
           : "other";
-  const squareView =
-    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, screen: squareScreen }) === "square" &&
-    !!squareOpponent;
-  if (squareView && activeGame && squareOpponent) {
-    // COUNTING (counting and done, after Count hands): no cards in the
-    // middle. Each hand at its seat -- mine face-up in my hand row (the same
-    // `hand` as the classic screen), theirs at the top, turned face-up in
-    // place once their hand's count comes up (the pone counts at step 0, the
-    // dealer at step 1) and staying up; the crib at the dealer's seat,
-    // face-up there from its count on (view.cribFan); the starter on the
-    // deck throughout. The middle keeps the classic counting stage's text,
-    // recap and buttons (countStageFor, with no subject).
-    const squareCount = isCountingOrDone && !!view;
-    const oppCountStep = handDealerId === squareOpponent.user_id ? 1 : 0;
-    const oppHand =
-      squareCount && view && view.middle.kind === "full" ? view.middle.cards : null;
-    const oppHandUp = isDone || countStep >= oppCountStep;
-    const cribFan = squareCount && view ? view.cribFan : null;
-    const iDealHand = handDealerId === session.user.id;
-    const oppName = displayName(squareOpponent);
-    // The crib pile: nothing while the deal is shown, nor what is still
-    // flying to it (squareCribCount).
-    const cribCount = squareCribCount;
-    const { seats: played, finished: runFinished } = playedBySeat({
-      plays,
-      playSegment: activeGame.play_segment,
-      handOver: onPegHold,
-      players: activeGame.players ?? [session.user.id, squareOpponent.user_id],
-      myId: session.user.id,
-    });
-    // The other player's seat is across the table (2 players).
-    const across = seatGeometry("top");
-    const squareScores = squareBoardFor(activeGame.players ?? [session.user.id, squareOpponent.user_id]);
-    // THE DEAL (see A LIVE DEAL above): once my dealt cards are on screen,
-    // the overlay flies every hand in from the dealer's deck, clockwise from
-    // the dealer's left -- planned from the seat order, so any seat count.
-    // Mine stack in the middle of my hand, then fan out face-up.
-    const dealSeats = activeGame.players ?? [session.user.id, squareOpponent.user_id];
-    const dealOnScreen = seatsOnScreen(dealSeats, session.user.id);
-    const dealPositionOf = (userId: string) => SEAT_POSITIONS.find((p) => dealOnScreen[p] === userId) ?? null;
+  // THE DEAL AND THE DISCARD TOSSES on a square table (see A LIVE DEAL and A
+  // LIVE DISCARD above), for the seats in `dealSeats` (games.players). Once
+  // my dealt cards are on screen, the overlay flies every hand in from the
+  // dealer's deck, clockwise from the dealer's left -- planned from the seat
+  // order, so any seat count, then (3 players) the crib's card. Mine stack in
+  // the middle of my hand, then fan out face-up.
+  const squareOverlaysFor = (dealSeats: string[]) => {
+    const dealPositionOf = (userId: string) => seatPositionOf(dealSeats, session.user.id, userId);
     const dealerPosition = handDealerId ? dealPositionOf(handDealerId) : null;
     const dealOverlay =
       dealInFlight && dealHandKey && handDealerId && dealerPosition && myHand.length === sizes.dealt ? (
@@ -3135,7 +3207,6 @@ export default function TablePage() {
       ) : dealInFlight && dealHandKey ? (
         <DealStandby key={dealHandKey} onGiveUp={() => setDealDoneKey(dealHandKey)} />
       ) : null;
-    // THE DISCARD TOSSES in flight (see A LIVE DISCARD above).
     const tossOverlays =
       dealerPosition &&
       tosses.map((t) => (
@@ -3148,12 +3219,396 @@ export default function TablePage() {
       ));
     return (
       <>
+        {dealOverlay}
+        {tossOverlays}
+      </>
+    );
+  };
+
+  // THE SQUARE SCREEN, 3 PLAYERS (PRD item 31; mockups 04 and 05 with the
+  // across seat empty) -- only with ?layout=square (chooseTableLayout), every
+  // seat filled, me among the game's players. Me at the bottom, the next
+  // player clockwise on my LEFT, the one after on my RIGHT (seatsOnScreen),
+  // nobody across. Drawing only, from the same data and handlers as the
+  // 2-player square screen below and the classic table: the side seats
+  // (SquareRingMiddle) hold each player's hand as sideways cards, their Go /
+  // discarded / counting word, and -- at the dealer's seat -- the crib and
+  // deck; their played cards lie in front of them, the count and pill in the
+  // centre (CenterCount), mine below it.
+  // COUNTING: each hand turns over in place at its seat when its count comes
+  // up, clockwise from the dealer's left (countingReveals, the server's
+  // order); the crib last, turned over at the dealer's seat; the counting
+  // stage's text, recap and buttons in the centre.
+  const ringPlayers = activeGame?.players ?? finalBoard?.players ?? null;
+  const ringTable = (screen: TableScreen) =>
+    capacity === 3 &&
+    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, screen }) === "square" &&
+    opponents.length === 2 &&
+    !!ringPlayers &&
+    ringPlayers.length === 3 &&
+    ringPlayers.includes(session.user.id) &&
+    ringPlayers.every((id) => members.some((m) => m.user_id === id));
+  // A side seat, from the seat order: who sits there and their row.
+  const ringMember = (players: string[], position: "left" | "right") => {
+    const id = seatsOnScreen(players, session.user.id)[position];
+    return id ? (members.find((m) => m.user_id === id) ?? null) : null;
+  };
+  if (ringTable(squareScreen) && activeGame && ringPlayers) {
+    const players = ringPlayers;
+    const ringCount = isCountingOrDone && !!viewN;
+    const reveals =
+      ringCount && handDealerId
+        ? countingReveals({ players, dealerId: handDealerId, step: countStep, done: isDone })
+        : null;
+    // The crib, face-up at the dealer's seat from its count on.
+    const cribFan = reveals?.crib && cribCards ? sortHand(cribCards) : null;
+    const iDealHand = handDealerId === session.user.id;
+    // The starter in counting: above my hand, or the middle (THE STARTER IN
+    // COUNTING).
+    const starterPlace = countingStarterPlace(
+      handDealerId ? seatPositionOf(players, session.user.id, handDealerId) : null,
+      ringCount && !!starterCard
+    );
+    const movedStarter = countingStarterFor(starterPlace, starterCard, starterSlides);
+    const { seats: played, finished: runFinished } = playedBySeat({
+      plays,
+      playSegment: activeGame.play_segment,
+      handOver: onPegHold,
+      players,
+      myId: session.user.id,
+    });
+    const ringScores = squareBoardFor(players);
+    const ringSeats = (["left", "right"] as const).flatMap((position): RingSeat[] => {
+      const m = ringMember(players, position);
+      if (!m) return [];
+      const id = m.user_id;
+      return [
+        {
+          position,
+          userId: id,
+          name: displayName(m),
+          avatarUrl: m.avatar_url,
+          laneColor: ringScores.laneColorOf(id),
+          status: (
+            <SeatStatus
+              kind={
+                goBy.has(id)
+                  ? "go"
+                  : phase === "discard" && !cribComplete
+                    ? discardedBy.includes(id)
+                      ? "discarded"
+                      : "discarding"
+                    : ringCount && viewN?.counterId === id
+                      ? "counting"
+                      : null
+              }
+            />
+          ),
+          // Counting: their four, face-down until their count comes up (and
+          // until the read policies return them).
+          hand: ringCount
+            ? {
+                count: sizes.kept,
+                cards: revealedHands[id] ? sortHand(revealedHands[id]) : null,
+                revealed: reveals?.hands[id] ?? false,
+              }
+            : { count: opponentCardCount(id) },
+          // The crib pile: nothing while the deal is shown, nor what is
+          // still flying to it (squareCribCount).
+          piles:
+            handDealerId === id
+              ? {
+                  cribCount: ringCount ? sizes.kept : squareCribCount,
+                  cribCards: cribFan,
+                  starter: starterCard,
+                  starterMoved: starterPlace === "middle",
+                }
+              : null,
+          played: played[position].cards,
+        },
+      ];
+    });
+    return (
+      <>
+        <SquareTableShell
+          dealing={dealInFlight}
+          overlay={squareOverlaysFor(players)}
+          header={<SquareTableHeader code={code} handNo={activeGame.hand_no ?? null} opponent={null} right={headerRight} />}
+          opponent={null}
+          middle={
+            <>
+              {middleOverlays}
+              {ringCount ? (
+                <SquareRingMiddle
+                  variant="count"
+                  seats={ringSeats}
+                  played={false}
+                  myPlayed={null}
+                  center={
+                    <div className="sq-count-column flex flex-col items-center gap-2">
+                      {starterPlace === "middle" && <div className="sq-count-starter">{movedStarter}</div>}
+                      <div className="sq-count-flash">{scoreFlash}</div>
+                      {countStageFor({ kind: "none" })}
+                    </div>
+                  }
+                />
+              ) : (
+                <SquareRingMiddle
+                  seats={ringSeats}
+                  played={pegView}
+                  myPlayed={played.bottom.cards}
+                  dimmed={runFinished && !onPegHold}
+                  center={
+                    <CenterCount
+                      plays={plays}
+                      playCount={playCount}
+                      playSegment={activeGame.play_segment}
+                      currentPlayer={activeGame.current_player}
+                      myUserId={session.user.id}
+                      nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+                      handOver={onPegHold ? { onCountHands: () => setPegHoldKey(null) } : undefined}
+                      flash={scoreFlash}
+                      prompt={pegView ? undefined : !cribComplete ? discardPrompt : <p />}
+                    />
+                  }
+                />
+              )}
+            </>
+          }
+          piles={
+            <div className="sq-piles">
+              <PileRow
+                crib={
+                  iDealHand
+                    ? { faceDownCount: ringCount ? sizes.kept : squareCribCount, shownCards: cribFan, dealerIsMe: false }
+                    : null
+                }
+                starter={iDealHand ? { card: starterCard, moved: starterPlace === "above-hand" } : null}
+                above={starterPlace === "above-hand" ? movedStarter : undefined}
+              >
+                {pileButtons}
+              </PileRow>
+            </div>
+          }
+          hand={<div className="sq-hand-row">{hand}</div>}
+          board={ringScores.board}
+          scores={
+            <div className="sq-plates">
+              <ScoreStrip plates={ringScores.plates} />
+            </div>
+          }
+          surface={appearance.surface}
+          back={appearance.back}
+        />
+        <Splash splash={splash} onDone={dismissSplash} />
+      </>
+    );
+  }
+
+  // THE SQUARE FINAL BOARD, 3 PLAYERS (?layout=square): a won game, as the
+  // 2-player square final board below does it -- a pegging win shows the
+  // run in front of its players with its count, and the rest of each hand
+  // at its seat; a count win (or his heels) every hand face-up at its seat
+  // and the crib fanned at the dealer's. The result in the centre; the
+  // winner's front peg in the game hole.
+  const ringWinner = finalBoard ? members.find((m) => m.user_id === finalBoard.winner_id) : undefined;
+  if (ringTable("won") && finalBoard && finalBoard.dealer_id && ringWinner && ringPlayers) {
+    const players = finalBoard.players;
+    const board = finalBoard.board;
+    const winReason = ringWinner.last_reason;
+    const pegWin =
+      !!winReason && !isCountReason(winReason) && winReason !== "his heels" && board.finalRun.length > 0;
+    const iDealt = finalBoard.dealer_id === session.user.id;
+    const { seats: run } = playedBySeat({
+      plays: board.finalRun,
+      playSegment: 0,
+      handOver: true,
+      players,
+      myId: session.user.id,
+    });
+    // At each seat: the whole hand (counting picture), or the rest of it
+    // (pegging picture).
+    const restOf = (userId: string, position: SeatPosition) => {
+      const kept = board.hands[userId] ?? null;
+      return kept ? sortHand(pegWin ? kept.filter((c) => !run[position].cards.includes(c)) : kept) : null;
+    };
+    const faceDownLeft = (inRun: number) => (pegWin ? Math.max(sizes.kept - inRun, 0) : sizes.kept);
+    const cribFanned = !pegWin && board.crib ? sortHand(board.crib) : null;
+    // The counting picture keeps the starter where counting put it.
+    const starterPlace = countingStarterPlace(
+      seatPositionOf(players, session.user.id, finalBoard.dealer_id),
+      !pegWin && !!finalBoard.starter_card
+    );
+    const movedStarter = countingStarterFor(starterPlace, finalBoard.starter_card, false);
+    const ringScores = squareBoardFor(players);
+    const ringSeats = (["left", "right"] as const).flatMap((position): RingSeat[] => {
+      const m = ringMember(players, position);
+      if (!m) return [];
+      const cards = restOf(m.user_id, position);
+      return [
+        {
+          position,
+          userId: m.user_id,
+          name: displayName(m),
+          avatarUrl: m.avatar_url,
+          laneColor: ringScores.laneColorOf(m.user_id),
+          hand: cards ? { count: cards.length, cards } : { count: faceDownLeft(run[position].cards.length) },
+          piles:
+            finalBoard.dealer_id === m.user_id
+              ? {
+                  cribCount: sizes.kept,
+                  cribCards: cribFanned,
+                  starter: finalBoard.starter_card,
+                  starterMoved: starterPlace === "middle",
+                }
+              : null,
+          played: pegWin ? run[position].cards : [],
+        },
+      ];
+    });
+    const myCards = restOf(session.user.id, "bottom");
+    return (
+      <>
+        <SquareTableShell
+          header={<SquareTableHeader code={code} handNo={null} opponent={null} right={headerRight} />}
+          opponent={null}
+          middle={
+            <>
+              {middleOverlays}
+              {pegWin ? (
+                <SquareRingMiddle
+                  variant="final"
+                  seats={ringSeats}
+                  played
+                  myPlayed={run.bottom.cards}
+                  center={
+                    <CenterCount
+                      ended
+                      plays={board.finalRun}
+                      playCount={0}
+                      playSegment={0}
+                      currentPlayer={null}
+                      myUserId={session.user.id}
+                      nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+                      flash={scoreFlash}
+                    />
+                  }
+                  below={resultStage}
+                />
+              ) : (
+                <SquareRingMiddle
+                  variant="count"
+                  seats={ringSeats}
+                  played={false}
+                  myPlayed={null}
+                  center={
+                    <div className="sq-count-column flex flex-col items-center gap-2">
+                      {starterPlace === "middle" && <div className="sq-count-starter">{movedStarter}</div>}
+                      <div className="sq-count-flash">{scoreFlash}</div>
+                      {resultStage}
+                    </div>
+                  }
+                />
+              )}
+            </>
+          }
+          piles={
+            <div className="sq-piles">
+              <PileRow
+                crib={iDealt ? { faceDownCount: sizes.kept, shownCards: cribFanned, dealerIsMe: false } : null}
+                starter={
+                  iDealt && finalBoard.starter_card
+                    ? { card: finalBoard.starter_card, moved: starterPlace === "above-hand" }
+                    : null
+                }
+                above={starterPlace === "above-hand" ? movedStarter : undefined}
+              />
+            </div>
+          }
+          hand={
+            <div className="sq-hand-row">
+              <HandRow>
+                {myCards
+                  ? myCards.map((card) => <PlayingCard key={card} card={card} sizing={HAND_CARD} />)
+                  : Array.from({ length: faceDownLeft(run.bottom.cards.length) }, (_, i) => (
+                      <FaceDownCard key={i} sizing={HAND_CARD} />
+                    ))}
+              </HandRow>
+            </div>
+          }
+          board={ringScores.board}
+          scores={
+            <div className="sq-plates">
+              <ScoreStrip plates={ringScores.plates} />
+            </div>
+          }
+          surface={appearance.surface}
+          back={appearance.back}
+        />
+        <Splash splash={splash} onDone={dismissSplash} />
+      </>
+    );
+  }
+
+  const squareView =
+    capacity === 2 &&
+    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, screen: squareScreen }) === "square" &&
+    !!squareOpponent;
+  if (squareView && activeGame && squareOpponent) {
+    // COUNTING (counting and done, after Count hands): no cards in the
+    // middle. Each hand at its seat -- mine face-up in my hand row (the same
+    // `hand` as the classic screen), theirs at the top, turned face-up in
+    // place once their hand's count comes up (the pone counts at step 0, the
+    // dealer at step 1) and staying up; the crib at the dealer's seat,
+    // face-up there from its count on (view.cribFan); the starter on the
+    // deck throughout. The middle keeps the classic counting stage's text,
+    // recap and buttons (countStageFor, with no subject).
+    const squareCount = isCountingOrDone && !!view;
+    const oppCountStep = handDealerId === squareOpponent.user_id ? 1 : 0;
+    const oppHand =
+      squareCount && view && view.middle.kind === "full" ? view.middle.cards : null;
+    const oppHandUp = isDone || countStep >= oppCountStep;
+    const cribFan = squareCount && view ? view.cribFan : null;
+    const iDealHand = handDealerId === session.user.id;
+    // The starter in counting: above my hand, or the middle (THE STARTER IN
+    // COUNTING).
+    const starterPlace = countingStarterPlace(
+      handDealerId ? squarePositionOf(handDealerId) : null,
+      squareCount && !!starterCard
+    );
+    const movedStarter = countingStarterFor(starterPlace, starterCard, starterSlides);
+    const oppName = displayName(squareOpponent);
+    // The crib pile: nothing while the deal is shown, nor what is still
+    // flying to it (squareCribCount).
+    const cribCount = squareCribCount;
+    const { seats: played, finished: runFinished } = playedBySeat({
+      plays,
+      playSegment: activeGame.play_segment,
+      handOver: onPegHold,
+      players: activeGame.players ?? [session.user.id, squareOpponent.user_id],
+      myId: session.user.id,
+    });
+    // The other player's seat is across the table (2 players).
+    const across = seatGeometry("top");
+    const squareScores = squareBoardFor(activeGame.players ?? [session.user.id, squareOpponent.user_id]);
+    // THE DEAL and THE DISCARD TOSSES in flight (squareOverlaysFor).
+    const dealSeats = activeGame.players ?? [session.user.id, squareOpponent.user_id];
+    return (
+      <>
         <SquareTableShell
           dealing={dealInFlight}
           overlay={
             <>
-              {dealOverlay}
-              {tossOverlays}
+              {squareOverlaysFor(dealSeats)}
+              {/* The computer's discard, shown on time (no UI of its own). */}
+              {shownComputerId && (
+                <ComputerDiscardClock
+                  input={discardShowInput}
+                  state={discardShow}
+                  onState={setDiscardShow}
+                  onShow={showComputerDiscard}
+                />
+              )}
             </>
           }
           header={
@@ -3183,6 +3638,7 @@ export default function TablePage() {
                       starter: starterCard,
                       cribSide: across.crib,
                       cribCards: cribFan,
+                      starterMoved: starterPlace === "middle",
                     }
               }
             />
@@ -3192,6 +3648,7 @@ export default function TablePage() {
               <>
                 {middleOverlays}
                 <div className="square-middle square-middle--count">
+                  {starterPlace === "middle" && <div className="sq-count-starter">{movedStarter}</div>}
                   <div className="sq-count-flash">{scoreFlash}</div>
                   {countStageFor({ kind: "none" })}
                 </div>
@@ -3218,8 +3675,9 @@ export default function TablePage() {
                   flash={scoreFlash}
                   // The discard: its prompt, as on the classic screen (and,
                   // with every discard in but the phase not yet moved on, an
-                  // empty line, as the classic middle shows nothing then).
-                  prompt={pegView ? undefined : !cribComplete ? discardPrompt : <p />}
+                  // empty line, as the classic middle shows nothing then;
+                  // the computer's discard counts once shown).
+                  prompt={pegView ? undefined : !cribShownComplete ? discardPrompt : <p />}
                 />
                 <SeatPlayedCards
                   cards={played.bottom.cards}
@@ -3243,7 +3701,8 @@ export default function TablePage() {
                       }
                     : null
                 }
-                starter={iDealHand ? { card: starterCard } : null}
+                starter={iDealHand ? { card: starterCard, moved: starterPlace === "above-hand" } : null}
+                above={starterPlace === "above-hand" ? movedStarter : undefined}
               >
                 {pileButtons}
               </PileRow>
@@ -3317,6 +3776,9 @@ export default function TablePage() {
       : null;
     const cribFanned = !pegWin && board.crib ? sortHand(board.crib) : null;
     const faceDownLeft = (inRun: number) => (pegWin ? Math.max(sizes.kept - inRun, 0) : sizes.kept);
+    // The counting picture keeps the starter where counting put it.
+    const starterPlace = countingStarterPlace(iDealt ? "bottom" : "top", !pegWin && !!finalBoard.starter_card);
+    const movedStarter = countingStarterFor(starterPlace, finalBoard.starter_card, false);
     // The board: the winner's front peg in the game hole (121+ is the game
     // hole).
     const squareScores = squareBoardFor(finalBoard.players);
@@ -3348,6 +3810,7 @@ export default function TablePage() {
                       starter: finalBoard.starter_card,
                       cribSide: across.crib,
                       cribCards: cribFanned,
+                      starterMoved: starterPlace === "middle",
                     }
               }
             />
@@ -3385,6 +3848,7 @@ export default function TablePage() {
               <>
                 {middleOverlays}
                 <div className="square-middle square-middle--count">
+                  {starterPlace === "middle" && <div className="sq-count-starter">{movedStarter}</div>}
                   <div className="sq-count-flash">{scoreFlash}</div>
                   {resultStage}
                 </div>
@@ -3395,7 +3859,12 @@ export default function TablePage() {
             <div className="sq-piles">
               <PileRow
                 crib={iDealt ? { faceDownCount: sizes.kept, shownCards: cribFanned, dealerIsMe: false } : null}
-                starter={iDealt && finalBoard.starter_card ? { card: finalBoard.starter_card } : null}
+                starter={
+                  iDealt && finalBoard.starter_card
+                    ? { card: finalBoard.starter_card, moved: starterPlace === "above-hand" }
+                    : null
+                }
+                above={starterPlace === "above-hand" ? movedStarter : undefined}
               />
             </div>
           }

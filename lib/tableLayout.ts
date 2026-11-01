@@ -3,8 +3,10 @@
 // the centre, each player's played cards lie in front of them, turned to face
 // them, and the dealer's crib and deck sit beside the dealer's hand. Tested
 // by scripts/test-phase3.ts. The square layout is the default for 2-player
-// tables that aren't Muggins (chooseTableLayout, at the end).
+// tables that aren't Muggins, and 3-player tables have it with ?layout=square
+// (chooseTableLayout, at the end).
 
+import { countingOrder } from "@/lib/countingN";
 import { displayedRun, type PlayEvent } from "@/lib/pegging";
 import { seatPlaces } from "@/lib/phase3";
 
@@ -95,14 +97,60 @@ export function playedBySeat(input: {
   };
 }
 
-// WHICH LAYOUT A TABLE SHOWS. The square layout is the default for a
-// 2-player table that isn't Muggins, on the screens it has been built for:
-// a dealt hand (the discard, pegging and its hold, counting through Next
-// Hand) and a won game's final board. Everything else is the classic table:
-// the waiting room, the cut for the deal, a game that ended any other way,
-// Muggins, 3 and 4 players. ?layout=classic on the page's URL always gives
-// the classic table; ?layout=square, a missing or any other value is the
-// default.
+// WHERE A PLAYER SITS on my screen (seatsOnScreen), or null if they aren't
+// at the table.
+export function seatPositionOf(players: string[], myId: string, userId: string): SeatPosition | null {
+  const onScreen = seatsOnScreen(players, myId);
+  return SEAT_POSITIONS.find((p) => onScreen[p] === userId) ?? null;
+}
+
+// THE COUNTING PHASE on the square table: which hands are face-up at their
+// seats. Each hand turns over in place when its count comes up and stays
+// up; the order is the server's (countingOrder: clockwise from the dealer's
+// left, the dealer's own hand last), so with N players step k is the hand
+// of the (k+1)-th player after the dealer. The crib turns over at the
+// dealer's seat at step N, after every hand, and stays up through 'done'.
+export function countingReveals(input: {
+  players: string[];
+  dealerId: string;
+  step: number;
+  done: boolean;
+}): { hands: Record<string, boolean>; crib: boolean } {
+  const { players, dealerId, step, done } = input;
+  const order = countingOrder(players, dealerId);
+  const hands: Record<string, boolean> = {};
+  order.forEach((id, k) => {
+    hands[id] = done || step >= k;
+  });
+  return { hands, crib: done || step >= players.length };
+}
+
+// THE STARTER IN COUNTING (and on a final board's counting picture): where
+// the cut starter sits, from the DEALER's seat on my screen -- not the player
+// count, so any table size reads it the same way.
+//   * "above-hand": I deal -- just above my hand, centred, right of my crib's
+//     fan, upright: crib, starter and hand together to count.
+//   * "middle": anyone else deals (across, left or right) -- the middle of
+//     the table, upright (readable by me), above the counting text.
+//   * "deck": not counting (or no dealer known) -- on the dealer's deck.
+// The deck then shows nothing where the starter was.
+export type StarterPlace = "deck" | "above-hand" | "middle";
+
+export function countingStarterPlace(dealer: SeatPosition | null, counting: boolean): StarterPlace {
+  if (!counting || !dealer) return "deck";
+  return dealer === "bottom" ? "above-hand" : "middle";
+}
+
+// WHICH LAYOUT A TABLE SHOWS. The square layout covers a dealt hand (the
+// discard, pegging and its hold, counting through Next Hand) and a won
+// game's final board; everything else is the classic table: the waiting
+// room, the cut for the deal, a game that ended any other way, Muggins and
+// 4 players.
+//   * 2 players: square by default; ?layout=classic on the page's URL gives
+//     the classic table (?layout=square, a missing or any other value is
+//     the default).
+//   * 3 players: classic by default; square only with ?layout=square (the
+//     3-player square layout is still being tried out).
 export type TableLayoutChoice = "square" | "classic";
 
 export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "counting" | "won" | "ended" | "other";
@@ -111,7 +159,10 @@ const SQUARE_SCREENS: ReadonlySet<TableScreen> = new Set(["discard", "pegging", 
 
 // The table as a whole uses the square layout (for the screens it covers).
 export function isSquareTable(input: { layoutParam: string | null; playerCount: number; isMuggins: boolean }): boolean {
-  return input.layoutParam !== "classic" && input.playerCount === 2 && !input.isMuggins;
+  if (input.isMuggins) return false;
+  if (input.playerCount === 2) return input.layoutParam !== "classic";
+  if (input.playerCount === 3) return input.layoutParam === "square";
+  return false;
 }
 
 export function chooseTableLayout(input: {
