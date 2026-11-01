@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { PlayingCard } from "@/components/PlayingCard";
 import type { SeatGeometry } from "@/lib/tableLayout";
 
-// THE SQUARE TABLE (PRD item 31; not on the live table yet): one player's
+// THE SQUARE TABLE (PRD item 31; the 2-player default): one player's
 // played cards, lying in front of their seat. The run's cards overlap in play
 // order, newest on top, and the whole row is turned to face the player
 // (seatGeometry: you 0, left 90, across 180, right -90 degrees). A sideways

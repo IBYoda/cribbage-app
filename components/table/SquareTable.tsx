@@ -4,11 +4,12 @@ import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
 import type { ScreenSide } from "@/lib/tableLayout";
 
-// THE SQUARE TABLE (PRD item 31, docs/mockups/table-redesign/) -- NOT ON THE
-// LIVE TABLE YET: only the dev mock (app/dev/table-mock?layout=square) uses
-// these. Square-only versions of the shell, the header and the across
-// player's seat, so the live TableShell, TableHeader and OpponentBand stay
-// exactly as they are. Sizes are in app/globals.css ("THE SQUARE TABLE").
+// THE SQUARE TABLE (PRD item 31, docs/mockups/table-redesign/) -- the default
+// layout of a 2-player table that isn't Muggins (chooseTableLayout,
+// lib/tableLayout.ts; ?layout=classic for the classic one), and of the dev
+// mock (app/dev/table-mock). Square-only versions of the shell, the header
+// and the across player's seat, so the classic TableShell, TableHeader and
+// OpponentBand stay exactly as they are. Sizes are in app/globals.css ("THE SQUARE TABLE").
 //
 // Rows, top to bottom (2 players, as in mockups 01-03): the header, with the
 // across player's avatar and name in its centre; the across player's hand,

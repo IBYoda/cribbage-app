@@ -32,7 +32,15 @@ import { Splash, useSplash } from "@/components/table/Splash";
 import { SquareOpponentHand, SquareTableHeader, SquareTableShell } from "@/components/table/SquareTable";
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
 import { CenterCount } from "@/components/table/CenterCount";
-import { SEAT_POSITIONS, playedBySeat, seatGeometry, seatsOnScreen } from "@/lib/tableLayout";
+import {
+  SEAT_POSITIONS,
+  chooseTableLayout,
+  isSquareTable,
+  playedBySeat,
+  seatGeometry,
+  seatsOnScreen,
+  type TableScreen,
+} from "@/lib/tableLayout";
 import { CribbageBoard } from "@/components/table/CribbageBoard";
 import { laneOf } from "@/lib/boardLayout";
 import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
@@ -46,17 +54,21 @@ import {
 } from "@/components/table/DealAnimation";
 import { dealPlan, liveDealStep, liveDiscardStep, type DiscardSeen } from "@/lib/dealAnimation";
 
-// THE SQUARE TABLE FLAG (PRD item 31, slice 1): ?layout=square on the page's
-// URL turns on the square 2-player pegging screen; no param, or anything else
-// (?layout=classic), is the table exactly as it was. Read through
-// useSyncExternalStore: the server and the first client render say "off", so
-// hydration always matches, and the real value applies straight after.
+// THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
+// 2-player table that isn't Muggins (chooseTableLayout, lib/tableLayout.ts);
+// ?layout=classic on the page's URL forces the classic table. Read through
+// useSyncExternalStore with no param on the server and in the hydrating
+// render. That render is always the "Loading..." screen (the session is read
+// in an effect, so `loading` starts true on both sides), so the param can
+// never make hydration differ; by the time a table draws, the client value
+// is in. See also the square table's wait for the first full read (THE
+// FIRST READ, below), so no classic shell shows before the square one.
 const subscribeToLocation = (onChange: () => void) => {
   window.addEventListener("popstate", onChange);
   return () => window.removeEventListener("popstate", onChange);
 };
-const squareLayoutFromUrl = () => new URLSearchParams(window.location.search).get("layout") === "square";
-const squareLayoutOnServer = () => false;
+const layoutParamFromUrl = () => new URLSearchParams(window.location.search).get("layout");
+const layoutParamOnServer = () => null;
 
 type TableRow = {
   id: string;
@@ -521,8 +533,8 @@ export default function TablePage() {
   // THE SPLASHES ("19" and GO), fired from the realtime handlers only -- see
   // components/table/Splash.tsx.
   const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({ noZero: hideCountNumbers });
-  // ?layout=square (see THE SQUARE TABLE FLAG above). Drawing only.
-  const squareLayout = useSyncExternalStore(subscribeToLocation, squareLayoutFromUrl, squareLayoutOnServer);
+  // ?layout= (see THE LAYOUT PARAM above). Drawing only.
+  const layoutParam = useSyncExternalStore(subscribeToLocation, layoutParamFromUrl, layoutParamOnServer);
   // The dealing animation's off switches: the Profile setting (this device)
   // and the system's reduced motion.
   const dealAnimationOn = useDealAnimationOn();
@@ -2025,6 +2037,21 @@ export default function TablePage() {
     );
   }
 
+  // THE FIRST READ, on a table that will draw square: until the table's first
+  // full read is in, the same "Loading..." as above -- not the classic table
+  // with nothing on it, which would flash before the square one. A classic
+  // table (3 or 4 players, Muggins, ?layout=classic) draws as it always has.
+  if (
+    !tableRead &&
+    isSquareTable({ layoutParam, playerCount: table?.max_players ?? 2, isMuggins: table?.is_muggins === true })
+  ) {
+    return (
+      <main className="table-loading flex flex-1 items-center justify-center">
+        <p>Loading...</p>
+      </main>
+    );
+  }
+
   const me = members.find((m) => m.user_id === session.user.id);
   // Seating: everyone who isn't you sits across the top. Rendered from an
   // array rather than a single hardcoded opponent so 3- and 4-player tables
@@ -2165,7 +2192,10 @@ export default function TablePage() {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
-  const squareDealTable = squareLayout && isTwoPlayerTable && !isMuggins && opponents.length === 1;
+  // The square table (by default for 2 players, not Muggins, without
+  // ?layout=classic): only it shows the deal and the discard tosses.
+  const squareTable = isSquareTable({ layoutParam, playerCount: capacity, isMuggins });
+  const squareDealTable = squareTable && opponents.length === 1;
   const dealInFlight =
     squareDealTable &&
     dealAnimationOn &&
@@ -2980,12 +3010,12 @@ export default function TablePage() {
       />
     ) : null;
 
-  // THE SQUARE SCREEN (PRD item 31, slice 1) -- only with ?layout=square,
-  // only on a 2-player table that isn't Muggins, and only for a dealt hand:
-  // the discard, pegging and its hold, and counting through Next Hand (see
-  // below). Everything else -- the cut for the deal, the waiting room, the
-  // final board after a win, Muggins, 3 and 4 players -- is the table below,
-  // unchanged.
+  // THE SQUARE SCREEN (PRD item 31) -- the default on a 2-player table that
+  // isn't Muggins, unless ?layout=classic (chooseTableLayout), for a dealt
+  // hand: the discard, pegging and its hold, and counting through Next Hand
+  // (see below); the final board after a win is the next block. Everything
+  // else -- the cut for the deal, the waiting room, Muggins, 3 and 4
+  // players, ?layout=classic -- is the table below, unchanged.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
   // the count, whose turn, Go, the hold, the score flash, my hand and its
@@ -3036,12 +3066,17 @@ export default function TablePage() {
       })),
     };
   };
+  const squareScreen: TableScreen = !isActive
+    ? "other"
+    : phase === "discard"
+      ? "discard"
+      : pegView
+        ? "pegging"
+        : isCountingOrDone && !!view
+          ? "counting"
+          : "other";
   const squareView =
-    squareLayout &&
-    isTwoPlayerTable &&
-    !isMuggins &&
-    isActive &&
-    (phase === "discard" || pegView || (isCountingOrDone && !!view)) &&
+    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, screen: squareScreen }) === "square" &&
     !!squareOpponent;
   if (squareView && activeGame && squareOpponent) {
     // COUNTING (counting and done, after Count hands): no cards in the
@@ -3229,7 +3264,7 @@ export default function TablePage() {
     );
   }
 
-  // THE SQUARE FINAL BOARD (?layout=square, 2 players, not Muggins): a won
+  // THE SQUARE FINAL BOARD (2 players, not Muggins, by default): a won
   // game, from the same finalBoard data as the classic final board. How it
   // was won picks the picture -- the winner's last award IS the winning one:
   //   * a hand or crib count, or his heels: the counting picture -- every
@@ -3246,9 +3281,8 @@ export default function TablePage() {
   // table, or one with no dealer recorded.
   const finalWinner = finalBoard ? members.find((m) => m.user_id === finalBoard.winner_id) : undefined;
   const squareFinal =
-    squareLayout &&
-    isTwoPlayerTable &&
-    !isMuggins &&
+    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, screen: finalBoard ? "won" : "other" }) ===
+      "square" &&
     !!finalBoard &&
     !!finalBoard.dealer_id &&
     !!squareOpponent &&

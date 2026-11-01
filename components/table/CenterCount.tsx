@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { displayedRun, type PlayEvent } from "@/lib/pegging";
 
-// THE SQUARE TABLE (PRD item 31; not on the live table yet): the centre of
+// THE SQUARE TABLE (PRD item 31; the 2-player default): the centre of
 // the table during pegging -- the running count in large type, the status
 // pill under it, and the score flash ("Yoda +2 / fifteen") over the pill.
 //
