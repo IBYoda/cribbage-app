@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
-import { seatGeometry, type SeatPosition } from "@/lib/tableLayout";
+import { ringLayout, seatGeometry, type SeatPosition } from "@/lib/tableLayout";
 
 // THE SQUARE TABLE WITH SIDE SEATS (PRD item 31; mockups 04 and 05): the
 // middle of a 3-player table -- and, with the top seat added, a 4-player
@@ -20,6 +20,13 @@ import { seatGeometry, type SeatPosition } from "@/lib/tableLayout";
 // seat: crib top, deck bottom; right seat: crib bottom, deck top). Each
 // seat's played cards lie in front of it, between its stack and the count;
 // mine below the count, as with 2 players. No "D" anywhere.
+//
+// 4 PLAYERS (Teams, ?layout=square): the top seat too -- its hand and piles
+// are the across row above the middle (SquareOpponentHand, as with 2
+// players), its name in the header; here only its played cards, upside down
+// above the count. The side tags then sit under the top row, just above each
+// side column, and the side columns run the middle's full height
+// (ringLayout, lib/tableLayout.ts; .sq-ring--four in app/globals.css).
 
 export type RingPiles = {
   // The crib's cards so far (face-down), or its four face-up once it has
@@ -34,8 +41,8 @@ export type RingPiles = {
 };
 
 export type RingSeat = {
-  // Where the seat is on my screen: "left" or "right" (the top seat, for 4
-  // players, is a later slice).
+  // Where the seat is on my screen: "left" or "right"; "top" (4 players)
+  // only for its played cards -- its hand and piles are the across row.
   position: SeatPosition;
   userId: string;
   name: string;
@@ -90,6 +97,10 @@ function SidePileLabel({ children }: { children: ReactNode }) {
 
 function SidePile({ kind, piles, turn }: { kind: "crib" | "deck"; piles: RingPiles; turn: number }) {
   if (kind === "deck" && piles.starterMoved) {
+    // Once the crib is fanned (its count; the starter's slide long over) the
+    // empty deck place is dropped: 4 players close its slot up (.sq-ring--four),
+    // so the dealer's column -- fan, hand -- fits the shorter middle.
+    if (piles.cribCards) return null;
     return (
       <div className="sq-side__pile" data-pile="deck" aria-hidden>
         <SideCard home={turn}>{null}</SideCard>
@@ -206,6 +217,8 @@ export function SquareRingMiddle({
 }) {
   const left = seats.find((s) => s.position === "left") ?? null;
   const right = seats.find((s) => s.position === "right") ?? null;
+  const top = seats.find((s) => s.position === "top") ?? null;
+  const layout = ringLayout({ top: !!top, sides: !!(left || right) });
   const playedOf = (seat: RingSeat | null) =>
     seat ? (
       <SeatPlayedCards
@@ -219,11 +232,14 @@ export function SquareRingMiddle({
       <span />
     );
   return (
-    <div className={`sq-ring ${variant ? `sq-ring--${variant}` : ""}`}>
+    <div
+      className={`sq-ring ${variant ? `sq-ring--${variant}` : ""} ${layout.sideColumns === "full-height" ? "sq-ring--four" : ""}`}
+    >
       {left && <SeatTag seat={left} />}
       {right && <SeatTag seat={right} />}
       <div className="sq-ring__seat sq-ring__seat--left">{left && <SideSeatColumn seat={left} />}</div>
       <div className="sq-ring__center">
+        {played && top && <div className="sq-ring__top">{playedOf(top)}</div>}
         <div className="sq-ring__row">
           {played && playedOf(left)}
           <div className="sq-ring__count">{center}</div>

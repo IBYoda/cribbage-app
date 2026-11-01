@@ -79,12 +79,14 @@ export function SquareTableHeader({
 }: {
   code: string;
   handNo: number | null;
-  // laneColor: their board lane's colour, as their avatar's ring.
-  opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string } | null;
+  // laneColor: their board lane's colour, as their avatar's ring. status (4
+  // players): their word in the discard and counting ("Picking…",
+  // "Discarded", "Counting"), shown when they haven't said Go.
+  opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string; status?: ReactNode } | null;
   right: ReactNode;
 }) {
   return (
-    <header className="sq-header">
+    <header className={opponent?.status ? "sq-header sq-header--seat-status" : "sq-header"}>
       <h1 className="min-w-0 truncate font-semibold">
         Table {code}
         {handNo != null && <span className="font-normal text-zinc-500"> · Hand {handNo}</span>}
@@ -95,11 +97,13 @@ export function SquareTableHeader({
             <span data-sq="opp-avatar">
               <Avatar name={opponent.name} url={opponent.avatarUrl} size="sm" tone="table" ringColor={opponent.laneColor} />
             </span>
-            <span className="max-w-[9rem] truncate text-sm font-medium" data-sq="opp-name">
+            <span className="min-w-0 max-w-[9rem] truncate text-sm font-medium" data-sq="opp-name">
               {opponent.name}
             </span>
-            {opponent.saidGo && (
+            {opponent.saidGo ? (
               <span className="text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>
+            ) : (
+              opponent.status
             )}
           </>
         )}
@@ -124,6 +128,9 @@ export type AcrossPiles = {
   // The starter has moved to the middle (counting): the deck shows nothing,
   // its place kept for the starter's slide to start from.
   starterMoved?: boolean;
+  // 4 players (ringLayout's acrossPiles "level"): level with the hand and as
+  // big as its card backs, so nothing hangs into the side players' names.
+  level?: boolean;
 };
 
 // The across player's hand: whole card backs (or the shown cards), overlapped
@@ -179,7 +186,7 @@ export function SquareOpponentHand({
       {piles && (
         <>
           <div
-            className={`sq-across-pile sq-across-pile--deck sq-across-pile--${piles.cribSide === "left" ? "right" : "left"}`}
+            className={`sq-across-pile sq-across-pile--deck sq-across-pile--${piles.cribSide === "left" ? "right" : "left"} ${piles.level ? "sq-across-pile--level" : ""}`}
             data-starter-home={piles.starterMoved ? "0" : undefined}
             aria-hidden={piles.starterMoved || undefined}
           >
@@ -193,7 +200,7 @@ export function SquareOpponentHand({
             {!piles.starterMoved && <SquarePileLabel>{piles.starter ? "Starter" : "Deck"}</SquarePileLabel>}
           </div>
           <div
-            className={`sq-across-pile sq-across-pile--crib sq-across-pile--${piles.cribSide === "left" ? "left" : "right"}`}
+            className={`sq-across-pile sq-across-pile--crib sq-across-pile--${piles.cribSide === "left" ? "left" : "right"} ${piles.level ? "sq-across-pile--level" : ""}`}
             aria-label="Crib (the dealer's)"
           >
             {/* As the classic crib pile (PileRow): with cards in it, a pile

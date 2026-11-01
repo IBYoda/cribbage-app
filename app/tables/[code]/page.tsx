@@ -38,6 +38,8 @@ import {
   countingReveals,
   countingStarterPlace,
   isSquareTable,
+  laneForPlayer,
+  ringLayout,
   playedBySeat,
   seatGeometry,
   seatPositionOf,
@@ -46,7 +48,6 @@ import {
   type TableScreen,
 } from "@/lib/tableLayout";
 import { CribbageBoard } from "@/components/table/CribbageBoard";
-import { laneOf } from "@/lib/boardLayout";
 import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
 import {
   ComputerDiscardClock,
@@ -2076,11 +2077,16 @@ export default function TablePage() {
   // THE FIRST READ, on a table that will draw square: until the table's first
   // full read is in, the same "Loading..." as above -- not the classic table
   // with nothing on it, which would flash before the square one (2 and 3
-  // players). A classic table (4 players, Muggins, ?layout=classic) draws as
-  // it always has.
+  // players; 4-player Teams with ?layout=square). A classic table (4 players
+  // by default, Muggins, ?layout=classic) draws as it always has.
   if (
     !tableRead &&
-    isSquareTable({ layoutParam, playerCount: table?.max_players ?? 2, isMuggins: table?.is_muggins === true })
+    isSquareTable({
+      layoutParam,
+      playerCount: table?.max_players ?? 2,
+      isMuggins: table?.is_muggins === true,
+      teams: table?.team_mode === "teams",
+    })
   ) {
     return (
       <main className="table-loading flex flex-1 items-center justify-center">
@@ -2230,18 +2236,19 @@ export default function TablePage() {
     setDealSeenKey(dealStep.seenKey);
   }
   // The square table (by default for 2 and 3 players, not Muggins, without
-  // ?layout=classic): only it shows the deal and the discard tosses -- with
-  // every seat filled, as its screens need (3 players: every game player
-  // still at the table, as THE SQUARE SCREEN, 3 PLAYERS requires, so a deal
-  // is never held for a screen that draws classic).
-  const squareTable = isSquareTable({ layoutParam, playerCount: capacity, isMuggins });
+  // ?layout=classic; 4-player Teams with ?layout=square): only it shows the
+  // deal and the discard tosses -- with every seat filled, as its screens
+  // need (3 and 4 players: every game player still at the table, as THE
+  // SQUARE SCREEN, 3 AND 4 PLAYERS requires, so a deal is never held for a
+  // screen that draws classic).
+  const squareTable = isSquareTable({ layoutParam, playerCount: capacity, isMuggins, teams: isTeams });
   const squareDealTable =
     squareTable &&
     (capacity === 2
       ? opponents.length === 1
-      : capacity === 3 &&
-        opponents.length === 2 &&
-        gamePlayers?.length === 3 &&
+      : (capacity === 3 || capacity === 4) &&
+        opponents.length === capacity - 1 &&
+        gamePlayers?.length === capacity &&
         gamePlayers.every((id) => members.some((m) => m.user_id === id)));
   const dealInFlight =
     squareDealTable &&
@@ -3150,32 +3157,39 @@ export default function TablePage() {
   // same array on every screen, so the same colours everywhere), their pegs
   // from their row's score and last award (CribbageBoard / nextPegs), and
   // their lane's colour as the ring round their avatar (plates and header).
-  // No "D" on the plates.
-  const squareBoardFor = (seatOrder: string[]) => {
+  // No "D" on the plates. 4-player Teams (teams): a lane per TEAM
+  // (laneForPlayer: team 1 red, team 2 blue), both partners ringed in it,
+  // each team's pegs on its team score -- from its plate (buildPlates: the
+  // team total, and the newest award, the scorer's, for the back peg).
+  const squareBoardFor = (seatOrder: string[], teams = false) => {
     const skin = DEFAULT_BOARD_SKIN;
     const seated = seatOrder.flatMap((id) => members.filter((m) => m.user_id === id));
+    const laneOfPlayer = (userId: string) => laneForPlayer({ players: seatOrder, userId, teams });
     const laneColorOf = (userId: string) => {
-      const lane = laneOf(seatOrder, userId);
+      const lane = laneOfPlayer(userId);
       return lane === null ? undefined : skin.lanes[lane].peg;
     };
+    const boardPlayers = teams
+      ? plates.flatMap((p) => {
+          const lane = p.members[0] ? laneOfPlayer(p.members[0].userId) : null;
+          return lane === null
+            ? []
+            : [{ userId: p.key, name: p.members.map((m) => m.name).join(" & "), lane, score: p.score, lastPoints: p.lastPoints }];
+        })
+      : seated.map((m) => ({
+          userId: m.user_id,
+          name: displayName(m),
+          lane: laneOfPlayer(m.user_id) ?? -1,
+          score: m.score,
+          lastPoints: m.last_points,
+        }));
     return {
       laneColorOf,
-      board: (
-        <CribbageBoard
-          skin={skin}
-          players={seated.map((m) => ({
-            userId: m.user_id,
-            name: displayName(m),
-            lane: laneOf(seatOrder, m.user_id) ?? -1,
-            score: m.score,
-            lastPoints: m.last_points,
-          }))}
-        />
-      ),
+      board: <CribbageBoard skin={skin} players={boardPlayers} />,
       plates: plates.map((p) => ({
         ...p,
         hasDealer: false,
-        laneColor: p.members.length === 1 ? laneColorOf(p.members[0].userId) : undefined,
+        laneColor: p.members.length === 1 || teams ? laneColorOf(p.members[0].userId) : undefined,
       })),
     };
   };
@@ -3234,11 +3248,16 @@ export default function TablePage() {
     );
   };
 
-  // THE SQUARE SCREEN, 3 PLAYERS (PRD item 31; mockups 04 and 05 with the
-  // across seat empty) -- the default (chooseTableLayout; ?layout=classic for
-  // the classic table), every seat filled, me among the game's players. Me at the bottom, the next
-  // player clockwise on my LEFT, the one after on my RIGHT (seatsOnScreen),
-  // nobody across. Drawing only, from the same data and handlers as the
+  // THE SQUARE SCREEN, 3 AND 4 PLAYERS (PRD item 31; mockups 04 and 05) --
+  // 3 players by default (chooseTableLayout; ?layout=classic for the classic
+  // table), 4-player Teams only with ?layout=square; every seat filled, me
+  // among the game's players. Me at the bottom, the next player clockwise on
+  // my LEFT, then (4 players: my partner) the TOP, the last on my RIGHT
+  // (seatsOnScreen); 3 players: nobody across. The top seat is drawn as the
+  // 2-player across seat -- its name, ring and status word in the header, its
+  // hand (and, when it deals, its piles, level with it: ringLayout) as the
+  // across row -- and only its played cards in the middle, upside down
+  // above the count. Drawing only, from the same data and handlers as the
   // 2-player square screen below and the classic table: the side seats
   // (SquareRingMiddle) hold each player's hand as sideways cards, their Go /
   // discarded / counting word, and -- at the dealer's seat -- the crib and
@@ -3250,18 +3269,62 @@ export default function TablePage() {
   // stage's text, recap and buttons in the centre.
   const ringPlayers = activeGame?.players ?? finalBoard?.players ?? null;
   const ringTable = (screen: TableScreen) =>
-    capacity === 3 &&
-    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, screen }) === "square" &&
-    opponents.length === 2 &&
+    (capacity === 3 || (capacity === 4 && isTeams)) &&
+    chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, teams: isTeams, screen }) === "square" &&
+    opponents.length === capacity - 1 &&
     !!ringPlayers &&
-    ringPlayers.length === 3 &&
+    ringPlayers.length === capacity &&
     ringPlayers.includes(session.user.id) &&
     ringPlayers.every((id) => members.some((m) => m.user_id === id));
-  // A side seat, from the seat order: who sits there and their row.
-  const ringMember = (players: string[], position: "left" | "right") => {
+  // A seat round me, from the seat order: who sits there and their row.
+  const ringMember = (players: string[], position: "left" | "top" | "right") => {
     const id = seatsOnScreen(players, session.user.id)[position];
     return id ? (members.find((m) => m.user_id === id) ?? null) : null;
   };
+  const ringPositions = (players: string[]) =>
+    (players.length === 4 ? (["left", "top", "right"] as const) : (["left", "right"] as const)) as readonly (
+      | "left"
+      | "top"
+      | "right"
+    )[];
+  // THE TOP ROW (4 players), from the top seat: the header's name, ring and
+  // word (Go, else its status), and its hand -- with its piles, level with
+  // it, when it deals (crib on my right, deck on my left: seatGeometry).
+  const ringTopRow = (top: RingSeat | undefined, statusKind: "discarded" | "discarding" | "counting" | null, saidGo: boolean) =>
+    top
+      ? {
+          header: {
+            name: top.name,
+            avatarUrl: top.avatarUrl,
+            saidGo,
+            laneColor: top.laneColor,
+            status: <SeatStatus kind={statusKind} />,
+          },
+          row: (
+            <SquareOpponentHand
+              cardCount={top.hand.count}
+              counting={
+                top.hand.revealed !== undefined
+                  ? { cards: (top.hand.cards as string[] | null) ?? null, revealed: top.hand.revealed }
+                  : undefined
+              }
+              shownCards={top.hand.revealed === undefined && top.hand.cards ? (top.hand.cards as string[]) : undefined}
+              piles={
+                top.piles
+                  ? {
+                      cribCount: top.piles.cribCount,
+                      starter: top.piles.starter,
+                      cribSide: seatGeometry("top").crib,
+                      cribCards: top.piles.cribCards,
+                      starterMoved: top.piles.starterMoved,
+                      level: ringLayout({ top: true, sides: true }).acrossPiles === "level",
+                    }
+                  : null
+              }
+            />
+          ),
+        }
+      : null;
   if (ringTable(squareScreen) && activeGame && ringPlayers) {
     const players = ringPlayers;
     const ringCount = isCountingOrDone && !!viewN;
@@ -3286,8 +3349,18 @@ export default function TablePage() {
       players,
       myId: session.user.id,
     });
-    const ringScores = squareBoardFor(players);
-    const ringSeats = (["left", "right"] as const).flatMap((position): RingSeat[] => {
+    const ringScores = squareBoardFor(players, isTeams && players.length === 4);
+    // A seat's word: Picking… / Discarded in the discard, Counting on its
+    // count (Go is shown apart).
+    const statusKindOf = (id: string) =>
+      phase === "discard" && !cribComplete
+        ? discardedBy.includes(id)
+          ? ("discarded" as const)
+          : ("discarding" as const)
+        : ringCount && viewN?.counterId === id
+          ? ("counting" as const)
+          : null;
+    const ringSeats = ringPositions(players).flatMap((position): RingSeat[] => {
       const m = ringMember(players, position);
       if (!m) return [];
       const id = m.user_id;
@@ -3298,21 +3371,7 @@ export default function TablePage() {
           name: displayName(m),
           avatarUrl: m.avatar_url,
           laneColor: ringScores.laneColorOf(id),
-          status: (
-            <SeatStatus
-              kind={
-                goBy.has(id)
-                  ? "go"
-                  : phase === "discard" && !cribComplete
-                    ? discardedBy.includes(id)
-                      ? "discarded"
-                      : "discarding"
-                    : ringCount && viewN?.counterId === id
-                      ? "counting"
-                      : null
-              }
-            />
-          ),
+          status: <SeatStatus kind={goBy.has(id) ? "go" : statusKindOf(id)} />,
           // Counting: their four, face-down until their count comes up (and
           // until the read policies return them).
           hand: ringCount
@@ -3337,13 +3396,22 @@ export default function TablePage() {
         },
       ];
     });
+    const topSeat = ringSeats.find((s) => s.position === "top");
+    const topRow = ringTopRow(topSeat, topSeat ? statusKindOf(topSeat.userId) : null, !!topSeat && goBy.has(topSeat.userId));
     return (
       <>
         <SquareTableShell
           dealing={dealInFlight}
           overlay={squareOverlaysFor(players)}
-          header={<SquareTableHeader code={code} handNo={activeGame.hand_no ?? null} opponent={null} right={headerRight} />}
-          opponent={null}
+          header={
+            <SquareTableHeader
+              code={code}
+              handNo={activeGame.hand_no ?? null}
+              opponent={topRow?.header ?? null}
+              right={headerRight}
+            />
+          }
+          opponent={topRow?.row ?? null}
           middle={
             <>
               {middleOverlays}
@@ -3414,7 +3482,9 @@ export default function TablePage() {
     );
   }
 
-  // THE SQUARE FINAL BOARD, 3 PLAYERS (the default): a won game, as the
+  // THE SQUARE FINAL BOARD, 3 AND 4 PLAYERS (3 by default; 4-player Teams
+  // with ?layout=square, the top seat as the across row, the winning team in
+  // the headline and on the board): a won game, as the
   // 2-player square final board below does it -- a pegging win shows the
   // run in front of its players with its count, and the rest of each hand
   // at its seat; a count win (or his heels) every hand face-up at its seat
@@ -3449,8 +3519,8 @@ export default function TablePage() {
       !pegWin && !!finalBoard.starter_card
     );
     const movedStarter = countingStarterFor(starterPlace, finalBoard.starter_card, false);
-    const ringScores = squareBoardFor(players);
-    const ringSeats = (["left", "right"] as const).flatMap((position): RingSeat[] => {
+    const ringScores = squareBoardFor(players, isTeams && players.length === 4);
+    const ringSeats = ringPositions(players).flatMap((position): RingSeat[] => {
       const m = ringMember(players, position);
       if (!m) return [];
       const cards = restOf(m.user_id, position);
@@ -3461,7 +3531,11 @@ export default function TablePage() {
           name: displayName(m),
           avatarUrl: m.avatar_url,
           laneColor: ringScores.laneColorOf(m.user_id),
-          hand: cards ? { count: cards.length, cards } : { count: faceDownLeft(run[position].cards.length) },
+          // The top seat (4 players) spreads its shown hand as the across
+          // seat does on the 2-player final board.
+          hand: cards
+            ? { count: cards.length, cards, ...(position === "top" ? { revealed: true } : {}) }
+            : { count: faceDownLeft(run[position].cards.length) },
           piles:
             finalBoard.dealer_id === m.user_id
               ? {
@@ -3476,11 +3550,16 @@ export default function TablePage() {
       ];
     });
     const myCards = restOf(session.user.id, "bottom");
+    const topRow = ringTopRow(
+      ringSeats.find((s) => s.position === "top"),
+      null,
+      false
+    );
     return (
       <>
         <SquareTableShell
-          header={<SquareTableHeader code={code} handNo={null} opponent={null} right={headerRight} />}
-          opponent={null}
+          header={<SquareTableHeader code={code} handNo={null} opponent={topRow?.header ?? null} right={headerRight} />}
+          opponent={topRow?.row ?? null}
           middle={
             <>
               {middleOverlays}
