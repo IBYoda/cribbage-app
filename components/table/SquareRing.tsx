@@ -21,7 +21,7 @@ import { ringLayout, seatGeometry, type SeatPosition } from "@/lib/tableLayout";
 // seat's played cards lie in front of it, between its stack and the count;
 // mine below the count, as with 2 players. No "D" anywhere.
 //
-// 4 PLAYERS (Teams, ?layout=square): the top seat too -- its hand and piles
+// 4 PLAYERS (Teams, by default): the top seat too -- its hand and piles
 // are the across row above the middle (SquareOpponentHand, as with 2
 // players), its name in the header; here only its played cards, upside down
 // above the count. The side tags then sit under the top row, just above each

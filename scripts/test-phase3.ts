@@ -540,7 +540,7 @@ check("layout: ?layout=classic always classic; ?layout=square and unknown values
   }
   for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 2, false, s), "classic", s);
 });
-check("layout: 4 players, and Muggins (any size), are classic with or without the param", () => {
+check("layout: 4-player Solo (not Teams), and Muggins (any size), are classic with or without the param", () => {
   for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
       strictEqual(layoutFor(param, 4, false, s), "classic", `4p ${param} ${s}`);
@@ -568,7 +568,7 @@ check("layout: 3 players -- ?layout=classic always classic", () => {
   for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(layoutFor("classic", 3, false, s), "classic", s);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 3, isMuggins: false }), false);
 });
-check("layout: 2 and 3 players follow the same rule; other table sizes never square", () => {
+check("layout: 2 and 3 players follow the same rule; other table sizes (and 4-player Solo) never square", () => {
   for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
       strictEqual(layoutFor(param, 3, false, s), layoutFor(param, 2, false, s), `${param} ${s}`);
@@ -576,22 +576,30 @@ check("layout: 2 and 3 players follow the same rule; other table sizes never squ
     }
   }
 });
-check("layout: 4-player Teams -- square only with ?layout=square, on its screens", () => {
+check("layout: 4-player Teams -- square by default on its screens, classic elsewhere", () => {
   const teams4 = (layoutParam: string | null, screen: TableScreen, isMuggins = false) =>
     chooseTableLayout({ layoutParam, playerCount: 4, isMuggins, teams: true, screen });
-  for (const s of SQUARE_SCREENS) strictEqual(teams4("square", s), "square", s);
-  for (const s of CLASSIC_SCREENS) strictEqual(teams4("square", s), "classic", s);
-  // By default (and any other value, and ?layout=classic): classic.
-  for (const param of [null, "classic", "x", "", "Square"]) {
-    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(teams4(param, s), "classic", `${param} ${s}`);
+  // No param, ?layout=square and unknown values are all the default.
+  for (const param of [null, "square", "x", "", "Square"]) {
+    for (const s of SQUARE_SCREENS) strictEqual(teams4(param, s), "square", `${param} ${s}`);
+    for (const s of CLASSIC_SCREENS) strictEqual(teams4(param, s), "classic", `${param} ${s}`);
   }
+  // ?layout=classic: always classic.
+  for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(teams4("classic", s), "classic", s);
   // Muggins never; 4-player Solo (not Teams) never.
-  for (const s of SQUARE_SCREENS) {
-    strictEqual(teams4("square", s, true), "classic", s);
-    strictEqual(chooseTableLayout({ layoutParam: "square", playerCount: 4, isMuggins: false, teams: false, screen: s }), "classic");
+  for (const param of [null, "square", "classic", "x"]) {
+    for (const s of SQUARE_SCREENS) {
+      strictEqual(teams4(param, s, true), "classic", `muggins ${param} ${s}`);
+      strictEqual(chooseTableLayout({ layoutParam: param, playerCount: 4, isMuggins: false, teams: false, screen: s }), "classic");
+    }
   }
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false, teams: true }), true);
   strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false, teams: true }), true);
-  strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false, teams: true }), false);
+  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 4, isMuggins: false, teams: true }), false);
+  // 4-player Teams follows the 2- and 3-player rule exactly.
+  for (const param of [null, "square", "classic", "x", ""]) {
+    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(teams4(param, s), layoutFor(param, 2, false, s), `${param} ${s}`);
+  }
   // The teams flag changes nothing for 2 and 3 players.
   for (const param of [null, "square", "classic"]) {
     for (const n of [2, 3]) {
