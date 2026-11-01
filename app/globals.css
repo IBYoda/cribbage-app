@@ -839,6 +839,26 @@ body {
   justify-content: center;
   min-height: 28px;
 }
+/* The final board after a pegging win: the run in front of each seat, the
+   count, then the result (banner, ready lines, New Game) in the centre --
+   so the played cards leave room for the result (~230px with the count and
+   a "Waiting for..." line), and my row doesn't reach into the pile row.
+   The count has no pill here: its line takes no height, and the score flash
+   (the winning peg's) shows over it while it lasts. */
+.square-middle--final .seat-played {
+  --spc-base: min(var(--hand-w), calc((100cqh - 230px) / 2.69), calc(100cqw / 3.01));
+}
+.square-middle--final > .center-count,
+.square-middle--final > :last-child {
+  margin-bottom: 0;
+}
+.square-middle--final > .center-count {
+  gap: 0;
+}
+.square-middle--final .center-count__pill {
+  height: 0;
+  min-height: 0;
+}
 .seat-played {
   /* The base card: a hand card, unless the middle is too short for both
      rows (0.92 + 1 card) plus the centre, or too narrow for four cards. */
