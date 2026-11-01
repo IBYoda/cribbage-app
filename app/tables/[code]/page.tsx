@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
@@ -29,6 +29,22 @@ import { CountStage, SlotCards } from "@/components/table/CountStage";
 import { PlayArea, displayedRun, goSayers, type PlayEvent } from "@/components/PlayArea";
 import { useComputerDriver } from "@/components/table/useComputerDriver";
 import { Splash, useSplash } from "@/components/table/Splash";
+import { SquareOpponentHand, SquareTableHeader, SquareTableShell } from "@/components/table/SquareTable";
+import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
+import { CenterCount } from "@/components/table/CenterCount";
+import { playedBySeat, seatGeometry } from "@/lib/tableLayout";
+
+// THE SQUARE TABLE FLAG (PRD item 31, slice 1): ?layout=square on the page's
+// URL turns on the square 2-player pegging screen; no param, or anything else
+// (?layout=classic), is the table exactly as it was. Read through
+// useSyncExternalStore: the server and the first client render say "off", so
+// hydration always matches, and the real value applies straight after.
+const subscribeToLocation = (onChange: () => void) => {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+};
+const squareLayoutFromUrl = () => new URLSearchParams(window.location.search).get("layout") === "square";
+const squareLayoutOnServer = () => false;
 
 type TableRow = {
   id: string;
@@ -478,6 +494,8 @@ export default function TablePage() {
   // THE SPLASHES ("19" and GO), fired from the realtime handlers only -- see
   // components/table/Splash.tsx.
   const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({ noZero: hideCountNumbers });
+  // ?layout=square (see THE SQUARE TABLE FLAG above). Drawing only.
+  const squareLayout = useSyncExternalStore(subscribeToLocation, squareLayoutFromUrl, squareLayoutOnServer);
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -2336,12 +2354,8 @@ export default function TablePage() {
     (seatStatus === "error" && seatMessage) ||
     null;
 
-  const header = (
-    <TableHeader
-      code={code}
-      handNo={isActive ? (activeGame?.hand_no ?? null) : null}
-      muggins={isMuggins}
-      right={
+  // The header's controls -- the same in the square view's header.
+  const headerRight = (
         <>
           {/* Hide counts, saved at once. Not while Leave is asking to
               confirm, so the header's right side never grows past one
@@ -2389,13 +2403,20 @@ export default function TablePage() {
             </button>
           )}
         </>
-      }
+  );
+  const header = (
+    <TableHeader
+      code={code}
+      handNo={isActive ? (activeGame?.hand_no ?? null) : null}
+      muggins={isMuggins}
+      right={headerRight}
     />
   );
 
-  const middle = (
+  // Overlays: never part of the flow, so they can't grow the table. The same
+  // in the square view's middle.
+  const middleOverlays = (
     <>
-      {/* Overlays: never part of the flow, so they can't grow the table. */}
       {gameEndedNotice && (
         <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">
           <span>{gameEndedNotice}</span>
@@ -2409,6 +2430,31 @@ export default function TablePage() {
           {errorToast}
         </p>
       )}
+    </>
+  );
+
+  // The discard's prompt in the middle -- the same in the square view.
+  const discardPrompt = iHaveDiscarded ? (
+    <p className="text-sm text-zinc-500">
+      Waiting for {waitingOn.map(displayName).join(", ")} to discard...
+    </p>
+  ) : (
+    <p className="text-base font-medium">
+      {isPhase3Table ? (
+        <>
+          Pick {sizes.discard} card for {iAmDealer ? "your" : `${nameOf(activeGame?.dealer_id ?? "")}'s`} crib
+        </>
+      ) : (
+        <>
+          Pick {sizes.discard} cards for {iAmDealer ? "your" : "their"} crib
+        </>
+      )}
+    </p>
+  );
+
+  const middle = (
+    <>
+      {middleOverlays}
 
       {/* THE CUT. During 'cutting' there are no hands, no crib and no
           starter, so the cut view takes the whole middle; the hand row and
@@ -2426,23 +2472,7 @@ export default function TablePage() {
         />
       ) : activeGame ? (
         !cribComplete ? (
-          iHaveDiscarded ? (
-            <p className="text-sm text-zinc-500">
-              Waiting for {waitingOn.map(displayName).join(", ")} to discard...
-            </p>
-          ) : (
-            <p className="text-base font-medium">
-              {isPhase3Table ? (
-                <>
-                  Pick {sizes.discard} card for {iAmDealer ? "your" : `${nameOf(activeGame.dealer_id ?? "")}'s`} crib
-                </>
-              ) : (
-                <>
-                  Pick {sizes.discard} cards for {iAmDealer ? "your" : "their"} crib
-                </>
-              )}
-            </p>
-          )
+          discardPrompt
         ) : (
           <>
             {pegView && (
@@ -2664,6 +2694,37 @@ export default function TablePage() {
     <ScoreFlash plates={plates} hideCountAwards={hideCountNumbers} />
   ) : null;
 
+  // The hand's action buttons, between the piles (the same in the square
+  // view's pile row).
+  const pileButtons = (
+    <>
+      {/* Hidden, not just disabled, once sorting is locked (counting
+          onward): the shown crib fans out in this row then, and needs the
+          room at hand-card size. */}
+      {myHand.length > 0 && !sortLocked && (
+        <button
+          onClick={() => setHandSorted(true)}
+          disabled={handSorted}
+          className="min-h-10 rounded border border-zinc-400 px-5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
+        >
+          Sort
+        </button>
+      )}
+      {/* Only once the full discard is picked (2 cards, or 1 with 3 and 4
+          players) -- there is no valid partial discard, so a
+          disabled-but-visible button would just be noise. */}
+      {canDiscard && selectedCards.length === sizes.discard && (
+        <button
+          onClick={handleDiscard}
+          disabled={discardStatus === "sending"}
+          className="min-h-10 rounded bg-foreground px-5 text-sm font-medium text-background disabled:opacity-50"
+        >
+          {discardStatus === "sending" ? "Sending..." : "Send to Crib"}
+        </button>
+      )}
+    </>
+  );
+
   // The crib (left) and the starter or deck (right), with the hand's action
   // buttons between them. While cards are out -- and on the final board
   // after a win: the crib and the starter, and no buttons.
@@ -2702,30 +2763,7 @@ export default function TablePage() {
       starter={{ card: starterCard }}
       flash={scoreFlash}
     >
-      {/* Hidden, not just disabled, once sorting is locked (counting
-          onward): the shown crib fans out in this row then, and needs the
-          room at hand-card size. */}
-      {myHand.length > 0 && !sortLocked && (
-        <button
-          onClick={() => setHandSorted(true)}
-          disabled={handSorted}
-          className="min-h-10 rounded border border-zinc-400 px-5 text-sm font-medium disabled:opacity-40 dark:border-zinc-600"
-        >
-          Sort
-        </button>
-      )}
-      {/* Only once the full discard is picked (2 cards, or 1 with 3 and 4
-          players) -- there is no valid partial discard, so a
-          disabled-but-visible button would just be noise. */}
-      {canDiscard && selectedCards.length === sizes.discard && (
-        <button
-          onClick={handleDiscard}
-          disabled={discardStatus === "sending"}
-          className="min-h-10 rounded bg-foreground px-5 text-sm font-medium text-background disabled:opacity-50"
-        >
-          {discardStatus === "sending" ? "Sending..." : "Send to Crib"}
-        </button>
-      )}
+      {pileButtons}
     </PileRow>
   ) : null;
 
@@ -2797,6 +2835,124 @@ export default function TablePage() {
         onConfirm={() => runWinAction("confirm_win")}
       />
     ) : null;
+
+  // THE SQUARE SCREEN (PRD item 31, slice 1) -- only with ?layout=square,
+  // only on a 2-player table that isn't Muggins, and only from the discard
+  // until pegging ends (see below). Everything else -- the cut for the deal,
+  // counting, the final board, Muggins, 3 and 4 players -- is the table
+  // below, unchanged.
+  //
+  // Drawing only: the same data and handlers as the table below (the plays,
+  // the count, whose turn, Go, the hold, the score flash, my hand and its
+  // play action, Sort, the piles, the plates). The dealer's crib and deck
+  // sit at the DEALER's seat (seatGeometry: crib on the left of their hand,
+  // deck on the right, from their side); no "D" anywhere. The board strip is
+  // collapsed (showBoard={false}) until the board slice.
+  //
+  // From the deal until pegging ends: the discard (phase 'discard'; the
+  // starter is cut inside the last discard, so there is no step between),
+  // pegging (phase 'play'), and the hold after it. In the discard the middle
+  // keeps the same shape -- the seats' (empty) rows, and CenterCount with the
+  // discard's prompt in place of its pill -- so nothing moves when pegging
+  // starts, and the score flash stays mounted across that change.
+  const squareOpponent = opponents[0];
+  const squareView =
+    squareLayout &&
+    isTwoPlayerTable &&
+    !isMuggins &&
+    isActive &&
+    (phase === "discard" || pegView) &&
+    !!squareOpponent;
+  if (squareView && activeGame && squareOpponent) {
+    const iDealHand = handDealerId === session.user.id;
+    const oppName = displayName(squareOpponent);
+    const cribCount = cribCountDuringDiscard(playerCount, discardedBy.length);
+    const { seats: played, finished: runFinished } = playedBySeat({
+      plays,
+      playSegment: activeGame.play_segment,
+      handOver: onPegHold,
+      players: activeGame.players ?? [session.user.id, squareOpponent.user_id],
+      myId: session.user.id,
+    });
+    // The other player's seat is across the table (2 players).
+    const across = seatGeometry("top");
+    return (
+      <>
+        <SquareTableShell
+          showBoard={false}
+          header={
+            <SquareTableHeader
+              code={code}
+              handNo={activeGame.hand_no ?? null}
+              opponent={{ name: oppName, avatarUrl: squareOpponent.avatar_url, saidGo: goBy.has(squareOpponent.user_id) }}
+              right={headerRight}
+            />
+          }
+          opponent={
+            <SquareOpponentHand
+              cardCount={opponentCardCount(squareOpponent.user_id)}
+              // They deal: their crib and deck on their side, crib on their
+              // left -- my right (seatGeometry("top").crib).
+              piles={iDealHand ? null : { cribCount, starter: starterCard, cribSide: across.crib }}
+            />
+          }
+          middle={
+            <>
+              {middleOverlays}
+              <div className="square-middle">
+                <SeatPlayedCards
+                  cards={played.top.cards}
+                  rotation={across.rotation}
+                  label={`${oppName}'s played cards`}
+                  dimmed={runFinished && !onPegHold}
+                  scale={0.89}
+                />
+                <CenterCount
+                  plays={plays}
+                  playCount={playCount}
+                  playSegment={activeGame.play_segment}
+                  currentPlayer={activeGame.current_player}
+                  myUserId={session.user.id}
+                  nameFor={(userId) => displayName(members.find((m) => m.user_id === userId))}
+                  handOver={onPegHold ? { onCountHands: () => setPegHoldKey(null) } : undefined}
+                  flash={scoreFlash}
+                  // The discard: its prompt, as on the classic screen (and,
+                  // with every discard in but the phase not yet moved on, an
+                  // empty line, as the classic middle shows nothing then).
+                  prompt={pegView ? undefined : !cribComplete ? discardPrompt : <p />}
+                />
+                <SeatPlayedCards
+                  cards={played.bottom.cards}
+                  rotation={seatGeometry("bottom").rotation}
+                  label="Your played cards"
+                  dimmed={runFinished && !onPegHold}
+                />
+              </div>
+            </>
+          }
+          piles={
+            <div className="sq-piles">
+              <PileRow
+                crib={iDealHand ? { faceDownCount: cribCount, shownCards: null, dealerIsMe: false } : null}
+                starter={iDealHand ? { card: starterCard } : null}
+              >
+                {pileButtons}
+              </PileRow>
+            </div>
+          }
+          hand={<div className="sq-hand-row">{hand}</div>}
+          scores={
+            <div className="sq-plates">
+              <ScoreStrip plates={plates.map((p) => ({ ...p, hasDealer: false }))} />
+            </div>
+          }
+          surface={appearance.surface}
+          back={appearance.back}
+        />
+        <Splash splash={splash} onDone={dismissSplash} />
+      </>
+    );
+  }
 
   return (
     <>

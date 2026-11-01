@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
+import type { ScreenSide } from "@/lib/tableLayout";
 
 // THE SQUARE TABLE (PRD item 31, docs/mockups/table-redesign/) -- NOT ON THE
 // LIVE TABLE YET: only the dev mock (app/dev/table-mock?layout=square) uses
@@ -25,6 +26,7 @@ export function SquareTableShell({
   scores,
   surface = "green-felt",
   back = "classic",
+  showBoard = true,
 }: {
   header: ReactNode;
   opponent: ReactNode;
@@ -34,10 +36,13 @@ export function SquareTableShell({
   scores: ReactNode;
   surface?: TableSurface;
   back?: CardBack;
+  // The board strip's space. Off: zero height (--sq-board-h), and the middle
+  // takes the room -- the live table, until the board slice turns it on.
+  showBoard?: boolean;
 }) {
   return (
     <main
-      className="table-shell table-shell--square mx-auto w-full max-w-4xl"
+      className={`table-shell table-shell--square mx-auto w-full max-w-4xl ${showBoard ? "" : "table-shell--no-board"}`}
       data-surface={surface}
       data-scheme={surfaceIsDark(surface) ? "dark" : undefined}
       data-back={back}
@@ -95,9 +100,10 @@ export function SquareTableHeader({
 
 // The dealer's piles at the ACROSS seat (mockup 03): from that player's own
 // point of view the crib is on the left of their hand and the deck on the
-// right -- on my screen, the crib on my right and the deck on my left
-// (seatGeometry("top")). Drawn smaller than mine, beside their hand row.
-export type AcrossPiles = { cribCount: number; starter: string | null };
+// right -- on my screen, the crib on my right and the deck on my left. The
+// caller passes the crib's side from seatGeometry("top").crib; the deck takes
+// the other side. Drawn smaller than mine, beside their hand row.
+export type AcrossPiles = { cribCount: number; starter: string | null; cribSide: ScreenSide };
 
 // The across player's hand: whole card backs (or the shown cards), overlapped
 // by half a card, centred, never cut off. The first card is on top, as in
@@ -121,7 +127,7 @@ export function SquareOpponentHand({
       ))}
       {piles && (
         <>
-          <div className="sq-across-pile sq-across-pile--deck">
+          <div className={`sq-across-pile sq-across-pile--deck sq-across-pile--${piles.cribSide === "left" ? "right" : "left"}`}>
             {piles.starter ? (
               <PlayingCard card={piles.starter} sizing="w-full aspect-[5/7]" />
             ) : (
@@ -129,9 +135,22 @@ export function SquareOpponentHand({
             )}
             <SquarePileLabel>{piles.starter ? "Starter" : "Deck"}</SquarePileLabel>
           </div>
-          <div className="sq-across-pile sq-across-pile--crib" aria-label="Crib (the dealer's)">
+          <div
+            className={`sq-across-pile sq-across-pile--crib sq-across-pile--${piles.cribSide === "left" ? "left" : "right"}`}
+            aria-label="Crib (the dealer's)"
+          >
+            {/* As the classic crib pile (PileRow): with cards in it, a pile
+                with a hint of depth; empty (nobody has discarded yet), an
+                outline where it will go. */}
             {piles.cribCount > 0 ? (
-              <FaceDownCard sizing="w-full aspect-[5/7]" />
+              <div className="relative">
+                <div className="absolute left-0.5 top-0.5 w-full">
+                  <FaceDownCard sizing="w-full aspect-[5/7]" />
+                </div>
+                <div className="relative">
+                  <FaceDownCard sizing="w-full aspect-[5/7]" />
+                </div>
+              </div>
             ) : (
               <div className="aspect-[5/7] w-full rounded-lg border-2 border-dashed border-zinc-300 dark:border-zinc-700" />
             )}

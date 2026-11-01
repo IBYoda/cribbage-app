@@ -722,13 +722,20 @@ body {
   top: calc(var(--sq-back-h) * 0.47);
 }
 .sq-across-pile--deck {
-  width: calc(var(--hand-w) * 0.88);
-  left: calc(50% - var(--hand-w) * 1.98 - var(--hand-w) * 0.44);
+  --pile-w: calc(var(--hand-w) * 0.88);
+  width: var(--pile-w);
 }
 .sq-across-pile--crib {
+  --pile-w: calc(var(--hand-w) * 0.76);
   top: calc(var(--sq-back-h) * 0.51);
-  width: calc(var(--hand-w) * 0.76);
-  left: calc(50% + var(--hand-w) * 1.84 - var(--hand-w) * 0.38);
+  width: var(--pile-w);
+}
+/* Which side, from seatGeometry("top"): my left or my right. */
+.sq-across-pile--left {
+  left: calc(50% - var(--hand-w) * 1.98 - var(--pile-w) / 2);
+}
+.sq-across-pile--right {
+  left: calc(50% + var(--hand-w) * 1.84 - var(--pile-w) / 2);
 }
 .sq-middle {
   container-type: size;
@@ -747,14 +754,23 @@ body {
 .sq-hand-row {
   margin-top: 2px;
 }
-.sq-board {
-  height: min(calc(100vw / 4.65), 12vh);
-  margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
+/* The board strip's height is --sq-board-h, so it can be switched off
+   (.table-shell--no-board: zero height, the middle takes the room) and back
+   on by the board slice. */
+.table-shell--square {
+  --sq-board-h: min(calc(100vw / 4.65), 12vh);
 }
 @supports (height: 100dvh) {
-  .sq-board {
-    height: min(calc(100dvw / 4.65), 12dvh);
+  .table-shell--square {
+    --sq-board-h: min(calc(100dvw / 4.65), 12dvh);
   }
+}
+.table-shell--square.table-shell--no-board {
+  --sq-board-h: 0px;
+}
+.sq-board {
+  height: var(--sq-board-h);
+  margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
 }
 .sq-plates {
   margin-top: 2px;

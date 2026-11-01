@@ -29,6 +29,7 @@ export function CenterCount({
   handOver,
   ended = false,
   flash,
+  prompt,
 }: {
   plays: PlayEvent[];
   playCount: number;
@@ -39,6 +40,11 @@ export function CenterCount({
   handOver?: { onCountHands: () => void };
   ended?: boolean;
   flash?: ReactNode;
+  // Before pegging (the discard): this line -- a <p>, like the pill it
+  // replaces -- in place of the status pill, and no "New count". Keeping the
+  // same elements means the score flash stays mounted from the discard into
+  // pegging (his heels lands right at that change).
+  prompt?: ReactNode;
 }) {
   const { events: shown, finished: betweenRuns } = displayedRun(
     plays,
@@ -57,26 +63,28 @@ export function CenterCount({
 
       {!ended && (
         <div className="center-count__pill">
-          <p
-            className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-              isMyTurn
-                ?"bg-green-600 text-white surface:bg-violet-600"
-                : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
-            }`}
-          >
-            {handOver
-              ? "Pegging over"
-              : isMyTurn
-                ? "Your turn"
-                : currentPlayer
-                  ? `${nameFor(currentPlayer)}'s turn`
-                  : "Waiting..."}
-          </p>
+          {prompt ?? (
+            <p
+              className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                isMyTurn
+                  ? "bg-green-600 text-white surface:bg-violet-600"
+                  : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+              }`}
+            >
+              {handOver
+                ? "Pegging over"
+                : isMyTurn
+                  ? "Your turn"
+                  : currentPlayer
+                    ? `${nameFor(currentPlayer)}'s turn`
+                    : "Waiting..."}
+            </p>
+          )}
           {flash && <div className="center-count__flash">{flash}</div>}
         </div>
       )}
 
-      {betweenRuns && !handOver && !ended && (
+      {betweenRuns && !handOver && !ended && !prompt && (
         <span className="whitespace-nowrap text-xs text-zinc-500">New count</span>
       )}
 
