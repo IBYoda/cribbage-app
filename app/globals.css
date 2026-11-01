@@ -809,6 +809,27 @@ body {
   height: var(--sq-board-h);
   margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
 }
+/* THE DEALING ANIMATION (components/table/DealAnimation.tsx). While a deal
+   is on (.sq-dealing) every hand-card slot keeps its room but is hidden --
+   my cards (HandRow's cards, not its label) and the across player's backs
+   -- and the overlay's flying cards stand in for them. The overlay covers
+   the screen, so a tap anywhere skips and nothing under it can be tapped
+   mid-flight. */
+.sq-dealing .sq-hand-row > div > :not(.absolute),
+.sq-dealing .sq-opp-card {
+  visibility: hidden;
+}
+.deal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: hidden;
+}
+/* A discard toss is short and never blocks a tap. */
+.deal-overlay--pass {
+  pointer-events: none;
+}
+
 /* A peg slides to its new hole; with reduced motion it just moves. While
    the board is redrawn at a new size (.board-peg--still) it never slides. */
 .board-peg {

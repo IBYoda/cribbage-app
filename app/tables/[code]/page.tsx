@@ -32,10 +32,19 @@ import { Splash, useSplash } from "@/components/table/Splash";
 import { SquareOpponentHand, SquareTableHeader, SquareTableShell } from "@/components/table/SquareTable";
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
 import { CenterCount } from "@/components/table/CenterCount";
-import { playedBySeat, seatGeometry } from "@/lib/tableLayout";
+import { SEAT_POSITIONS, playedBySeat, seatGeometry, seatsOnScreen } from "@/lib/tableLayout";
 import { CribbageBoard } from "@/components/table/CribbageBoard";
 import { laneOf } from "@/lib/boardLayout";
 import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
+import {
+  DealAnimation,
+  DealStandby,
+  DiscardToss,
+  type TossSeat,
+  useDealAnimationOn,
+  usePrefersReducedMotion,
+} from "@/components/table/DealAnimation";
+import { dealPlan, liveDealStep, liveDiscardStep, type DiscardSeen } from "@/lib/dealAnimation";
 
 // THE SQUARE TABLE FLAG (PRD item 31, slice 1): ?layout=square on the page's
 // URL turns on the square 2-player pegging screen; no param, or anything else
@@ -422,6 +431,21 @@ export default function TablePage() {
   // The "<game id>:<hand_no>:<phase>" this screen last rendered -- how the
   // play -> counting step is spotted (see below).
   const [seenPhaseKey, setSeenPhaseKey] = useState<string | null>(null);
+  // THE DEALING ANIMATION (square table): see "A LIVE DEAL" below. tableRead:
+  // the first full read of the table is in. dealSeenKey: the dealt hand
+  // ("<game id>:<hand_no>") last seen (undefined until the first read).
+  // dealLiveKey: the hand this screen saw dealt live; dealDoneKey: the hand
+  // whose deal has finished or been skipped.
+  const [tableRead, setTableRead] = useState(false);
+  const [dealSeenKey, setDealSeenKey] = useState<string | null | undefined>(undefined);
+  const [dealLiveKey, setDealLiveKey] = useState<string | null>(null);
+  const [dealDoneKey, setDealDoneKey] = useState<string | null>(null);
+  // THE DISCARD TOSS (square table): see "A LIVE DISCARD" below.
+  // discardSeen: who this screen has seen discard, per hand; tosses: the
+  // throws to the crib in flight; myTossKey: the hand I threw my discard in.
+  const [discardSeen, setDiscardSeen] = useState<DiscardSeen | undefined>(undefined);
+  const [tosses, setTosses] = useState<{ id: string; handKey: string; seats: TossSeat[] }[]>([]);
+  const [myTossKey, setMyTossKey] = useState<string | null>(null);
   // The revealKey last fetched for. A ref for the same reason as
   // lastGameStatusRef: it's read inside the realtime handler.
   const revealKeyRef = useRef<string | null>(null);
@@ -499,6 +523,10 @@ export default function TablePage() {
   const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({ noZero: hideCountNumbers });
   // ?layout=square (see THE SQUARE TABLE FLAG above). Drawing only.
   const squareLayout = useSyncExternalStore(subscribeToLocation, squareLayoutFromUrl, squareLayoutOnServer);
+  // The dealing animation's off switches: the Profile setting (this device)
+  // and the system's reduced motion.
+  const dealAnimationOn = useDealAnimationOn();
+  const reducedMotion = usePrefersReducedMotion();
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -893,6 +921,7 @@ export default function TablePage() {
     // The roster, through the members read guard (loadMembers).
     const membersError = await loadMembers(tableId);
     if (membersError) setError(membersError);
+    setTableRead(true);
   }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers]);
 
   // Counted while in flight, so the safety poll waits for it.
@@ -2110,8 +2139,104 @@ export default function TablePage() {
   const cribComplete = discardedBy.length >= playerCount;
   const iAmDealer = activeGame?.dealer_id === session.user.id;
   const waitingOn = opponents.filter((o) => !discardedBy.includes(o.user_id));
+
+  // A LIVE DEAL (the dealing animation; square table only). Animate only a
+  // hand this screen sees START (liveDealStep, lib/dealAnimation.ts). The
+  // first render after the table's first full read (tableRead) records
+  // whatever hand is already dealt as seen -- so a load, a reload, a late
+  // join or a spectator never animates. After that, a dealt hand
+  // ("<game id>:<hand_no>") this screen hasn't seen, still in the discard
+  // with my cards not yet discarded, is a live deal: a Next Hand, the first
+  // hand after the cut, a New Game. Compared during render (as the pegging
+  // hold above), and keyed to the hand, so a re-render or a realtime echo
+  // can never replay it; dealDoneKey marks it finished or skipped. Off with
+  // reduced motion or the Profile switch off -- decided when the hand
+  // arrives, so turning either back on mid-discard can't start a late deal.
+  const dealHandKey = isActive ? currentHandKey : null;
+  const dealStep = liveDealStep({
+    tableRead,
+    seenKey: dealSeenKey,
+    handKey: dealHandKey,
+    phase,
+    iHaveDiscarded,
+    animationOn: dealAnimationOn && !reducedMotion,
+  });
+  if (dealStep.seenKey !== dealSeenKey) {
+    if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
+    setDealSeenKey(dealStep.seenKey);
+  }
+  const squareDealTable = squareLayout && isTwoPlayerTable && !isMuggins && opponents.length === 1;
+  const dealInFlight =
+    squareDealTable &&
+    dealAnimationOn &&
+    !reducedMotion &&
+    !!dealHandKey &&
+    dealLiveKey === dealHandKey &&
+    dealDoneKey !== dealHandKey &&
+    phase === "discard" &&
+    !iHaveDiscarded &&
+    !!gamePlayers?.includes(session.user.id);
+  // Nothing to tap while cards are in the air.
   const canDiscard =
-    Boolean(activeGame) && !iHaveDiscarded && myHand.length === sizes.dealt;
+    Boolean(activeGame) && !iHaveDiscarded && myHand.length === sizes.dealt && !dealInFlight;
+
+  // A LIVE DISCARD (the discard toss; square table only). The same guard as
+  // the deal (liveDiscardStep): discards already there at the first full
+  // read, or when a hand first shows, are recorded and never thrown; a
+  // player newly in discarded_by after that is thrown to the crib once --
+  // unless a deal is still being shown (the crib just appears when it ends)
+  // or the animations are off. Mine is thrown when I tap Send to Crib
+  // (startMyToss), so here only the other players' are.
+  const cardAnimationsOn = squareDealTable && dealAnimationOn && !reducedMotion;
+  const squarePositionOf = (userId: string) => {
+    const onScreen = gamePlayers ? seatsOnScreen(gamePlayers, session.user.id) : null;
+    return onScreen ? (SEAT_POSITIONS.find((p) => onScreen[p] === userId) ?? null) : null;
+  };
+  const discardStep = liveDiscardStep({
+    tableRead,
+    seen: discardSeen,
+    handKey: dealHandKey,
+    discardedBy,
+    dealInFlight,
+    animationOn: cardAnimationsOn,
+  });
+  if (discardStep.seen !== discardSeen) {
+    const thrown = discardStep.live.filter((id) => id !== session.user.id && opponents.some((o) => o.user_id === id));
+    const position = thrown.length ? squarePositionOf(thrown[0]) : null;
+    if (dealHandKey && position) {
+      const id = `${dealHandKey}:${thrown.join(",")}`;
+      const seats = thrown.map((userId) => ({ key: userId, position: squarePositionOf(userId) ?? position, cards: sizes.discard }));
+      setTosses((current) => (current.some((t) => t.id === id) ? current : [...current, { id, handKey: dealHandKey, seats }]));
+    }
+    setDiscardSeen(discardStep.seen);
+  }
+  // A throw from an earlier hand can't still be in flight.
+  if (tosses.some((t) => t.handKey !== dealHandKey)) {
+    setTosses((current) => current.filter((t) => t.handKey === dealHandKey));
+  }
+  // My discard, thrown as I tap Send to Crib: the picked cards fly from my
+  // hand to the crib, turning face-down.
+  const startMyToss = () => {
+    if (!cardAnimationsOn || !dealHandKey || !canDiscard) return;
+    const id = `${dealHandKey}:mine`;
+    const seat: TossSeat = {
+      key: session.user.id,
+      position: "bottom",
+      cards: selectedCards.length,
+      faces: [...selectedCards],
+      fromSlots: selectedCards.map((card) => displayedHand.indexOf(card)),
+    };
+    setMyTossKey(dealHandKey);
+    setTosses((current) => (current.some((t) => t.id === id) ? current : [...current, { id, handKey: dealHandKey, seats: [seat] }]));
+  };
+  // THE CRIB PILE on the square table: empty while a deal is shown here, and
+  // without the cards still flying to it; mine count from the moment they
+  // land, even if the server hasn't answered yet (until it refuses).
+  const tossingIds = new Set(tosses.flatMap((t) => t.seats.map((s) => s.key)));
+  const cribIds = new Set(discardedBy);
+  if (discardStatus === "sending" && myTossKey === dealHandKey) cribIds.add(session.user.id);
+  for (const id of tossingIds) cribIds.delete(id);
+  const squareCribCount = dealInFlight ? 0 : cribCountDuringDiscard(playerCount, cribIds.size);
 
   // The cut phase. Only the table's FIRST game cuts -- later games alternate
   // the deal, are created straight into 'active', and never enter this.
@@ -2731,7 +2856,10 @@ export default function TablePage() {
           disabled-but-visible button would just be noise. */}
       {canDiscard && selectedCards.length === sizes.discard && (
         <button
-          onClick={handleDiscard}
+          onClick={() => {
+            startMyToss();
+            handleDiscard();
+          }}
           disabled={discardStatus === "sending"}
           className="min-h-10 rounded bg-foreground px-5 text-sm font-medium text-background disabled:opacity-50"
         >
@@ -2932,7 +3060,9 @@ export default function TablePage() {
     const cribFan = squareCount && view ? view.cribFan : null;
     const iDealHand = handDealerId === session.user.id;
     const oppName = displayName(squareOpponent);
-    const cribCount = cribCountDuringDiscard(playerCount, discardedBy.length);
+    // The crib pile: nothing while the deal is shown, nor what is still
+    // flying to it (squareCribCount).
+    const cribCount = squareCribCount;
     const { seats: played, finished: runFinished } = playedBySeat({
       plays,
       playSegment: activeGame.play_segment,
@@ -2943,9 +3073,54 @@ export default function TablePage() {
     // The other player's seat is across the table (2 players).
     const across = seatGeometry("top");
     const squareScores = squareBoardFor(activeGame.players ?? [session.user.id, squareOpponent.user_id]);
+    // THE DEAL (see A LIVE DEAL above): once my dealt cards are on screen,
+    // the overlay flies every hand in from the dealer's deck, clockwise from
+    // the dealer's left -- planned from the seat order, so any seat count.
+    // Mine stack in the middle of my hand, then fan out face-up.
+    const dealSeats = activeGame.players ?? [session.user.id, squareOpponent.user_id];
+    const dealOnScreen = seatsOnScreen(dealSeats, session.user.id);
+    const dealPositionOf = (userId: string) => SEAT_POSITIONS.find((p) => dealOnScreen[p] === userId) ?? null;
+    const dealerPosition = handDealerId ? dealPositionOf(handDealerId) : null;
+    const dealOverlay =
+      dealInFlight && dealHandKey && handDealerId && dealerPosition && myHand.length === sizes.dealt ? (
+        <DealAnimation
+          key={dealHandKey}
+          plan={dealPlan({
+            seatCount: dealSeats.length,
+            dealerIndex: dealSeats.indexOf(handDealerId),
+            cardsPerSeat: sizes.dealt,
+            cribExtras: cribCountDuringDiscard(playerCount, 0),
+            stackSeat: dealSeats.indexOf(session.user.id),
+          })}
+          seats={dealSeats.map(dealPositionOf)}
+          dealer={dealerPosition}
+          faces={displayedHand}
+          onDone={() => setDealDoneKey(dealHandKey)}
+        />
+      ) : dealInFlight && dealHandKey ? (
+        <DealStandby key={dealHandKey} onGiveUp={() => setDealDoneKey(dealHandKey)} />
+      ) : null;
+    // THE DISCARD TOSSES in flight (see A LIVE DISCARD above).
+    const tossOverlays =
+      dealerPosition &&
+      tosses.map((t) => (
+        <DiscardToss
+          key={t.id}
+          seats={t.seats}
+          dealer={dealerPosition}
+          onDone={() => setTosses((current) => current.filter((x) => x.id !== t.id))}
+        />
+      ));
     return (
       <>
         <SquareTableShell
+          dealing={dealInFlight}
+          overlay={
+            <>
+              {dealOverlay}
+              {tossOverlays}
+            </>
+          }
           header={
             <SquareTableHeader
               code={code}

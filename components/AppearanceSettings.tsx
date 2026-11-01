@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { useAppearance } from "@/components/AppearanceProvider";
+import { setDealAnimationOn, useDealAnimationOn } from "@/components/table/DealAnimation";
 import {
   CARD_BACKS,
   TABLE_SURFACES,
@@ -22,6 +23,7 @@ import {
 // here is what the table shows. All six back images load on this page only.
 export function AppearanceSettings() {
   const appearance = useAppearance();
+  const dealAnimationOn = useDealAnimationOn();
   const saved: Appearance = {
     surface: appearance.surface,
     back: appearance.back,
@@ -159,6 +161,32 @@ export function AppearanceSettings() {
         </div>
         <p id="hide-counts-hint" className="text-sm">
           Hide the hand and crib point numbers on your screen. The score strip stays.
+        </p>
+      </fieldset>
+
+      {/* CARD ANIMATIONS (the deal and the discard toss): this device only
+          (localStorage, no account column), so it saves at once, not with
+          Save Appearance. Off: a new hand just appears and discards go
+          straight to the crib, as with the system's reduced motion. */}
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-medium">Animations</legend>
+        <div className="flex items-center gap-3">
+          <button
+            id="deal-animation-switch"
+            type="button"
+            role="switch"
+            aria-checked={dealAnimationOn}
+            aria-describedby="deal-animation-hint"
+            onClick={() => setDealAnimationOn(!dealAnimationOn)}
+            className="felt-switch"
+          />
+          <label htmlFor="deal-animation-switch" className="cursor-pointer text-sm">
+            Card animations
+          </label>
+        </div>
+        <p id="deal-animation-hint" className="text-sm">
+          Cards fly from the dealer&apos;s deck at the start of each hand, and discards fly to the crib. Saved on
+          this device only, at once.
         </p>
       </fieldset>
 
