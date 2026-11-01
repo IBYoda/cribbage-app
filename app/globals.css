@@ -1027,7 +1027,7 @@ body {
   max-width: 12rem;
 }
 
-/* -- SIDE SEATS (3 players with ?layout=square; components/table/SquareRing.tsx,
+/* -- SIDE SEATS (3 players, by default; components/table/SquareRing.tsx,
       mockups 04 and 05). No across row (it collapses when empty), so the
       middle gets that height. Its grid: the side seats' name tags along the
       top (in --ring-tag-h); a column at each edge -- the pile slot, the hand
@@ -1174,7 +1174,7 @@ body {
   height: 0;
   min-height: 0;
 }
-/* -- 4 PLAYERS (Teams, ?layout=square; ringLayout in lib/tableLayout.ts).
+/* -- 4 PLAYERS (Teams, by default; ringLayout in lib/tableLayout.ts).
       The top player's hand is the across row (as with 2 players), so the
       side tags at the top of the middle sit just under it, above each side
       column (mockups 04 and 05). Two changes keep that clear and the side

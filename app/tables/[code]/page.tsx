@@ -75,9 +75,9 @@ import {
 } from "@/lib/dealAnimation";
 
 // THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
-// 2- or 3-player table that isn't Muggins (chooseTableLayout,
-// lib/tableLayout.ts); ?layout=classic on the page's URL forces the classic
-// table. Read through
+// 2- or 3-player table or a 4-player Teams table that isn't Muggins
+// (chooseTableLayout, lib/tableLayout.ts); ?layout=classic on the page's URL
+// forces the classic table. Read through
 // useSyncExternalStore with no param on the server and in the hydrating
 // render. That render is always the "Loading..." screen (the session is read
 // in an effect, so `loading` starts true on both sides), so the param can
@@ -2077,8 +2077,8 @@ export default function TablePage() {
   // THE FIRST READ, on a table that will draw square: until the table's first
   // full read is in, the same "Loading..." as above -- not the classic table
   // with nothing on it, which would flash before the square one (2 and 3
-  // players; 4-player Teams with ?layout=square). A classic table (4 players
-  // by default, Muggins, ?layout=classic) draws as it always has.
+  // players, 4-player Teams). A classic table (4-player Solo, Muggins,
+  // ?layout=classic) draws as it always has.
   if (
     !tableRead &&
     isSquareTable({
@@ -2235,8 +2235,8 @@ export default function TablePage() {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
-  // The square table (by default for 2 and 3 players, not Muggins, without
-  // ?layout=classic; 4-player Teams with ?layout=square): only it shows the
+  // The square table (by default for 2 and 3 players and 4-player Teams, not
+  // Muggins, without ?layout=classic): only it shows the
   // deal and the discard tosses -- with every seat filled, as its screens
   // need (3 and 4 players: every game player still at the table, as THE
   // SQUARE SCREEN, 3 AND 4 PLAYERS requires, so a deal is never held for a
@@ -3249,8 +3249,8 @@ export default function TablePage() {
   };
 
   // THE SQUARE SCREEN, 3 AND 4 PLAYERS (PRD item 31; mockups 04 and 05) --
-  // 3 players by default (chooseTableLayout; ?layout=classic for the classic
-  // table), 4-player Teams only with ?layout=square; every seat filled, me
+  // 3 players and 4-player Teams by default (chooseTableLayout;
+  // ?layout=classic for the classic table); every seat filled, me
   // among the game's players. Me at the bottom, the next player clockwise on
   // my LEFT, then (4 players: my partner) the TOP, the last on my RIGHT
   // (seatsOnScreen); 3 players: nobody across. The top seat is drawn as the
@@ -3482,9 +3482,9 @@ export default function TablePage() {
     );
   }
 
-  // THE SQUARE FINAL BOARD, 3 AND 4 PLAYERS (3 by default; 4-player Teams
-  // with ?layout=square, the top seat as the across row, the winning team in
-  // the headline and on the board): a won game, as the
+  // THE SQUARE FINAL BOARD, 3 AND 4 PLAYERS (by default; 4-player Teams with
+  // the top seat as the across row, the winning team in the headline and on
+  // the board): a won game, as the
   // 2-player square final board below does it -- a pegging win shows the
   // run in front of its players with its count, and the rest of each hand
   // at its seat; a count win (or his heels) every hand face-up at its seat

@@ -3,7 +3,8 @@
 // the centre, each player's played cards lie in front of them, turned to face
 // them, and the dealer's crib and deck sit beside the dealer's hand. Tested
 // by scripts/test-phase3.ts. The square layout is the default for 2- and
-// 3-player tables that aren't Muggins (chooseTableLayout, at the end).
+// 3-player tables and 4-player Teams tables that aren't Muggins
+// (chooseTableLayout, at the end).
 
 import { laneOf } from "@/lib/boardLayout";
 import { countingOrder } from "@/lib/countingN";
@@ -192,13 +193,11 @@ export function countingStarterPlace(dealer: SeatPosition | null, counting: bool
 // discard, pegging and its hold, counting through Next Hand) and a won
 // game's final board; everything else is the classic table: the waiting
 // room, the cut for the deal, a game that ended any other way, Muggins and
-// (by default) 4 players.
-//   * 2 and 3 players: square by default; ?layout=classic on the page's URL
-//     gives the classic table (?layout=square, a missing or any other value
-//     is the default). URL only, nothing saved.
-//   * 4 players: classic by default; square only for Teams with
-//     ?layout=square (the 4-player square layout is still being tried out;
-//     4-player Solo has no square layout).
+// 4-player Solo (which has no square layout).
+//   * 2 and 3 players, and 4-player Teams: square by default;
+//     ?layout=classic on the page's URL gives the classic table
+//     (?layout=square, a missing or any other value is the default). URL
+//     only, nothing saved.
 export type TableLayoutChoice = "square" | "classic";
 
 export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "counting" | "won" | "ended" | "other";
@@ -214,9 +213,8 @@ export function isSquareTable(input: {
   teams?: boolean;
 }): boolean {
   if (input.isMuggins) return false;
-  if (input.playerCount === 2 || input.playerCount === 3) return input.layoutParam !== "classic";
-  if (input.playerCount === 4) return !!input.teams && input.layoutParam === "square";
-  return false;
+  const squareSize = input.playerCount === 2 || input.playerCount === 3 || (input.playerCount === 4 && !!input.teams);
+  return squareSize && input.layoutParam !== "classic";
 }
 
 export function chooseTableLayout(input: {
