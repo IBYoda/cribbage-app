@@ -30,6 +30,9 @@ import {
   isSquareTable,
   playedBySeat,
   seatGeometry,
+  countingReveals,
+  countingStarterPlace,
+  seatPositionOf,
   seatsOnScreen,
   type TableScreen,
 } from "../lib/tableLayout";
@@ -50,9 +53,20 @@ import {
   TOSS_STAGGER_MS,
   dealLength,
   dealPlan,
+  flightTurn,
   discardPlan,
   liveDealStep,
   liveDiscardStep,
+  liveStarterStep,
+  markDiscardSeen,
+  COMPUTER_DISCARD_SHOW_MS,
+  discardShowStep,
+  discardShown,
+  discardShowKey,
+  fireDiscardShow,
+  shownCribIds,
+  type DiscardSeen,
+  type DiscardShow,
 } from "../lib/dealAnimation";
 
 let passed = 0;
@@ -522,18 +536,106 @@ check("layout: ?layout=classic always classic; ?layout=square and unknown values
   }
   for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 2, false, s), "classic", s);
 });
-check("layout: 3 and 4 players, and Muggins, are classic with or without the param", () => {
+check("layout: 4 players, and Muggins (any size), are classic with or without the param", () => {
   for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
-      strictEqual(layoutFor(param, 3, false, s), "classic", `3p ${param} ${s}`);
       strictEqual(layoutFor(param, 4, false, s), "classic", `4p ${param} ${s}`);
       strictEqual(layoutFor(param, 2, true, s), "classic", `muggins ${param} ${s}`);
+      strictEqual(layoutFor(param, 3, true, s), "classic", `3p muggins ${param} ${s}`);
+      strictEqual(layoutFor(param, 4, true, s), "classic", `4p muggins ${param} ${s}`);
     }
   }
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: false }), true);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 2, isMuggins: false }), false);
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false }), false);
+  strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false }), false);
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: true }), false);
+});
+check("layout: 3 players -- classic by default, square only with ?layout=square (on its screens)", () => {
+  for (const param of [null, "classic", "x", "", "Square"]) {
+    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
+      strictEqual(layoutFor(param, 3, false, s), "classic", `3p ${param} ${s}`);
+    }
+  }
+  for (const s of SQUARE_SCREENS) strictEqual(layoutFor("square", 3, false, s), "square", s);
+  for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 3, false, s), "classic", s);
+  strictEqual(isSquareTable({ layoutParam: "square", playerCount: 3, isMuggins: false }), true);
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 3, isMuggins: false }), false);
+  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 3, isMuggins: false }), false);
+});
+
+// 3 PLAYERS ON THE SQUARE TABLE: me at the bottom, the next player clockwise
+// on my left, the one after on my right, nobody across.
+const P3 = ["a", "b", "c"];
+check("square table, 3 players: left is the next seat clockwise, right the one after, top empty", () => {
+  deepStrictEqual(seatsOnScreen(P3, "a"), { bottom: "a", left: "b", top: null, right: "c" });
+  deepStrictEqual(seatsOnScreen(P3, "b"), { bottom: "b", left: "c", top: null, right: "a" });
+  deepStrictEqual(seatsOnScreen(P3, "c"), { bottom: "c", left: "a", top: null, right: "b" });
+  // A viewer who isn't a player: nobody at the bottom.
+  strictEqual(seatsOnScreen(P3, "z").bottom, null);
+});
+check("square table: seatPositionOf for 2, 3 and 4 players", () => {
+  deepStrictEqual(["a", "b", "c", "z"].map((id) => seatPositionOf(P3, "a", id)), ["bottom", "left", "right", null]);
+  deepStrictEqual(["a", "b", "c"].map((id) => seatPositionOf(P3, "c", id)), ["left", "right", "bottom"]);
+  deepStrictEqual(["a", "b"].map((id) => seatPositionOf(["a", "b"], "b", id)), ["top", "bottom"]);
+  deepStrictEqual(P4.map((id) => seatPositionOf(P4, "s2", id)), ["right", "bottom", "left", "top"]);
+});
+check("square table, 3 players: each seat's played cards, from every seat's point of view", () => {
+  // Pegging starts left of the dealer (c deals: a leads), then b, c, a.
+  const plays = [sq(1, 0, "a", "5H"), sq(2, 0, "b", "TD"), sq(3, 0, "c", "6S"), sq(4, 0, "a", "4C")];
+  const view = (myId: string) => seatCards(playedBySeat({ plays, playSegment: 0, handOver: false, players: P3, myId }));
+  deepStrictEqual(view("a"), { bottom: ["5H", "4C"], left: ["TD"], top: [], right: ["6S"] });
+  deepStrictEqual(view("b"), { bottom: ["TD"], left: ["6S"], top: [], right: ["5H", "4C"] });
+  deepStrictEqual(view("c"), { bottom: ["6S"], left: ["5H", "4C"], top: [], right: ["TD"] });
+});
+check("square table, 3 players: a Go leaves no card; the next run clears the seats", () => {
+  const plays = [
+    sq(1, 0, "a", "KH", 10),
+    sq(2, 0, "b", "QD", 20),
+    sq(3, 0, "c", "9C", 29),
+    sq(4, 0, "a", null, 29),
+    sq(5, 0, "b", null, 29),
+    sq(6, 1, "c", "3S", 3),
+  ];
+  const during = playedBySeat({ plays: plays.slice(0, 5), playSegment: 0, handOver: false, players: P3, myId: "a" });
+  deepStrictEqual(seatCards(during), { bottom: ["KH"], left: ["QD"], top: [], right: ["9C"] });
+  const next = playedBySeat({ plays, playSegment: 1, handOver: false, players: P3, myId: "a" });
+  deepStrictEqual(seatCards(next), { bottom: [], left: [], top: [], right: ["3S"] });
+});
+check("square table: counting reveals -- 3 players, the dealer at each seat", () => {
+  // order: clockwise from the dealer's left, the dealer last; the crib at step 3.
+  for (const dealer of P3) {
+    const order = countingOrder(P3, dealer);
+    strictEqual(order[2], dealer);
+    for (let step = 0; step <= 3; step++) {
+      const r = countingReveals({ players: P3, dealerId: dealer, step, done: false });
+      deepStrictEqual(
+        order.map((id) => r.hands[id]),
+        order.map((_, k) => step >= k),
+        `dealer ${dealer} step ${step}`
+      );
+      strictEqual(r.crib, step >= 3, `crib, dealer ${dealer} step ${step}`);
+    }
+    const done = countingReveals({ players: P3, dealerId: dealer, step: 0, done: true });
+    deepStrictEqual(P3.map((id) => done.hands[id]), [true, true, true]);
+    strictEqual(done.crib, true);
+  }
+  // Concretely: b deals -- c counts first, then a, then b, then b's crib.
+  const at = (step: number) => countingReveals({ players: P3, dealerId: "b", step, done: false });
+  deepStrictEqual(at(0).hands, { c: true, a: false, b: false });
+  deepStrictEqual(at(1).hands, { c: true, a: true, b: false });
+  deepStrictEqual(at(2).hands, { c: true, a: true, b: true });
+  strictEqual(at(2).crib, false);
+  strictEqual(at(3).crib, true);
+});
+check("square table: counting reveals -- 2 players match the square table's pone-then-dealer rule", () => {
+  // The 2-player square table turns the other hand up at step 0 if they're
+  // the pone, step 1 if they dealt; the crib at step 2.
+  const r0 = countingReveals({ players: ["me", "op"], dealerId: "me", step: 0, done: false });
+  deepStrictEqual(r0, { hands: { op: true, me: false }, crib: false });
+  const r1 = countingReveals({ players: ["me", "op"], dealerId: "op", step: 0, done: false });
+  deepStrictEqual(r1, { hands: { me: true, op: false }, crib: false });
+  strictEqual(countingReveals({ players: ["me", "op"], dealerId: "op", step: 2, done: false }).crib, true);
 });
 
 // THE CRIBBAGE BOARD (lib/boardLayout.ts).
@@ -692,6 +794,54 @@ check("deal: 3 seats -- clockwise from the dealer's left, 5 each, then one to th
   strictEqual(plan.fan.length, 5);
   checkTiming(plan);
 });
+check("deal: 3 seats, the dealer at each of my bottom/left/right -- clockwise from the dealer's left, then the crib card", () => {
+  // Seats in order a, b, c; I am a (stack seat 0). On my screen b is left, c right.
+  for (const [dealerIndex, firstThree] of [
+    [0, [1, 2, 0]], // I deal: left (b) first, then right (c), then me
+    [1, [2, 0, 1]], // left (b) deals: right (c) first, then me
+    [2, [0, 1, 2]], // right (c) deals: me first
+  ] as const) {
+    const plan = dealPlan({ seatCount: 3, dealerIndex, cardsPerSeat: 5, cribExtras: 1, stackSeat: 0 });
+    deepStrictEqual(dealTargets(plan).slice(0, 3), [...firstThree], `dealer ${dealerIndex}`);
+    strictEqual(plan.deal.at(-1)!.target, "crib");
+    deepStrictEqual(plan.deal.filter((s) => s.stack).map((s) => s.target), [0, 0, 0, 0, 0]);
+    strictEqual(plan.fan.length, 5);
+    checkTiming(plan);
+  }
+});
+check("deal: a flying card's turn -- a half turn, plus a quarter between upright and sideways places", () => {
+  // Upright to upright: the 2-player table's -180 -> 0, unchanged.
+  strictEqual(flightTurn(0, 0), -180);
+  // The left dealer's sideways deck (90) to my hand (0), to the right seat (-90), to the left seat (90).
+  strictEqual(flightTurn(90, 0), -270);
+  strictEqual(flightTurn(90, -90), -270);
+  strictEqual(flightTurn(90, 90), -90);
+  // My deck (0) to a side seat: lands sideways.
+  strictEqual(flightTurn(0, 90), -180);
+  strictEqual(flightTurn(0, -90), -360);
+  for (const from of [0, 90, -90, 180]) {
+    for (const to of [0, 90, -90]) {
+      const start = flightTurn(from, to);
+      // Starts lined up with where it leaves (a back looks the same either way up) ...
+      strictEqual((((start - from) % 180) + 180) % 180, 0, `${from} -> ${to}`);
+      // ... and turns at least half a turn, at most three quarters, to land at `to`.
+      const spin = to - start;
+      strictEqual(spin === 180 || spin === 270, true, `${from} -> ${to}: ${spin}`);
+    }
+  }
+});
+check("discard toss: 3 players, one card each, seat after seat", () => {
+  const steps = discardPlan([
+    { seat: "left", cards: 1 },
+    { seat: "right", cards: 1 },
+    { seat: "bottom", cards: 1 },
+  ]);
+  deepStrictEqual(steps.map((s) => [s.seat, s.cardIndex, s.delayMs]), [
+    ["left", 0, 0],
+    ["right", 0, TOSS_STAGGER_MS],
+    ["bottom", 0, 2 * TOSS_STAGGER_MS],
+  ]);
+});
 check("deal: 4 seats -- 5 each, 20 cards still within the cap", () => {
   const plan = dealPlan({ seatCount: 4, dealerIndex: 3, cardsPerSeat: 5, stackSeat: 1 });
   deepStrictEqual(dealTargets(plan).slice(0, 5), [0, 1, 2, 3, 0]);
@@ -813,6 +963,216 @@ check("live deal: not once I've discarded, not past the discard, not with the an
   deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4", discarded: true }]), []);
   deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4", phase: "play" }]), []);
   deepStrictEqual(dealsAnimated([{ hand: "g:3", phase: "done" }, { hand: "g:4", on: false }, { hand: "g:4" }]), []);
+});
+
+// THE STARTER IN COUNTING: keyed on the dealer's seat, any table size.
+check("starter in counting: my crib above my hand; any other dealer's in the middle", () => {
+  strictEqual(countingStarterPlace("bottom", true), "above-hand");
+  strictEqual(countingStarterPlace("left", true), "middle");
+  strictEqual(countingStarterPlace("top", true), "middle");
+  strictEqual(countingStarterPlace("right", true), "middle");
+});
+check("starter outside counting (or no dealer): on the deck", () => {
+  for (const p of ["bottom", "left", "top", "right"] as const) strictEqual(countingStarterPlace(p, false), "deck");
+  strictEqual(countingStarterPlace(null, true), "deck");
+});
+check("starter in counting: each table size's dealer seats", () => {
+  // 2 players: me or across; 3: me, left, right (from every viewpoint).
+  strictEqual(countingStarterPlace(seatPositionOf(["a", "b"], "a", "b"), true), "middle");
+  strictEqual(countingStarterPlace(seatPositionOf(["a", "b"], "a", "a"), true), "above-hand");
+  for (const me of ["a", "b", "c"]) {
+    for (const dealer of ["a", "b", "c"]) {
+      strictEqual(
+        countingStarterPlace(seatPositionOf(["a", "b", "c"], me, dealer), true),
+        dealer === me ? "above-hand" : "middle"
+      );
+    }
+  }
+});
+
+// The starter's slide: only when this screen sees counting begin.
+const startersSlid = (steps: { tableRead?: boolean; hand: string | null; counting?: boolean; on?: boolean }[]) => {
+  let seenKey: string | null | undefined = undefined;
+  const live: string[] = [];
+  for (const s of steps) {
+    const step = liveStarterStep({
+      tableRead: s.tableRead ?? true,
+      seenKey,
+      handKey: s.hand,
+      counting: s.counting ?? false,
+      animationOn: s.on ?? true,
+    });
+    if (step.liveKey) live.push(step.liveKey);
+    seenKey = step.seenKey;
+  }
+  return live;
+};
+check("starter slide: pegging then counting, once (echoes don't replay it)", () => {
+  deepStrictEqual(
+    startersSlid([{ hand: "g:3" }, { hand: "g:3" }, { hand: "g:3", counting: true }, { hand: "g:3", counting: true }]),
+    ["g:3"]
+  );
+  // Then the next hand's counting too.
+  deepStrictEqual(
+    startersSlid([{ hand: "g:3" }, { hand: "g:3", counting: true }, { hand: "g:4" }, { hand: "g:4", counting: true }]),
+    ["g:3", "g:4"]
+  );
+});
+check("starter slide: never on a load, reload or late join in counting, nor with the animations off", () => {
+  deepStrictEqual(startersSlid([{ tableRead: false, hand: null }, { hand: "g:3", counting: true }]), []);
+  deepStrictEqual(startersSlid([{ tableRead: false, hand: "g:3" }, { hand: "g:3", counting: true }]), []);
+  deepStrictEqual(startersSlid([{ hand: "g:3" }, { hand: "g:3", counting: true, on: false }]), []);
+  // A hand first seen in counting (Next Hand dealt while away, then counting):
+  // only a change seen within one hand counts.
+  deepStrictEqual(startersSlid([{ hand: "g:3", counting: true }, { hand: "g:4", counting: true }]), []);
+  // A won game (no hand on show) is never a slide.
+  deepStrictEqual(startersSlid([{ hand: "g:3" }, { hand: null }]), []);
+});
+
+// THE COMPUTER'S DISCARD, SHOWN ON TIME.
+type ShowInput = Parameters<typeof discardShowStep>[0];
+const showBase: ShowInput = {
+  eligible: true,
+  handKey: "g:3",
+  phase: "discard",
+  handShown: true,
+  dealInFlight: false,
+  computerDiscarded: false,
+  iDiscarding: false,
+  remembered: false,
+  state: null,
+  now: 1000,
+};
+// Runs the steps in time order; a due timer fires before the next step.
+const runShow = (steps: Partial<ShowInput>[]) => {
+  let state: DiscardShow = null;
+  let due: number | null = null;
+  const shown: boolean[] = [];
+  for (const s of steps) {
+    const input = { ...showBase, ...s, state };
+    if (due !== null && input.now >= due) state = fireDiscardShow(state, input.handKey as string);
+    const step = discardShowStep({ ...input, state });
+    state = step.state;
+    due = step.fireInMs === null ? null : input.now + step.fireInMs;
+    shown.push(discardShown({ ...input, state }));
+  }
+  return { state, shown };
+};
+check("computer discard shown: 7 s after my hand shows, not before", () => {
+  strictEqual(COMPUTER_DISCARD_SHOW_MS, 7000);
+  const first = discardShowStep(showBase);
+  strictEqual(first.fireInMs, 7000);
+  // Not yet at 6.9 s; shown from 7 s.
+  deepStrictEqual(runShow([{ now: 1000 }, { now: 7900 }, { now: 8000 }, { now: 9000 }]).shown, [false, false, true, true]);
+});
+check("computer discard shown: the clock starts when the hand first appears, the deal included", () => {
+  // The deal starts at 1000 and takes 4 s: shown at 8000, 3 s after it ends.
+  deepStrictEqual(
+    runShow([{ now: 1000, dealInFlight: true }, { now: 5000 }, { now: 7900 }, { now: 8000 }]).shown,
+    [false, false, false, true]
+  );
+  // Nothing before the hand is here; then 7 s from its arrival (a reload or
+  // late join: from when it shows on this load).
+  deepStrictEqual(
+    runShow([{ now: 0, handShown: false }, { now: 2000 }, { now: 8900 }, { now: 9000 }]).shown,
+    [false, false, false, true]
+  );
+  // Started, it keeps counting even if the hand is briefly not reported.
+  deepStrictEqual(runShow([{ now: 1000 }, { now: 3000, handShown: false }, { now: 8000 }]).shown, [false, false, true]);
+});
+check("computer discard shown: never while a deal is still shown -- then as it ends", () => {
+  // A 9 s deal (longer than 7 s): due at 8000, held until the deal ends at 10000.
+  const r = runShow([{ now: 1000, dealInFlight: true }, { now: 8000, dealInFlight: true }, { now: 9000, dealInFlight: true }]);
+  deepStrictEqual(r.shown, [false, false, false]);
+  strictEqual(discardShowStep({ ...showBase, state: r.state, dealInFlight: true, now: 9500 }).fireInMs, null);
+  // The deal ends: due already, so at once.
+  strictEqual(discardShowStep({ ...showBase, state: r.state, now: 10000 }).fireInMs, 0);
+});
+check("computer discard shown: my discard first cancels it for the hand", () => {
+  const r = runShow([{ now: 1000 }, { now: 4000, iDiscarding: true }, { now: 9000, iDiscarding: true }]);
+  deepStrictEqual(r.shown, [false, false, false]);
+  strictEqual(r.state?.cancelled, true);
+  // Even if my discard were refused, it doesn't come back this hand.
+  deepStrictEqual(runShow([{ now: 1000 }, { now: 4000, iDiscarding: true }, { now: 9000 }, { now: 20000 }]).shown, [
+    false,
+    false,
+    false,
+    false,
+  ]);
+});
+check("computer discard shown: the real discard before 7 s -- nothing to show", () => {
+  deepStrictEqual(runShow([{ now: 1000 }, { now: 3000, computerDiscarded: true }, { now: 9000, computerDiscarded: true }]).shown, [
+    false,
+    false,
+    false,
+  ]);
+});
+check("computer discard shown: the real discard after it showed -- the real state takes over", () => {
+  const r = runShow([{ now: 1000 }, { now: 8000 }, { now: 9000, computerDiscarded: true }]);
+  deepStrictEqual(r.shown, [false, true, false]);
+  // Still fired for the hand: nothing restarts.
+  strictEqual(r.state?.fired, true);
+  strictEqual(discardShowStep({ ...showBase, state: r.state, computerDiscarded: true, now: 20000 }).fireInMs, null);
+});
+check("computer discard shown: a reload after it showed shows it at once", () => {
+  deepStrictEqual(runShow([{ now: 1000, remembered: true }]).shown, [true]);
+  // Even before the hand is on screen (the deal never replays on a load).
+  deepStrictEqual(runShow([{ now: 1000, remembered: true, handShown: false }]).shown, [true]);
+});
+check("computer discard shown: not across hands, not past the discard, not for anyone else", () => {
+  // Shown in hand 3; hand 4 starts afresh.
+  const r = runShow([{ now: 1000 }, { now: 8000 }, { now: 9000, handKey: "g:4" }]);
+  deepStrictEqual(r.shown, [false, true, false]);
+  strictEqual(r.state?.handKey, "g:4");
+  strictEqual(r.state?.fired, false);
+  deepStrictEqual(runShow([{ now: 1000, phase: "play" }, { now: 9000, phase: "play" }]).shown, [false, false]);
+  // Not a computer opponent at a 2-player square table: never.
+  deepStrictEqual(runShow([{ now: 1000, eligible: false }, { now: 9000, eligible: false }]).shown, [false, false]);
+  strictEqual(discardShowStep({ ...showBase, eligible: false }).fireInMs, null);
+});
+check("computer discard shown: steady state returns the same object (render-safe)", () => {
+  const a = discardShowStep(showBase).state;
+  strictEqual(discardShowStep({ ...showBase, state: a, now: 3000 }).state, a);
+  const fired = fireDiscardShow(a, "g:3");
+  strictEqual(discardShowStep({ ...showBase, state: fired, now: 9000 }).state, fired);
+  // A timer from an older hand does nothing.
+  strictEqual(fireDiscardShow(a, "g:4"), a);
+});
+check("computer discard shown: its real discard is never thrown a second time", () => {
+  const seen: DiscardSeen = { handKey: "g:3", ids: [] };
+  const marked = markDiscardSeen(seen, "g:3", "cpu");
+  deepStrictEqual(marked, { handKey: "g:3", ids: ["cpu"] });
+  strictEqual(markDiscardSeen(marked, "g:3", "cpu"), marked);
+  strictEqual(markDiscardSeen(seen, "g:4", "cpu"), seen);
+  strictEqual(markDiscardSeen(undefined, "g:3", "cpu"), undefined);
+  // The real discard arrives: nothing live.
+  deepStrictEqual(
+    liveDiscardStep({ tableRead: true, seen: marked, handKey: "g:3", discardedBy: ["cpu"], dealInFlight: false, animationOn: true })
+      .live,
+    []
+  );
+  // Unmarked, it would have been thrown.
+  deepStrictEqual(
+    liveDiscardStep({ tableRead: true, seen, handKey: "g:3", discardedBy: ["cpu"], dealInFlight: false, animationOn: true }).live,
+    ["cpu"]
+  );
+});
+check("crib pile: real + shown discards, each once, less what is flying", () => {
+  const n = (input: Parameters<typeof shownCribIds>[0]) => cribCountDuringDiscard(2, shownCribIds(input).size);
+  strictEqual(n({ discardedBy: [], mineSending: null, shownComputer: null, tossing: [] }), 0);
+  // Shown: its 2 backs.
+  strictEqual(n({ discardedBy: [], mineSending: null, shownComputer: "cpu", tossing: [] }), 2);
+  // Still flying: not yet.
+  strictEqual(n({ discardedBy: [], mineSending: null, shownComputer: "cpu", tossing: ["cpu"] }), 0);
+  // The real one arrives: still 2, not 4.
+  strictEqual(n({ discardedBy: ["cpu"], mineSending: null, shownComputer: "cpu", tossing: [] }), 2);
+  // Mine too: 4.
+  strictEqual(n({ discardedBy: ["cpu"], mineSending: "me", shownComputer: "cpu", tossing: [] }), 4);
+  strictEqual(n({ discardedBy: ["me", "cpu"], mineSending: "me", shownComputer: null, tossing: [] }), 4);
+});
+check("computer discard shown: remembered per game and hand", () => {
+  strictEqual(discardShowKey("g:3"), "nobs:cpu-discard-shown:g:3");
+  strictEqual(discardShowKey("g:3") === discardShowKey("g:4"), false);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

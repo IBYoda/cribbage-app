@@ -786,7 +786,11 @@ body {
    108px at 502x919, 84px at 390x844. A short phone (PRD item 31: the board
    may shrink, the cards first keep their size) gets at most 10% of the
    height: 67px at 375x667. The board only brings its rows closer; its hole
-   pitch comes from the width. */
+   pitch comes from the width.
+   The SVG is drawn at a measured pixel width, so the strip must never take
+   its width from it (min-width: 0; overflow: hidden): otherwise, after the
+   window narrows, the old, wider SVG holds the strip -- and the whole
+   page -- at the old width, and the board never re-measures smaller. */
 .table-shell--square {
   --sq-board-h: min(calc(100vw / 4.65), 12vh);
 }
@@ -806,6 +810,8 @@ body {
   }
 }
 .sq-board {
+  min-width: 0;
+  overflow: hidden;
   height: var(--sq-board-h);
   margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
 }
@@ -881,6 +887,43 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 28px;
+}
+/* THE STARTER IN COUNTING (countingStarterPlace; CountingStarter).
+   Someone else's crib: in the middle, upright, above the score flash's place
+   and the counting text -- in their column, so it can never cover them. As
+   big as the side seats' cards (0.79 of my hand's) when the column has the
+   height; otherwise it takes only what the text leaves (its height shrinks,
+   its width follows), so the column never overflows into the seats above.
+   (3 players: the centre's row and column get the middle's height for that,
+   .sq-count-column.)
+   My crib: in the pile row just above my hand, centred on it -- or, if the
+   crib's fan reaches that far, just right of the fan (its width as
+   CribPile's: one card, then 36% of a card or 18px for each of the others). */
+.sq-count-starter {
+  flex: 0 1 calc(var(--hand-w) * 0.79 * 7 / 5);
+  min-height: 0;
+  aspect-ratio: 5 / 7;
+  max-width: 100%;
+  /* No gap of its own (the flash's row below has room): squeezed to
+     nothing, it costs nothing. */
+  margin-bottom: -8px;
+}
+.sq-ring--count .sq-ring__row {
+  flex: 1 1 0;
+  min-height: 0;
+  align-items: stretch;
+}
+.sq-count-column {
+  justify-content: center;
+  min-height: 0;
+}
+.pile-starter {
+  position: absolute;
+  bottom: 0;
+  left: max(
+    calc(50% - var(--hand-w) / 2),
+    calc(var(--hand-w) + 3 * max(18px, var(--hand-w) * 0.36) + 8px)
+  );
 }
 /* The final board after a pegging win: the run in front of each seat, the
    count, then the result (banner, ready lines, New Game) in the centre --
@@ -976,6 +1019,218 @@ body {
   min-width: 100%;
   min-height: 100%;
   max-width: 12rem;
+}
+
+/* -- SIDE SEATS (3 players with ?layout=square; components/table/SquareRing.tsx,
+      mockups 04 and 05). No across row (it collapses when empty), so the
+      middle gets that height. Its grid: the side seats' name tags along the
+      top (in --ring-tag-h); a column at each edge -- the pile slot, the hand
+      as a column of sideways cards, the other pile slot -- with the centre
+      between them (each side seat's played cards either side of the count,
+      the final board's result under them); then my played cards, reaching a
+      little into the pile row as with 2 players.
+
+   SIZES, as shares of --hand-w (mockups 04/05 measured at 502x919):
+     a side card (hand, crib, deck) .... 0.79 of a hand card wide, turned
+                                         sideways (the mockups: hand 0.75,
+                                         crib 0.73, starter 0.86 -- one size
+                                         here, so the column is one card wide)
+     a card under the next one shows ... 48% (its corner index)
+     the side column ................... one sideways card: 1.1 hand cards
+     the side seats' played cards ...... 0.89, as the across player's
+     my played cards .................... 1
+   The played cards shrink to fit what the centre has once --ring-center-w
+   is kept for the count and its pill: the side seats' 0.78 and mine 0.87 of
+   a hand card at 375px wide, 0.80 and 0.90 at 390px, none at 502px. On a short middle the side cards shrink too (the cap in
+   --ring-card-w), so the dealer's column -- two piles and a 5-card hand --
+   never runs past the middle. */
+.sq-opponent-row:empty {
+  height: 0;
+  margin-top: 0;
+}
+.sq-ring {
+  --ring-tag-h: 28px;
+  --ring-gap: 6px;
+  --ring-center-w: 92px;
+  --ring-card-w: min(calc(var(--hand-w) * 0.79), calc((100cqh - var(--ring-tag-h) - var(--hand-w) * 1.25) / 5.1));
+  --ring-side-w: calc(var(--ring-card-w) * 1.4);
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--ring-side-w) minmax(0, 1fr) var(--ring-side-w);
+  grid-template-rows: minmax(0, 1fr) auto;
+  column-gap: var(--ring-gap);
+  width: 100%;
+  height: 100%;
+  padding-top: var(--ring-tag-h);
+}
+.sq-ring--count {
+  --ring-card-w: min(calc(var(--hand-w) * 0.79), calc((100cqh - var(--ring-tag-h)) / 5.1));
+}
+.sq-ring__tag {
+  position: absolute;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(50% - 4px);
+  height: var(--ring-tag-h);
+  min-width: 0;
+}
+.sq-ring__tag--left {
+  left: 0;
+}
+.sq-ring__tag--right {
+  right: 0;
+  flex-direction: row-reverse;
+}
+.sq-ring__seat {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+.sq-ring__seat--left {
+  grid-column: 1;
+}
+.sq-ring__seat--right {
+  grid-column: 3;
+}
+.sq-ring__center {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.sq-ring__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+}
+.sq-ring__count {
+  display: flex;
+  flex: 1 1 0;
+  justify-content: center;
+  min-width: 0;
+  text-align: center;
+}
+.sq-ring__count > .center-count {
+  max-width: 100%;
+}
+.sq-ring__count .center-count__pill {
+  max-width: 100%;
+}
+.sq-ring__count .center-count__pill > p {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sq-ring__mine {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  justify-content: center;
+  margin-bottom: calc(var(--hand-w) * -0.155);
+}
+/* The played cards: a hand card at most; both side rows (sideways, 1.4 x
+   0.89 of the base each) and --ring-center-w across the centre; a side row
+   of four (3.01 x 0.89) over my row (1.4) down the middle. */
+.sq-ring .seat-played {
+  --spc-base: min(
+    var(--hand-w),
+    calc((100cqw - 2 * var(--ring-side-w) - 2 * var(--ring-gap) - 8px - var(--ring-center-w)) / 2.49),
+    calc((100cqh - var(--ring-tag-h) - 8px) / 4.08)
+  );
+}
+/* The final board after a pegging win: the result (~190px) under the count
+   as well. */
+.sq-ring--final .seat-played {
+  --spc-base: min(
+    var(--hand-w),
+    calc((100cqw - 2 * var(--ring-side-w) - 2 * var(--ring-gap) - 8px - var(--ring-center-w)) / 2.49),
+    calc((100cqh - var(--ring-tag-h) - 198px) / 4.08)
+  );
+}
+.sq-ring--final .sq-ring__mine {
+  margin-bottom: 0;
+}
+.sq-ring--final .center-count {
+  gap: 0;
+}
+.sq-ring--final .center-count__pill {
+  height: 0;
+  min-height: 0;
+}
+.sq-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+/* Kept whoever deals, so the two hands line up across the table. */
+.sq-side__pile-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ring-side-w);
+  min-height: var(--ring-card-w);
+}
+.sq-side__pile {
+  position: relative;
+}
+.sq-side__stack {
+  display: flex;
+  flex-direction: column;
+}
+/* The right seat's left-to-right runs up my screen. */
+.sq-side--right .sq-side__stack {
+  flex-direction: column-reverse;
+}
+.sq-side__slot {
+  position: relative;
+  flex-shrink: 0;
+  width: var(--ring-side-w);
+  height: var(--ring-card-w);
+}
+.sq-side__slot + .sq-side__slot {
+  margin-top: calc(var(--ring-card-w) * -0.52);
+}
+/* A soft edge round each card of a stack, so a strip of one card back reads
+   apart from the next (the slot is exactly the turned card's box). */
+.sq-side__stack > .sq-side__slot {
+  border-radius: 0.5rem;
+  box-shadow: 0 0 2px 0.5px rgb(0 0 0 / 0.5);
+}
+.sq-side--right .sq-side__slot + .sq-side__slot {
+  margin-top: 0;
+  margin-bottom: calc(var(--ring-card-w) * -0.52);
+}
+.sq-side__card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--ring-card-w);
+  transform: translate(-50%, -50%) rotate(var(--side-turn, 90deg));
+}
+/* The deal: the side seats' hands are hidden too while it is on. */
+.sq-dealing [data-hand-stack] .sq-side__card {
+  visibility: hidden;
+}
+.sq-dealing [data-hand-stack] > .sq-side__slot {
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sq-side .transition-transform {
+    transition: none;
+  }
 }
 /* Flat: stacked needs ~195px (smallest cards + the result), so below 220px of
    middle -- e.g. 1280x300, where it's ~73px -- one row instead: the run, a

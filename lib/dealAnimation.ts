@@ -119,6 +119,18 @@ export function dealPlan(input: {
   return { deal, fan, dealMs, totalMs: fan.length ? dealMs + fanMs : dealMs };
 }
 
+// A FLYING CARD'S TURN IN THE PLANE: the angle it leaves at, for a card
+// that lands turned `toTurn` degrees (0 at my seat and across; 90 / -90 at
+// the left / right seat, its cards sideways) from a place turned `fromTurn`
+// (the deck or a hand). It starts lined up with where it leaves from (a card
+// back looks the same either way up) and makes a half turn as it flies --
+// plus a quarter turn when it goes between an upright and a sideways place.
+// Between upright places: -180, the half turn the 2-player table always made.
+export function flightTurn(fromTurn: number, toTurn: number, spinDeg: number = DEAL_SPIN_DEG): number {
+  const quarter = (((toTurn - fromTurn) % 180) + 180) % 180;
+  return toTurn - spinDeg - quarter;
+}
+
 // When a set of steps is over.
 export function dealLength(steps: { delayMs: number; durationMs: number }[]): number {
   return steps.reduce((end, s) => Math.max(end, s.delayMs + s.durationMs), 0);
@@ -206,6 +218,192 @@ export function liveDealStep(input: {
   const live =
     seenKey !== undefined && !!handKey && input.phase === "discard" && !input.iHaveDiscarded && input.animationOn;
   return { seenKey: handKey, liveKey: live ? handKey : null };
+}
+
+// The live-discard record with `userId` counted as already thrown for this
+// hand -- the computer opponent once its discard has been shown (see THE
+// COMPUTER'S DISCARD, below), so its real discard arriving later is never
+// thrown again. The same object when there is nothing to add (it is compared
+// during render).
+export function markDiscardSeen(
+  seen: DiscardSeen | undefined,
+  handKey: string | null,
+  userId: string | null
+): DiscardSeen | undefined {
+  if (!seen || !handKey || !userId || seen.handKey !== handKey || seen.ids.includes(userId)) return seen;
+  return { handKey, ids: [...seen.ids, userId] };
+}
+
+// THE STARTER'S SLIDE at the start of counting (square table): the starter
+// moves from the dealer's deck to its counting place (countingStarterPlace,
+// lib/tableLayout.ts) in this long.
+export const STARTER_SLIDE_MS = 450;
+
+// A LIVE START OF COUNTING: should the starter slide? The same guard as the
+// deal. Called on every render with the hand on show and whether the
+// counting picture is on screen; `seenKey` records "<hand>:count" or
+// "<hand>:other" from last time:
+//   * seenKey undefined (the table's first full read only just in): whatever
+//     is on screen was there before this screen saw it (a load, a reload, a
+//     late join, a page loaded in counting) -- recorded, never slides;
+//   * the same hand going from "other" to "count", with the animation on: live;
+//   * anything else (the same state again, a new hand): recorded only.
+// Returns what to record, and the hand whose starter slides now (or null).
+export function liveStarterStep(input: {
+  tableRead: boolean;
+  seenKey: string | null | undefined;
+  handKey: string | null;
+  counting: boolean;
+  animationOn: boolean;
+}): { seenKey: string | null | undefined; liveKey: string | null } {
+  const { tableRead, seenKey, handKey } = input;
+  if (!tableRead) return { seenKey, liveKey: null };
+  const key = handKey ? `${handKey}:${input.counting ? "count" : "other"}` : null;
+  if (key === seenKey) return { seenKey, liveKey: null };
+  const live = input.counting && input.animationOn && !!handKey && seenKey === `${handKey}:other`;
+  return { seenKey: key, liveKey: live ? handKey : null };
+}
+
+// THE COMPUTER'S DISCARD, SHOWN ON TIME (2-player square table with a
+// computer opponent; display only -- the game, the server and the computer's
+// real moves are untouched). The computer really discards only after its
+// turn comes up, which can be after mine; so once my dealt hand has been on
+// this screen for COMPUTER_DISCARD_SHOW_MS (from when it first appeared on
+// this page load: the start of the deal, or when the hand showed if nothing
+// animated) without its real discard -- and no deal is still being shown --
+// the screen shows it as discarded: its two cards thrown to the crib (the
+// normal toss, or straight there with the animations off), its hand two
+// short, the crib with its cards. When the real discard comes, the picture
+// is already right: it is never thrown again (markDiscardSeen) and the crib
+// never counts it twice (shownCribIds). My own discard before the time is up
+// cancels it for that hand. A page reloaded after it showed shows it again at
+// once (remembered in localStorage per game and hand).
+export const COMPUTER_DISCARD_SHOW_MS = 7000;
+
+export type DiscardShow = {
+  handKey: string;
+  // When my hand showed (the clock's start), or null: not yet.
+  startedAt: number | null;
+  fired: boolean;
+  cancelled: boolean;
+} | null;
+
+// One step of it, from what is on screen now (`now`: the time). Returns the
+// state to keep (the same object when nothing changed) and, while waiting,
+// how long until it shows.
+export function discardShowStep(input: {
+  // A computer opponent at a 2-player square table.
+  eligible: boolean;
+  handKey: string | null;
+  phase: string | null;
+  // My dealt hand is on this screen (being dealt counts): the clock starts.
+  handShown: boolean;
+  // A deal is still being shown: it waits for the end.
+  dealInFlight: boolean;
+  computerDiscarded: boolean;
+  // I have discarded, or my discard is on its way.
+  iDiscarding: boolean;
+  // It already showed for this hand on an earlier load.
+  remembered: boolean;
+  state: DiscardShow;
+  now: number;
+}): { state: DiscardShow; fireInMs: number | null } {
+  const { handKey, state } = input;
+  if (!input.eligible || !handKey || input.phase !== "discard") {
+    return { state: state === null ? state : null, fireInMs: null };
+  }
+  let next: NonNullable<DiscardShow> =
+    state && state.handKey === handKey ? state : { handKey, startedAt: null, fired: false, cancelled: false };
+  const update = (patch: Partial<NonNullable<DiscardShow>>) => {
+    next = { ...next, ...patch };
+  };
+  if (input.remembered && !next.fired) update({ fired: true });
+  let fireInMs: number | null = null;
+  if (!next.fired && !input.computerDiscarded) {
+    if (input.iDiscarding) {
+      if (!next.cancelled) update({ cancelled: true });
+    } else if (!next.cancelled && (input.handShown || next.startedAt !== null)) {
+      // From the first moment the hand is here; kept once started.
+      if (next.startedAt === null) update({ startedAt: input.now });
+      // Never while a deal is still shown: due then, it fires as it ends.
+      if (!input.dealInFlight) {
+        fireInMs = Math.max(0, (next.startedAt as number) + COMPUTER_DISCARD_SHOW_MS - input.now);
+      }
+    }
+  }
+  return { state: next, fireInMs };
+}
+
+// The timer ran out: it shows (unless the hand moved on meanwhile).
+export function fireDiscardShow(state: DiscardShow, handKey: string): DiscardShow {
+  if (!state || state.handKey !== handKey || state.fired || state.cancelled) return state;
+  return { ...state, fired: true };
+}
+
+// Whether the computer is shown as discarded though it hasn't really yet.
+export function discardShown(input: {
+  eligible: boolean;
+  handKey: string | null;
+  phase: string | null;
+  computerDiscarded: boolean;
+  state: DiscardShow;
+}): boolean {
+  return (
+    input.eligible &&
+    !!input.handKey &&
+    input.phase === "discard" &&
+    !input.computerDiscarded &&
+    !!input.state &&
+    input.state.handKey === input.handKey &&
+    input.state.fired
+  );
+}
+
+// WHOSE DISCARDS THE CRIB PILE SHOWS: the real ones, mine while it is being
+// sent, and the computer's once shown -- each player once, never twice --
+// less any still flying to it.
+export function shownCribIds(input: {
+  discardedBy: string[];
+  mineSending: string | null;
+  shownComputer: string | null;
+  tossing: Iterable<string>;
+}): Set<string> {
+  const ids = new Set(input.discardedBy);
+  if (input.mineSending) ids.add(input.mineSending);
+  if (input.shownComputer) ids.add(input.shownComputer);
+  for (const id of input.tossing) ids.delete(id);
+  return ids;
+}
+
+// Remembering it across a reload: one key per game and hand. Writing one
+// clears every other (so nothing carries to a later hand); reads and writes
+// are guarded (storage can be missing or blocked) -- without storage a
+// reload simply shows the real state.
+const DISCARD_SHOW_PREFIX = "nobs:cpu-discard-shown:";
+
+export function discardShowKey(handKey: string): string {
+  return `${DISCARD_SHOW_PREFIX}${handKey}`;
+}
+
+export function readDiscardShown(handKey: string): boolean {
+  try {
+    return localStorage.getItem(discardShowKey(handKey)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeDiscardShown(handKey: string | null) {
+  try {
+    const keep = handKey ? discardShowKey(handKey) : null;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(DISCARD_SHOW_PREFIX) && key !== keep) localStorage.removeItem(key);
+    }
+    if (keep) localStorage.setItem(keep, "1");
+  } catch {
+    // Not remembered: a reload shows the real state.
+  }
 }
 
 // THE PROFILE SETTING "Card animations" (the deal and the discard toss; it

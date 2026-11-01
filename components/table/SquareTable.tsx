@@ -121,6 +121,9 @@ export type AcrossPiles = {
   starter: string | null;
   cribSide: ScreenSide;
   cribCards?: string[] | null;
+  // The starter has moved to the middle (counting): the deck shows nothing,
+  // its place kept for the starter's slide to start from.
+  starterMoved?: boolean;
 };
 
 // The across player's hand: whole card backs (or the shown cards), overlapped
@@ -175,13 +178,19 @@ export function SquareOpponentHand({
           ))}
       {piles && (
         <>
-          <div className={`sq-across-pile sq-across-pile--deck sq-across-pile--${piles.cribSide === "left" ? "right" : "left"}`}>
-            {piles.starter ? (
+          <div
+            className={`sq-across-pile sq-across-pile--deck sq-across-pile--${piles.cribSide === "left" ? "right" : "left"}`}
+            data-starter-home={piles.starterMoved ? "0" : undefined}
+            aria-hidden={piles.starterMoved || undefined}
+          >
+            {piles.starterMoved ? (
+              <div className="aspect-[5/7] w-full" />
+            ) : piles.starter ? (
               <PlayingCard card={piles.starter} sizing="w-full aspect-[5/7]" />
             ) : (
               <FaceDownCard sizing="w-full aspect-[5/7]" />
             )}
-            <SquarePileLabel>{piles.starter ? "Starter" : "Deck"}</SquarePileLabel>
+            {!piles.starterMoved && <SquarePileLabel>{piles.starter ? "Starter" : "Deck"}</SquarePileLabel>}
           </div>
           <div
             className={`sq-across-pile sq-across-pile--crib sq-across-pile--${piles.cribSide === "left" ? "left" : "right"}`}

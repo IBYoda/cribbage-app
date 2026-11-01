@@ -11,6 +11,7 @@ export function PileRow({
   crib,
   starter,
   flash,
+  above,
   children,
 }: {
   crib: CribPileProps | null;
@@ -18,10 +19,14 @@ export function PileRow({
   // The score flash ("Elsa +1 — last card"): above the buttons, between the
   // piles. See .pile-center in app/globals.css.
   flash?: ReactNode;
+  // The square table's counting, when I deal: the starter, moved off the
+  // deck to just above my hand -- centred, and never over the crib's fan
+  // (.pile-starter).
+  above?: ReactNode;
   children?: ReactNode;
 }) {
   return (
-    <div className="flex items-end justify-between gap-2">
+    <div className="relative flex items-end justify-between gap-2">
       <div className="flex min-w-[var(--hand-w)] justify-start">
         {crib && <CribPile {...crib} />}
       </div>
@@ -32,6 +37,7 @@ export function PileRow({
       <div className="flex min-w-[var(--hand-w)] justify-end">
         {starter && <StarterPile {...starter} />}
       </div>
+      {above && <div className="pile-starter">{above}</div>}
     </div>
   );
 }
@@ -94,9 +100,14 @@ function CribPile({ faceDownCount, shownCards, dealerIsMe }: CribPileProps) {
 export type StarterPileProps = {
   // The cut starter, once there is one; until then, the face-down deck.
   card: string | null;
+  // The starter has moved to its counting place (countingStarterPlace): the
+  // deck shows nothing -- an empty box keeps its place, for the starter's
+  // slide to start from (data-starter-home).
+  moved?: boolean;
 };
 
-function StarterPile({ card }: StarterPileProps) {
+function StarterPile({ card, moved = false }: StarterPileProps) {
+  if (moved) return <div className={HAND_CARD} data-starter-home="0" aria-hidden />;
   return (
     <div className="relative">
       {card ? <PlayingCard card={card} sizing={HAND_CARD} /> : <FaceDownCard sizing={HAND_CARD} />}
