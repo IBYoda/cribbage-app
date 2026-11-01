@@ -25,7 +25,14 @@ import {
   teamOfPosition,
   type PlateRow,
 } from "../lib/phase3";
-import { playedBySeat, seatGeometry, seatsOnScreen } from "../lib/tableLayout";
+import {
+  chooseTableLayout,
+  isSquareTable,
+  playedBySeat,
+  seatGeometry,
+  seatsOnScreen,
+  type TableScreen,
+} from "../lib/tableLayout";
 import {
   boardGeometry,
   boardHoles,
@@ -494,6 +501,39 @@ check("square table: plays arriving out of order are shown in play order; 4 play
   const plays = [sq(3, 0, "s3", "3C"), sq(1, 0, "s1", "AC"), sq(4, 0, "s4", "4C"), sq(2, 0, "s2", "2C"), sq(5, 0, "s1", "5C")];
   const r = playedBySeat({ plays, playSegment: 0, handOver: false, players: P4, myId: "s1" });
   deepStrictEqual(seatCards(r), { bottom: ["AC", "5C"], left: ["2C"], top: ["3C"], right: ["4C"] });
+});
+
+// WHICH LAYOUT (chooseTableLayout): square by default for 2 players, not
+// Muggins, on its screens; ?layout=classic is the way out.
+const layoutFor = (layoutParam: string | null, playerCount: number, isMuggins: boolean, screen: TableScreen) =>
+  chooseTableLayout({ layoutParam, playerCount, isMuggins, screen });
+const SQUARE_SCREENS: TableScreen[] = ["discard", "pegging", "counting", "won"];
+const CLASSIC_SCREENS: TableScreen[] = ["waiting-room", "cut", "ended", "other"];
+check("layout: 2 players, no param -- square on its screens, classic elsewhere", () => {
+  for (const s of SQUARE_SCREENS) strictEqual(layoutFor(null, 2, false, s), "square", s);
+  for (const s of CLASSIC_SCREENS) strictEqual(layoutFor(null, 2, false, s), "classic", s);
+});
+check("layout: ?layout=classic always classic; ?layout=square and unknown values are the default", () => {
+  for (const s of SQUARE_SCREENS) {
+    strictEqual(layoutFor("classic", 2, false, s), "classic", s);
+    strictEqual(layoutFor("square", 2, false, s), "square", s);
+    strictEqual(layoutFor("round", 2, false, s), "square", s);
+    strictEqual(layoutFor("", 2, false, s), "square", s);
+  }
+  for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 2, false, s), "classic", s);
+});
+check("layout: 3 and 4 players, and Muggins, are classic with or without the param", () => {
+  for (const param of [null, "square", "classic", "x"]) {
+    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
+      strictEqual(layoutFor(param, 3, false, s), "classic", `3p ${param} ${s}`);
+      strictEqual(layoutFor(param, 4, false, s), "classic", `4p ${param} ${s}`);
+      strictEqual(layoutFor(param, 2, true, s), "classic", `muggins ${param} ${s}`);
+    }
+  }
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: false }), true);
+  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 2, isMuggins: false }), false);
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false }), false);
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: true }), false);
 });
 
 // THE CRIBBAGE BOARD (lib/boardLayout.ts).

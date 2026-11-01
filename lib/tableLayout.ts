@@ -2,7 +2,8 @@
 // rules its layout is built on. Everyone sits around a square table facing
 // the centre, each player's played cards lie in front of them, turned to face
 // them, and the dealer's crib and deck sit beside the dealer's hand. Tested
-// by scripts/test-phase3.ts. Nothing here touches the live table yet.
+// by scripts/test-phase3.ts. The square layout is the default for 2-player
+// tables that aren't Muggins (chooseTableLayout, at the end).
 
 import { displayedRun, type PlayEvent } from "@/lib/pegging";
 import { seatPlaces } from "@/lib/phase3";
@@ -92,4 +93,32 @@ export function playedBySeat(input: {
     },
     finished,
   };
+}
+
+// WHICH LAYOUT A TABLE SHOWS. The square layout is the default for a
+// 2-player table that isn't Muggins, on the screens it has been built for:
+// a dealt hand (the discard, pegging and its hold, counting through Next
+// Hand) and a won game's final board. Everything else is the classic table:
+// the waiting room, the cut for the deal, a game that ended any other way,
+// Muggins, 3 and 4 players. ?layout=classic on the page's URL always gives
+// the classic table; ?layout=square, a missing or any other value is the
+// default.
+export type TableLayoutChoice = "square" | "classic";
+
+export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "counting" | "won" | "ended" | "other";
+
+const SQUARE_SCREENS: ReadonlySet<TableScreen> = new Set(["discard", "pegging", "counting", "won"]);
+
+// The table as a whole uses the square layout (for the screens it covers).
+export function isSquareTable(input: { layoutParam: string | null; playerCount: number; isMuggins: boolean }): boolean {
+  return input.layoutParam !== "classic" && input.playerCount === 2 && !input.isMuggins;
+}
+
+export function chooseTableLayout(input: {
+  layoutParam: string | null;
+  playerCount: number;
+  isMuggins: boolean;
+  screen: TableScreen;
+}): TableLayoutChoice {
+  return isSquareTable(input) && SQUARE_SCREENS.has(input.screen) ? "square" : "classic";
 }
