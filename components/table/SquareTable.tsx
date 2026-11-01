@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
+import { MugginsTag } from "@/components/MugginsTag";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
 import type { ScreenSide } from "@/lib/tableLayout";
@@ -76,17 +77,21 @@ export function SquareTableHeader({
   handNo,
   opponent,
   right,
+  muggins = false,
 }: {
   code: string;
   handNo: number | null;
+  // A self-scoring (Muggins) table: its tag on a short line of its own under
+  // the header line, as the classic header has it (TableHeader).
+  muggins?: boolean;
   // laneColor: their board lane's colour, as their avatar's ring. status (4
   // players): their word in the discard and counting ("Picking…",
   // "Discarded", "Counting"), shown when they haven't said Go.
   opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string; status?: ReactNode } | null;
   right: ReactNode;
 }) {
-  return (
-    <header className={opponent?.status ? "sq-header sq-header--seat-status" : "sq-header"}>
+  const header = (
+    <header className={opponent?.status || muggins ? "sq-header sq-header--seat-status" : "sq-header"}>
       <h1 className="min-w-0 truncate font-semibold">
         Table {code}
         {handNo != null && <span className="font-normal text-zinc-500"> · Hand {handNo}</span>}
@@ -110,6 +115,15 @@ export function SquareTableHeader({
       </div>
       <div className="flex shrink-0 items-center justify-end gap-3 text-sm">{right}</div>
     </header>
+  );
+  if (!muggins) return header;
+  return (
+    <>
+      {header}
+      <div className="sq-muggins-tag">
+        <MugginsTag />
+      </div>
+    </>
   );
 }
 
@@ -157,7 +171,9 @@ export function SquareOpponentHand({
   const cards: (string | null)[] = shownCards ?? Array.from({ length: cardCount }, () => null);
   return (
     <div
-      className={`sq-opp-hand ${counting ? "sq-opp-hand--open" : ""}`}
+      className={`sq-opp-hand ${counting ? "sq-opp-hand--open" : ""} ${
+        counting && piles && cards.length > 4 ? "sq-opp-hand--crowded" : ""
+      }`}
       style={{ "--n": Math.max(cards.length, 1) } as CSSProperties}
     >
       {counting

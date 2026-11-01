@@ -11,7 +11,7 @@ const LIVE_GAME_STATUSES = ["cutting", "active"];
 // An open table the viewer is seated at (any visibility).
 export type MyTable = {
   code: string;
-  isMuggins: boolean; // a Muggins table: listed with the "Muggins · no scoring" tag
+  isMuggins: boolean; // a Muggins table: listed with the "Self-Scoring (Muggins)" tag
   others: string[]; // the other players' names
   gameLive: boolean; // a game is being cut for or played
   capacity: number; // tables.max_players: 2, 3 or 4

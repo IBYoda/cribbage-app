@@ -57,7 +57,7 @@ export function MugginsNotice({
     >
       <div className="flex flex-col gap-3">
         <h2 id="muggins-title" className="font-display text-2xl font-bold italic">
-          Muggins mode
+          Self-Scoring (Muggins) mode
         </h2>
         <p id="muggins-body">
           All scoring is turned off. The app only deals the cards, so you will NEED to keep your own
@@ -69,7 +69,7 @@ export function MugginsNotice({
           &quot;I win&quot; again to take it back.
         </p>
         <p>
-          Muggins matches don&apos;t count toward rankings. The app never sees the score, so there is
+          Self-Scoring (Muggins) matches don&apos;t count toward rankings. The app never sees the score, so there is
           no way to check a win.
         </p>
         <p>
@@ -81,7 +81,7 @@ export function MugginsNotice({
             Go back
           </button>
           <button type="button" onClick={onConfirm} className="peg-btn peg-btn--brass">
-            {mode === "create" ? "Start Muggins table" : "Join Muggins table"}
+            {mode === "create" ? "Start Self-Scoring (Muggins) table" : "Join Self-Scoring (Muggins) table"}
           </button>
         </div>
       </div>

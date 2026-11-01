@@ -47,7 +47,7 @@ import {
   type SeatPosition,
   type TableScreen,
 } from "@/lib/tableLayout";
-import { CribbageBoard } from "@/components/table/CribbageBoard";
+import { CribbageBoard, SelfScoringBanner } from "@/components/table/CribbageBoard";
 import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
 import {
   ComputerDiscardClock,
@@ -75,8 +75,9 @@ import {
 } from "@/lib/dealAnimation";
 
 // THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
-// 2- or 3-player table or a 4-player Teams table that isn't Muggins
-// (chooseTableLayout, lib/tableLayout.ts); ?layout=classic on the page's URL
+// 2- or 3-player table or a 4-player Teams table, self-scoring (Muggins,
+// 2-player only) included (chooseTableLayout, lib/tableLayout.ts);
+// ?layout=classic on the page's URL
 // forces the classic table. Read through
 // useSyncExternalStore with no param on the server and in the hydrating
 // render. That render is always the "Loading..." screen (the session is read
@@ -369,7 +370,7 @@ export default function TablePage() {
   const [loading, setLoading] = useState(true);
   const [table, setTable] = useState<TableRow | null>(null);
   // THE JOINER'S MUGGINS NOTICE: a Muggins table this player is not yet
-  // seated at, waiting for "Join Muggins table". Nothing about the table is
+  // seated at, waiting for "Join Self-Scoring (Muggins) table". Nothing about the table is
   // loaded or shown, and no seat exists, until they agree.
   const [pendingJoin, setPendingJoin] = useState<TableRow | null>(null);
   // MUGGINS: no visible scoring on this table, for everyone (see TableRow).
@@ -2054,12 +2055,12 @@ export default function TablePage() {
   }
 
   // THE JOINER'S MUGGINS NOTICE, before any seat or table content. "Join
-  // Muggins table" takes the seat and loads the table; Go back (or Escape,
+  // Self-Scoring (Muggins) table" takes the seat and loads the table; Go back (or Escape,
   // or the backdrop) goes home without one.
   if (pendingJoin) {
     return (
       <CardRoomFrame backHome={false}>
-        <p>Table {pendingJoin.code} is a Muggins table.</p>
+        <p>Table {pendingJoin.code} is a Self-Scoring (Muggins) table.</p>
         <MugginsNotice
           open
           mode="join"
@@ -2077,8 +2078,8 @@ export default function TablePage() {
   // THE FIRST READ, on a table that will draw square: until the table's first
   // full read is in, the same "Loading..." as above -- not the classic table
   // with nothing on it, which would flash before the square one (2 and 3
-  // players, 4-player Teams). A classic table (4-player Solo, Muggins,
-  // ?layout=classic) draws as it always has.
+  // players -- self-scoring (Muggins) ones too -- and 4-player Teams). A
+  // classic table (4-player Solo, ?layout=classic) draws as it always has.
   if (
     !tableRead &&
     isSquareTable({
@@ -3128,14 +3129,17 @@ export default function TablePage() {
       />
     ) : null;
 
-  // THE SQUARE SCREEN (PRD item 31) -- the default on a 2-player table that
-  // isn't Muggins, unless ?layout=classic (chooseTableLayout), for a dealt
+  // THE SQUARE SCREEN (PRD item 31) -- the default on a 2-player table,
+  // unless ?layout=classic (chooseTableLayout), for a dealt
   // hand: the discard, pegging and its hold, and counting through Next Hand
   // (see below); the final board after a win is the next block. 3 players
   // (also by default) have their own square screen (THE SQUARE SCREEN, 3
   // PLAYERS, after the board helpers). Everything else -- the cut for the
-  // deal, the waiting room, Muggins, 4 players, ?layout=classic -- is the
-  // table below, unchanged.
+  // deal, the waiting room, 4-player Solo, ?layout=classic -- is the table
+  // below, unchanged. A self-scoring (Muggins) table: the self-scoring banner
+  // in the board's place (squareBoardFor), the win bar in the plates' place
+  // (mugginsWinBar), its tag under the header; scores, flashes and count
+  // numbers hidden as on the classic table.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
   // the count, whose turn, Go, the hold, the score flash, my hand and its
@@ -3163,6 +3167,15 @@ export default function TablePage() {
   // team total, and the newest award, the scorer's, for the back peg).
   const squareBoardFor = (seatOrder: string[], teams = false) => {
     const skin = DEFAULT_BOARD_SKIN;
+    // A self-scoring (Muggins) table (2 players only): no board, pegs or lane
+    // rings -- the self-scoring banner in the board strip's slot.
+    if (isMuggins) {
+      return {
+        laneColorOf: (): string | undefined => undefined,
+        board: <SelfScoringBanner skin={skin} />,
+        plates: plates.map((p) => ({ ...p, hasDealer: false })),
+      };
+    }
     const seated = seatOrder.flatMap((id) => members.filter((m) => m.user_id === id));
     const laneOfPlayer = (userId: string) => laneForPlayer({ players: seatOrder, userId, teams });
     const laneColorOf = (userId: string) => {
@@ -3710,6 +3723,7 @@ export default function TablePage() {
                 laneColor: squareScores.laneColorOf(squareOpponent.user_id),
               }}
               right={headerRight}
+              muggins={isMuggins}
             />
           }
           opponent={
@@ -3798,9 +3812,11 @@ export default function TablePage() {
           }
           hand={<div className="sq-hand-row">{hand}</div>}
           board={squareScores.board}
+          // A self-scoring (Muggins) table: the win bar in the plates' place,
+          // exactly as the classic table shows it in its strip's.
           scores={
             <div className="sq-plates">
-              <ScoreStrip plates={squareScores.plates} />
+              {isMuggins ? mugginsWinBar : <ScoreStrip plates={squareScores.plates} />}
             </div>
           }
           surface={appearance.surface}
@@ -3884,6 +3900,7 @@ export default function TablePage() {
                 laneColor: squareScores.laneColorOf(squareOpponent.user_id),
               }}
               right={headerRight}
+              muggins={isMuggins}
             />
           }
           opponent={
@@ -3968,9 +3985,12 @@ export default function TablePage() {
             </div>
           }
           board={squareScores.board}
+          // A self-scoring (Muggins) table shows no score: after the match
+          // there's nothing to claim either, so the plates' row stays empty
+          // (its height kept, so the banner sits where it did).
           scores={
             <div className="sq-plates">
-              <ScoreStrip plates={squareScores.plates} />
+              {isMuggins ? <div className="h-12" aria-hidden /> : <ScoreStrip plates={squareScores.plates} />}
             </div>
           }
           surface={appearance.surface}

@@ -692,9 +692,18 @@ body {
   padding-inline: 5px;
   font-size: 0.875rem;
 }
+/* A self-scoring (Muggins) table: its tag on a short line under the header
+   line (as the classic header), ~20px taken from the middle. */
+.sq-muggins-tag {
+  display: flex;
+  padding-inline: 5px;
+  font-size: 0.875rem;
+}
 /* 4 players: the top player's status word ("Discarded", "Picking…") widens
-   the centre, so the controls keep their own width (never overlapped) and
-   the columns stay equal -- the centre centred -- whenever there's room. */
+   the centre -- and a self-scoring table's locked "Self-Scoring (Muggins)"
+   button widens the controls -- so the controls keep their own width (never
+   overlapped) and the columns stay equal -- the centre centred -- whenever
+   there's room. */
 .sq-header--seat-status {
   grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
 }
@@ -727,6 +736,17 @@ body {
 }
 .sq-opp-hand--open .sq-opp-card + .sq-opp-card {
   margin-left: calc(var(--sq-back-w) * -0.33);
+}
+/* More than four cards face-up between the dealer's piles (a self-scoring
+   win accepted during the discard: the whole 6-card hand): 55% of each card
+   shows instead of two-thirds, so the hand (2.7 hand cards wide, against
+   3.13) fits between the deck and the crib (3.0 apart); the corner index
+   still shows. */
+.sq-opp-hand--open.sq-opp-hand--crowded {
+  width: calc(var(--sq-back-w) + (var(--n, 1) - 1) * var(--sq-back-w) * 0.55);
+}
+.sq-opp-hand--crowded .sq-opp-card + .sq-opp-card {
+  margin-left: calc(var(--sq-back-w) * -0.45);
 }
 /* The turn-over (FlipCard): instant with reduced motion. */
 @media (prefers-reduced-motion: reduce) {
@@ -820,6 +840,38 @@ body {
   overflow: hidden;
   height: var(--sq-board-h);
   margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
+}
+/* THE SELF-SCORING BANNER (a Muggins table; SelfScoringBanner in
+   components/table/CribbageBoard.tsx): fills the board strip exactly (the
+   same .sq-board wrapper, height and margins), with the board's corner
+   (12% of the height, 4-12px). Two centred lines that never wrap: the
+   title a quarter of the strip's height (17px at 375x667, 26px at
+   502x919), the note ~15%, at least 11px. */
+.self-scoring-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--sq-board-h) * 0.04);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid;
+  border-radius: clamp(4px, calc(var(--sq-board-h) * 0.12), 12px);
+  text-align: center;
+  white-space: nowrap;
+}
+.self-scoring-banner__title {
+  font-size: clamp(14px, calc(var(--sq-board-h) * 0.24), 26px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1;
+}
+.self-scoring-banner__note {
+  font-size: clamp(11px, calc(var(--sq-board-h) * 0.15), 16px);
+  font-weight: 600;
+  line-height: 1.1;
+  opacity: 0.85;
 }
 /* THE DEALING ANIMATION (components/table/DealAnimation.tsx). While a deal
    is on (.sq-dealing) every hand-card slot keeps its room but is hidden --
@@ -2131,7 +2183,7 @@ section.felt-panel {
   color: var(--brass-light);
 }
 
-/* "Muggins · no scoring" (components/MugginsTag.tsx): a small outlined tag
+/* "Self-Scoring (Muggins)" (components/MugginsTag.tsx): a small outlined tag
    on Open Tables rows and in the table header. It takes the text colour of
    wherever it sits -- cream on the felt, the table's own text colour on
    every table surface -- so it always has that text's contrast. */
