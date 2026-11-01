@@ -33,6 +33,9 @@ import { SquareOpponentHand, SquareTableHeader, SquareTableShell } from "@/compo
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
 import { CenterCount } from "@/components/table/CenterCount";
 import { playedBySeat, seatGeometry } from "@/lib/tableLayout";
+import { CribbageBoard } from "@/components/table/CribbageBoard";
+import { laneOf } from "@/lib/boardLayout";
+import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
 
 // THE SQUARE TABLE FLAG (PRD item 31, slice 1): ?layout=square on the page's
 // URL turns on the square 2-player pegging screen; no param, or anything else
@@ -2860,8 +2863,8 @@ export default function TablePage() {
   // the count, whose turn, Go, the hold, the score flash, my hand and its
   // play action, Sort, the piles, the plates). The dealer's crib and deck
   // sit at the DEALER's seat (seatGeometry: crib on the left of their hand,
-  // deck on the right, from their side); no "D" anywhere. The board strip is
-  // collapsed (showBoard={false}) until the board slice.
+  // deck on the right, from their side); no "D" anywhere. The board strip
+  // (squareBoardFor, below) above the plates.
   //
   // The whole dealt hand: the discard (phase 'discard'; the starter is cut
   // inside the last discard, so there is no step between), pegging (phase
@@ -2871,6 +2874,40 @@ export default function TablePage() {
   // discard's prompt in place of its pill -- so nothing moves when pegging
   // starts, and the score flash stays mounted across that change.
   const squareOpponent = opponents[0];
+  // THE BOARD STRIP and the plates for the square screens (PRD item 31, step
+  // 1b): each player's lane from the game's seat order (games.players -- the
+  // same array on every screen, so the same colours everywhere), their pegs
+  // from their row's score and last award (CribbageBoard / nextPegs), and
+  // their lane's colour as the ring round their avatar (plates and header).
+  // No "D" on the plates.
+  const squareBoardFor = (seatOrder: string[]) => {
+    const skin = DEFAULT_BOARD_SKIN;
+    const seated = seatOrder.flatMap((id) => members.filter((m) => m.user_id === id));
+    const laneColorOf = (userId: string) => {
+      const lane = laneOf(seatOrder, userId);
+      return lane === null ? undefined : skin.lanes[lane].peg;
+    };
+    return {
+      laneColorOf,
+      board: (
+        <CribbageBoard
+          skin={skin}
+          players={seated.map((m) => ({
+            userId: m.user_id,
+            name: displayName(m),
+            lane: laneOf(seatOrder, m.user_id) ?? -1,
+            score: m.score,
+            lastPoints: m.last_points,
+          }))}
+        />
+      ),
+      plates: plates.map((p) => ({
+        ...p,
+        hasDealer: false,
+        laneColor: p.members.length === 1 ? laneColorOf(p.members[0].userId) : undefined,
+      })),
+    };
+  };
   const squareView =
     squareLayout &&
     isTwoPlayerTable &&
@@ -2905,15 +2942,20 @@ export default function TablePage() {
     });
     // The other player's seat is across the table (2 players).
     const across = seatGeometry("top");
+    const squareScores = squareBoardFor(activeGame.players ?? [session.user.id, squareOpponent.user_id]);
     return (
       <>
         <SquareTableShell
-          showBoard={false}
           header={
             <SquareTableHeader
               code={code}
               handNo={activeGame.hand_no ?? null}
-              opponent={{ name: oppName, avatarUrl: squareOpponent.avatar_url, saidGo: goBy.has(squareOpponent.user_id) }}
+              opponent={{
+                name: oppName,
+                avatarUrl: squareOpponent.avatar_url,
+                saidGo: goBy.has(squareOpponent.user_id),
+                laneColor: squareScores.laneColorOf(squareOpponent.user_id),
+              }}
               right={headerRight}
             />
           }
@@ -2998,9 +3040,10 @@ export default function TablePage() {
             </div>
           }
           hand={<div className="sq-hand-row">{hand}</div>}
+          board={squareScores.board}
           scores={
             <div className="sq-plates">
-              <ScoreStrip plates={plates.map((p) => ({ ...p, hasDealer: false }))} />
+              <ScoreStrip plates={squareScores.plates} />
             </div>
           }
           surface={appearance.surface}
@@ -3065,15 +3108,22 @@ export default function TablePage() {
       : null;
     const cribFanned = !pegWin && board.crib ? sortHand(board.crib) : null;
     const faceDownLeft = (inRun: number) => (pegWin ? Math.max(sizes.kept - inRun, 0) : sizes.kept);
+    // The board: the winner's front peg in the game hole (121+ is the game
+    // hole).
+    const squareScores = squareBoardFor(finalBoard.players);
     return (
       <>
         <SquareTableShell
-          showBoard={false}
           header={
             <SquareTableHeader
               code={code}
               handNo={null}
-              opponent={{ name: oppName, avatarUrl: squareOpponent.avatar_url, saidGo: false }}
+              opponent={{
+                name: oppName,
+                avatarUrl: squareOpponent.avatar_url,
+                saidGo: false,
+                laneColor: squareScores.laneColorOf(squareOpponent.user_id),
+              }}
               right={headerRight}
             />
           }
@@ -3151,9 +3201,10 @@ export default function TablePage() {
               </HandRow>
             </div>
           }
+          board={squareScores.board}
           scores={
             <div className="sq-plates">
-              <ScoreStrip plates={plates.map((p) => ({ ...p, hasDealer: false }))} />
+              <ScoreStrip plates={squareScores.plates} />
             </div>
           }
           surface={appearance.surface}

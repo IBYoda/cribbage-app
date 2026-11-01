@@ -14,8 +14,8 @@ import type { ScreenSide } from "@/lib/tableLayout";
 // across player's avatar and name in its centre; the across player's hand,
 // whole card backs overlapped; the middle (played cards, count and pill);
 // the pile row (crib, Sort, deck -- only when I deal); my hand; the board
-// strip; the score plates. No dealer "D" anywhere: the dealer is shown only
-// by where the crib and the deck are.
+// strip (CribbageBoard); the score plates. No dealer "D" anywhere: the
+// dealer is shown only by where the crib and the deck are.
 
 export function SquareTableShell({
   header,
@@ -23,26 +23,26 @@ export function SquareTableShell({
   middle,
   piles,
   hand,
+  board,
   scores,
   surface = "green-felt",
   back = "classic",
-  showBoard = true,
 }: {
   header: ReactNode;
   opponent: ReactNode;
   middle: ReactNode;
   piles: ReactNode;
   hand: ReactNode;
+  // The board strip (CribbageBoard), full width, --sq-board-h tall. Its
+  // space is kept even without one, so nothing above it moves.
+  board?: ReactNode;
   scores: ReactNode;
   surface?: TableSurface;
   back?: CardBack;
-  // The board strip's space. Off: zero height (--sq-board-h), and the middle
-  // takes the room -- the live table, until the board slice turns it on.
-  showBoard?: boolean;
 }) {
   return (
     <main
-      className={`table-shell table-shell--square mx-auto w-full max-w-4xl ${showBoard ? "" : "table-shell--no-board"}`}
+      className="table-shell table-shell--square mx-auto w-full max-w-4xl"
       data-surface={surface}
       data-scheme={surfaceIsDark(surface) ? "dark" : undefined}
       data-back={back}
@@ -52,8 +52,10 @@ export function SquareTableShell({
       <div className="sq-middle">{middle}</div>
       <div className="min-w-0">{piles}</div>
       <div className="min-w-0">{hand}</div>
-      {/* THE BOARD STRIP: its space only, for now (PRD item 31, step 1b). */}
-      <div className="sq-board" data-sq="board" aria-hidden="true" />
+      {/* THE BOARD STRIP (PRD item 31, step 1b). */}
+      <div className="sq-board" data-sq="board">
+        {board}
+      </div>
       <div className="min-w-0">{scores}</div>
     </main>
   );
@@ -69,7 +71,8 @@ export function SquareTableHeader({
 }: {
   code: string;
   handNo: number | null;
-  opponent: { name: string; avatarUrl: string | null; saidGo: boolean } | null;
+  // laneColor: their board lane's colour, as their avatar's ring.
+  opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string } | null;
   right: ReactNode;
 }) {
   return (
@@ -82,7 +85,7 @@ export function SquareTableHeader({
         {opponent && (
           <>
             <span data-sq="opp-avatar">
-              <Avatar name={opponent.name} url={opponent.avatarUrl} size="sm" tone="table" />
+              <Avatar name={opponent.name} url={opponent.avatarUrl} size="sm" tone="table" ringColor={opponent.laneColor} />
             </span>
             <span className="max-w-[9rem] truncate text-sm font-medium" data-sq="opp-name">
               {opponent.name}

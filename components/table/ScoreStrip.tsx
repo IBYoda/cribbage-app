@@ -29,6 +29,9 @@ export type ScorePlate = {
   // Who the flash names. Unset: the plate's members (one player). A team
   // plate sets it to the partner who scored -- only their row's last_* moved.
   flashName?: string;
+  // The square table only: the colour of this player's lane on the board
+  // (CribbageBoard), as the ring round their avatar. Unset: the usual ring.
+  laneColor?: string;
 };
 
 // The scores, directly under my hand: a row of equal-width plates, 48px tall.
@@ -49,7 +52,7 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
           >
             <div className="flex shrink-0 -space-x-2">
               {plate.members.map((m) => (
-                <Avatar key={m.userId} name={m.name} url={m.avatarUrl} size="sm" tone="table" />
+                <Avatar key={m.userId} name={m.name} url={m.avatarUrl} size="sm" tone="table" ringColor={plate.laneColor} />
               ))}
             </div>
             <div className="flex min-w-0 flex-1 flex-col leading-tight">

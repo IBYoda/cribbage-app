@@ -26,6 +26,15 @@ import {
   type PlateRow,
 } from "../lib/phase3";
 import { playedBySeat, seatGeometry, seatsOnScreen } from "../lib/tableLayout";
+import {
+  boardGeometry,
+  boardHoles,
+  clampScore,
+  holePosition,
+  holeSpot,
+  laneOf,
+  nextPegs,
+} from "../lib/boardLayout";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -473,6 +482,100 @@ check("square table: plays arriving out of order are shown in play order; 4 play
   const plays = [sq(3, 0, "s3", "3C"), sq(1, 0, "s1", "AC"), sq(4, 0, "s4", "4C"), sq(2, 0, "s2", "2C"), sq(5, 0, "s1", "5C")];
   const r = playedBySeat({ plays, playSegment: 0, handOver: false, players: P4, myId: "s1" });
   deepStrictEqual(seatCards(r), { bottom: ["AC", "5C"], left: ["2C"], top: ["3C"], right: ["4C"] });
+});
+
+// THE CRIBBAGE BOARD (lib/boardLayout.ts).
+check("board: scores clamp to 0 .. 121", () => {
+  deepStrictEqual([-5, 0, 1, 60, 61, 120, 121, 122, 400].map(clampScore), [0, 0, 1, 60, 61, 120, 121, 121, 121]);
+  strictEqual(clampScore(Number.NaN), 0);
+});
+check("board: start, out row 1-60 left to right, back row 61-120 right to left, game hole", () => {
+  deepStrictEqual(holeSpot(0), { kind: "start" });
+  deepStrictEqual(holeSpot(-3), { kind: "start" });
+  deepStrictEqual(holeSpot(1), { kind: "hole", row: "out", column: 0 });
+  deepStrictEqual(holeSpot(60), { kind: "hole", row: "out", column: 59 });
+  deepStrictEqual(holeSpot(61), { kind: "hole", row: "back", column: 59 });
+  deepStrictEqual(holeSpot(120), { kind: "hole", row: "back", column: 0 });
+  deepStrictEqual(holeSpot(121), { kind: "game" });
+  deepStrictEqual(holeSpot(130), { kind: "game" });
+});
+check("board: hole positions -- the turn at 60/61, the home end at 120/121, lanes stacked", () => {
+  const g = boardGeometry(375, 80);
+  const at = (lane: number, s: number, slot: 0 | 1 = 0) => holePosition(g, lane, s, slot);
+  // 60 and 61 face each other at the far end; 1 and 120 at the home end.
+  strictEqual(at(0, 60).x, at(0, 61).x);
+  strictEqual(at(0, 1).x, at(0, 120).x);
+  strictEqual(at(0, 60).y, g.rows[0].out);
+  strictEqual(at(0, 61).y, g.rows[0].back);
+  // Out runs left to right, back right to left.
+  strictEqual(at(0, 2).x > at(0, 1).x, true);
+  strictEqual(at(0, 62).x < at(0, 61).x, true);
+  // The game hole is beside 120, under the two start holes; the start holes
+  // are left of hole 1, one per peg.
+  strictEqual(at(0, 121).y, g.rows[0].back);
+  strictEqual(at(0, 121).x < at(0, 120).x, true);
+  strictEqual(at(0, 0, 0).x < at(0, 0, 1).x, true);
+  strictEqual(at(0, 0, 1).x < at(0, 1).x, true);
+  deepStrictEqual(at(0, 200), at(0, 121));
+  deepStrictEqual(at(0, -1), at(0, 0));
+  // Lane 1 is below lane 0, lane 2 below lane 1, same columns.
+  strictEqual(at(1, 1).y > at(0, 61).y, true);
+  strictEqual(at(2, 1).y > at(1, 61).y, true);
+  strictEqual(at(2, 37).x, at(0, 37).x);
+});
+check("board: groups of five, a wider gap between groups", () => {
+  const g = boardGeometry(375, 80);
+  const x = (s: number) => holePosition(g, 0, s).x;
+  const inGroup = x(2) - x(1);
+  const across = x(6) - x(5);
+  strictEqual(Math.abs(x(5) - x(4) - inGroup) < 1e-9, true);
+  strictEqual(across > inGroup, true);
+  strictEqual(Math.abs(across - (inGroup + g.groupGap)) < 1e-9, true);
+});
+check("board: 123 holes a lane, every one inside the board, none touching", () => {
+  for (const [w, h] of [[375, 66], [375, 80], [390, 84], [502, 108], [896, 108]]) {
+    const g = boardGeometry(w, h);
+    const holes = boardHoles(g);
+    strictEqual(holes.length, 3 * 123);
+    for (const hole of holes) {
+      strictEqual(hole.x - g.pegR >= 0 && hole.x + g.pegR <= w, true, `x in ${w}x${h}`);
+      strictEqual(hole.y - g.pegR >= 0 && hole.y + g.pegR <= h, true, `y in ${w}x${h}`);
+    }
+    strictEqual(g.holeR * 2 < g.pitch, true);
+    strictEqual(g.pitch >= 5.4, true, `pitch ${g.pitch} at ${w}`);
+  }
+});
+check("board: lanes by seat order, never 'me first'", () => {
+  strictEqual(laneOf(["a", "b"], "a"), 0);
+  strictEqual(laneOf(["a", "b"], "b"), 1);
+  strictEqual(laneOf(["a", "b", "c"], "c"), 2);
+  strictEqual(laneOf(["a", "b", "c", "d"], "d"), null);
+  strictEqual(laneOf(["a", "b"], "x"), null);
+});
+check("board: pegs -- front on the score, back on the score before the last award, leapfrogging", () => {
+  // A new game: both on the start holes.
+  deepStrictEqual(nextPegs(null, 0, null), [0, 0]);
+  // First award (+2): one peg moves, the other stays on the start.
+  const p1 = nextPegs([0, 0], 2, 2);
+  deepStrictEqual(p1, [0, 2]);
+  // +3: the back peg jumps over the front one.
+  const p2 = nextPegs(p1, 5, 3);
+  deepStrictEqual(p2, [5, 2]);
+  // A 0 count (hand: nothing): nothing moves.
+  deepStrictEqual(nextPegs(p2, 5, 0), p2);
+  // Settled: the same scores again give the same pegs.
+  deepStrictEqual(nextPegs(p2, 5, 3), p2);
+  // A reload: the back peg from the last award alone.
+  deepStrictEqual(nextPegs(null, 19, 2), [17, 19]);
+  // A reload after a 0 award: the back peg can't be known -- the start hole.
+  deepStrictEqual(nextPegs(null, 19, 0), [0, 19]);
+  // The win: the front in the game hole, however far past 121 (the peg on
+  // 118 stays, the one on 115 jumps).
+  deepStrictEqual(nextPegs([118, 115], 124, 6), [118, 121]);
+  // A new game after it: both back on the start.
+  deepStrictEqual(nextPegs([121, 118], 0, null), [0, 0]);
+  // Negative or odd data never puts the back peg ahead of the front.
+  deepStrictEqual(nextPegs(null, 10, -4), [0, 10]);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
