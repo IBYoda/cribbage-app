@@ -682,10 +682,20 @@ body {
   row-gap: 0;
   padding-bottom: max(env(safe-area-inset-bottom), 7px);
 }
-/* The header: code | the across player | controls. */
+/* The header: code | the across player | controls. One rule for every square
+   table (2 and 3 players, 4-player Teams, self-scoring):
+     * the controls (Counts, Leave, a self-scoring table's locked button)
+       always keep their full width -- never overlapped or pushed off;
+     * the left keeps at least "Table CODE" (the hand number after it gives
+       way first: see SquareTableHeader);
+     * the across player takes what is left, down to nothing: their name
+       ends in an ellipsis when it runs out of room;
+   and while there is room the two sides stay equal, so the centre is
+   centred. When the controls need more than half of what's left, the
+   centre shifts left a little. */
 .sq-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(min-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
   align-items: center;
   gap: 8px;
   height: 28px;
@@ -698,14 +708,6 @@ body {
   display: flex;
   padding-inline: 5px;
   font-size: 0.875rem;
-}
-/* 4 players: the top player's status word ("Discarded", "Picking…") widens
-   the centre -- and a self-scoring table's locked "Self-Scoring (Muggins)"
-   button widens the controls -- so the controls keep their own width (never
-   overlapped) and the columns stay equal -- the centre centred -- whenever
-   there's room. */
-.sq-header--seat-status {
-  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
 }
 /* The across player's hand. Its piles (when they deal) hang below it, at
    the sides, over the top of the middle -- hence the z-index. */
@@ -796,6 +798,11 @@ body {
   position: relative;
   z-index: 4;
   min-height: 0;
+  /* A word wider than its line -- a long name with no spaces, as in
+     "Waiting for X to discard...", "Counting: X's hand" or "Next dealer:
+     X" -- breaks onto the next line instead of running off the edge.
+     Anything that already fits wraps exactly as before. */
+  overflow-wrap: anywhere;
 }
 /* My pile row keeps its height when it has no piles (the opponent deals),
    so my hand never moves; Sort sits in its middle. */

@@ -65,7 +65,11 @@ export function MugginsWinBar({
           <span className="rounded bg-red-600 px-2 py-0.5 text-white shadow">{error}</span>
         ) : claim === "theirs" ? (
           // A pill, like the error: it sits over the bottom edge of my hand.
-          <span id="muggins-claim-status" className="rounded bg-foreground px-2 py-0.5 text-background shadow">
+          <span
+            id="muggins-claim-status"
+            className="rounded bg-foreground px-2 py-0.5 text-background shadow"
+            title={`${otherName} says they won`}
+          >
             {otherName} says they won
           </span>
         ) : null}
@@ -85,7 +89,9 @@ export function MugginsWinBar({
         >
           {mine ? (
             <>
-              <span className="max-w-full truncate">Waiting for {otherName}…</span>
+              <span className="max-w-full truncate" title={`Waiting for ${otherName}`}>
+                Waiting for {otherName}…
+              </span>
               <span className="text-xs font-normal">(tap to cancel)</span>
             </>
           ) : (

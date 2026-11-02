@@ -36,8 +36,16 @@ export function CountStage({
   return (
     <div className={variant === "n" ? "count-stage count-stage--n" : "count-stage"}>
       <div className="count-stage__text">
-        <p className="text-sm font-medium">{headline}</p>
-        {hint && <p className="text-xs text-zinc-500">{hint}</p>}
+        {/* The full line as a tooltip: where a line ends in an ellipsis (a
+            long name on a narrow table), it can still be read. */}
+        <p className="text-sm font-medium" title={headline}>
+          {headline}
+        </p>
+        {hint && (
+          <p className="text-xs text-zinc-500" title={hint}>
+            {hint}
+          </p>
+        )}
       </div>
 
       {subject.kind !== "none" && (
@@ -61,7 +69,9 @@ export function CountStage({
       {recap.length > 0 && (
         <div className="count-stage__recap text-zinc-500">
           {recap.map((line, i) => (
-            <span key={recapKeys?.[i] ?? line}>{line}</span>
+            <span key={recapKeys?.[i] ?? line} title={line}>
+              {line}
+            </span>
           ))}
         </div>
       )}
