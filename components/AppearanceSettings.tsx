@@ -254,6 +254,7 @@ export function AppearanceSettings() {
               </label>
             ))}
           </div>
+          <p className="text-xs">S and Snake are 3-lane boards: 4-player Solo games use Straight.</p>
         </fieldset>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-1 text-xs font-medium">Colors</legend>

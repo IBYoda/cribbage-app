@@ -62,6 +62,8 @@ export type BoardSkin = {
   panel?: string;
   // Lane 0 (the first seat), 1, 2.
   lanes: readonly [LaneSkin, LaneSkin, LaneSkin];
+  // Lane 3, the fourth: only on the 4-lane board (a 4-player Solo game).
+  fourthLane: LaneSkin;
   // What a player would need to unlock this board (BoardUnlock), for when
   // boards can be locked. Not read anywhere yet: every board is selectable.
   // Absent: always free.
@@ -155,6 +157,7 @@ export const CLASSIC_WOOD: BoardSkin = {
     { color: "#1e63d6", peg: "#1e63d6", paint: "#1f4fa3" },
     { color: "#2e9b4b", peg: "#2e9b4b", paint: "#23733a" },
   ],
+  fourthLane: { color: "#f0b429", peg: "#8a5a00", paint: "#c9940f" },
 };
 
 // Near-black, with outlined lanes in white, gold and ice blue.
@@ -171,6 +174,7 @@ export const MIDNIGHT: BoardSkin = {
     { color: "#e0b443", peg: "#e0b443" },
     { color: "#6cc4ff", peg: "#6cc4ff" },
   ],
+  fourthLane: { color: "#ff7a59", peg: "#ff7a59" },
 };
 
 // Dark coffee wood, bright red, green and blue lanes; silver, black and
@@ -187,6 +191,7 @@ export const ESPRESSO: BoardSkin = {
     { color: "#34b857", peg: "#17110e" },
     { color: "#3578ec", peg: "#f2cf63" },
   ],
+  fourthLane: { color: "#e8a93a", peg: "#5a1f7a" },
 };
 
 // Red mahogany, red, white and blue lanes; silver, black and gold pegs.
@@ -202,6 +207,7 @@ export const MAHOGANY: BoardSkin = {
     { color: "#f4f1ea", peg: "#1b1b1f" },
     { color: "#2c63c8", peg: "#f6d57a" },
   ],
+  fourthLane: { color: "#d9a441", peg: "#0f3d2e" },
 };
 
 // Old walnut in quiet browns: brown, tan and ivory lanes; cream, dark and
@@ -218,6 +224,7 @@ export const HERITAGE: BoardSkin = {
     { color: "#c8a47c", peg: "#2c1d17" },
     { color: "#efe6d4", peg: "#a8622f" },
   ],
+  fourthLane: { color: "#6b7f5e", peg: "#1e2a18" },
 };
 
 // Black brushed steel in a chrome rim; bronze, gold and silver brushed-metal
@@ -239,6 +246,7 @@ export const METALLIC: BoardSkin = {
     { color: "#d9b44c", peg: "#2b3038" },
     { color: "#c9cdd3", peg: "#a85a26" },
   ],
+  fourthLane: { color: "#5a86b0", peg: "#0e2236" },
 };
 
 // In the Profile picker's order.
@@ -255,16 +263,26 @@ export function boardSkinById(id: string | null | undefined): BoardSkin {
 
 // THE LOOK, FROM THE DATA.
 
+// Lane 0 .. 3: the three lanes, then the fourth (the 4-lane board only).
+export function skinLane(skin: BoardSkin, lane: number): LaneSkin {
+  return lane < 3 ? skin.lanes[lane] : skin.fourthLane;
+}
+
+// The first `count` lanes (3, or 4 on the 4-lane board).
+export function laneSkins(skin: BoardSkin, count: number): readonly LaneSkin[] {
+  return count > 3 ? [...skin.lanes, skin.fourthLane] : skin.lanes;
+}
+
 // The ring round a player's avatar: their lane's colour.
 export function laneRingColor(skin: BoardSkin, lane: number): string {
-  return skin.lanes[lane].color;
+  return skinLane(skin, lane).color;
 }
 
 // What a lane's pegs and holes sit on: the panel for an outline lane, the
 // lane colour for a filled or metal one (its base), the lane colour for a
 // painted line too (the peg sits on the line).
 export function laneSurface(skin: BoardSkin, lane: number): string {
-  return skin.laneStyle === "outline" && skin.panel ? skin.panel : skin.lanes[lane].color;
+  return skin.laneStyle === "outline" && skin.panel ? skin.panel : skinLane(skin, lane).color;
 }
 
 // THE S (and SNAKE) BOARD's ribbon for a lane (components/table/
@@ -273,7 +291,7 @@ export function laneSurface(skin: BoardSkin, lane: number): string {
 // on every pattern. A
 // painted lane (Classic Pine) is a thin painted line along its holes.
 export function sRibbonFill(skin: BoardSkin, lane: number): string {
-  return skin.laneStyle === "paint" ? (skin.lanes[lane].paint ?? skin.lanes[lane].color) : laneSurface(skin, lane);
+  return skin.laneStyle === "paint" ? (skinLane(skin, lane).paint ?? skinLane(skin, lane).color) : laneSurface(skin, lane);
 }
 
 // The S board's score plates (on the middle lane): a white oval with dark
@@ -318,7 +336,7 @@ export const LANE_DISTANCE_MIN = 20;
 
 // A lane's peg against what it sits on (laneSurface).
 export function pegContrast(skin: BoardSkin, lane: number): number {
-  return contrastRatio(skin.lanes[lane].peg, laneSurface(skin, lane));
+  return contrastRatio(skinLane(skin, lane).peg, laneSurface(skin, lane));
 }
 
 // Classic Pine's pegs are its lane colours, on lines of the same colour: the
@@ -330,17 +348,22 @@ export function pegContrastExempt(skin: BoardSkin): boolean {
 // A lane's holes against its colour. Exempt: outline lanes (each hole has a
 // lane-coloured edge) and painted lanes (the holes are on the wood).
 export function holeContrast(skin: BoardSkin, lane: number): number {
-  return contrastRatio(skin.hole.fill, skin.lanes[lane].color);
+  return contrastRatio(skin.hole.fill, skinLane(skin, lane).color);
 }
 
 export function holeContrastExempt(skin: BoardSkin): boolean {
   return skin.laneStyle === "outline" || skin.laneStyle === "paint";
 }
 
-// The closest two of a skin's three lane colours (colorDistance).
-export function laneSeparation(skin: BoardSkin): number {
-  const [a, b, c] = skin.lanes.map((l) => l.color);
-  return Math.min(colorDistance(a, b), colorDistance(a, c), colorDistance(b, c));
+// The closest two of a skin's three lane colours (colorDistance) -- or of
+// all four, with lanes 4 (the 4-lane board).
+export function laneSeparation(skin: BoardSkin, lanes = 3): number {
+  const colors = laneSkins(skin, lanes).map((l) => l.color);
+  let min = Infinity;
+  for (let i = 0; i < colors.length; i++) {
+    for (let j = i + 1; j < colors.length; j++) min = Math.min(min, colorDistance(colors[i], colors[j]));
+  }
+  return min;
 }
 
 // THE SELF-SCORING BANNER's text (it sits in the board strip, in the board's
