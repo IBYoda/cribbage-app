@@ -4,6 +4,8 @@ import { useState } from "react";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { setDealAnimationOn, useDealAnimationOn } from "@/components/table/DealAnimation";
+import { CribbageBoard, setBoardSkin, useBoardSkin, type BoardPlayer } from "@/components/table/CribbageBoard";
+import { BOARD_SKIN_LIST } from "@/lib/boardSkins";
 import {
   CARD_BACKS,
   TABLE_SURFACES,
@@ -21,9 +23,19 @@ import {
 // (.surface-swatch shares each surface's rule in app/globals.css, and the
 // card backs come from data-back exactly as on the table), so what you pick
 // here is what the table shows. All six back images load on this page only.
+
+// The board previews: three players' pegs, one in each lane.
+const PREVIEW_SIZE = { w: 375, h: 67 };
+const PREVIEW_PLAYERS: BoardPlayer[] = [
+  { userId: "a", name: "First seat", lane: 0, score: 38, lastPoints: 4 },
+  { userId: "b", name: "Second seat", lane: 1, score: 27, lastPoints: 6 },
+  { userId: "c", name: "Third seat", lane: 2, score: 15, lastPoints: 2 },
+];
+
 export function AppearanceSettings() {
   const appearance = useAppearance();
   const dealAnimationOn = useDealAnimationOn();
+  const boardSkin = useBoardSkin();
   const saved: Appearance = {
     surface: appearance.surface,
     back: appearance.back,
@@ -187,6 +199,39 @@ export function AppearanceSettings() {
         <p id="deal-animation-hint" className="text-sm">
           Cards fly from the dealer&apos;s deck at the start of each hand, and discards fly to the crib. Saved on
           this device only, at once.
+        </p>
+      </fieldset>
+
+      {/* BOARD: the cribbage board on the square table, for this player's
+          own screen -- this device only (localStorage), so it saves at once,
+          like Card animations. A list, one board a row: each preview is the
+          real board, drawn at a phone's strip size (375 x 67) and scaled to
+          the row's width, so its pegs and lanes read as on the table. */}
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-medium">Board</legend>
+        <div className="flex flex-col gap-3">
+          {BOARD_SKIN_LIST.map((skin) => (
+            <label key={skin.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
+              <input
+                type="radio"
+                name="board-skin"
+                value={skin.id}
+                checked={boardSkin.id === skin.id}
+                onChange={() => setBoardSkin(skin.id)}
+                className="peer sr-only"
+              />
+              <span
+                className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
+                aria-hidden="true"
+              >
+                <CribbageBoard skin={skin} players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} />
+              </span>
+              <span className="text-xs leading-tight peer-checked:font-semibold">{skin.name}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-sm">
+          The board on your table -- only you see it. Saved on this device only, at once.
         </p>
       </fieldset>
 

@@ -31,6 +31,10 @@ const ROW_PITCHES = 1 + (1 + GROUP_GAP) + (HOLES_PER_ROW - 1) + ((HOLES_PER_ROW 
 // Vertical spacing: the gap between two lanes, in row gaps (the space between
 // a lane's two rows).
 export const LANE_GAP = 1.9;
+// The smallest peg radius, in px: a 9.8px peg (outline included), readable
+// on a phone. It was 5.7px at 375px wide and 7.7px at 502px before this
+// floor (pitch * 0.52).
+export const PEG_MIN_R = 4.9;
 
 export type Point = { x: number; y: number };
 
@@ -84,6 +88,15 @@ export function boardGeometry(width: number, height: number): BoardGeometry {
     return { out, back: out + rowGap };
   });
   const tight = Math.min(pitch, rowGap);
+  // The peg: bigger than a hole, and never under PEG_MIN_R on a phone (it
+  // may cover the neighbouring holes; it sits on top of the board). At most
+  // what keeps it clear of the next lane's pegs and inside the board.
+  const pegR = Math.min(
+    Math.max(Math.min(pitch * 0.6, rowGap * 0.55), PEG_MIN_R),
+    rowGap * 0.85,
+    rim + padY - 0.5,
+    rim + padX - 0.5
+  );
   return {
     width,
     height,
@@ -96,7 +109,7 @@ export function boardGeometry(width: number, height: number): BoardGeometry {
     columnX,
     rows,
     holeR: tight * 0.3,
-    pegR: Math.min(pitch * 0.52, rowGap * 0.45),
+    pegR,
   };
 }
 

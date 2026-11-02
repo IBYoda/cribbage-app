@@ -46,7 +46,28 @@ import {
   holeSpot,
   laneOf,
   nextPegs,
+  PEG_MIN_R,
 } from "../lib/boardLayout";
+import {
+  BOARD_SKIN_LIST,
+  BOARD_SETTING_KEY,
+  CLASSIC_WOOD,
+  HOLE_CONTRAST_MIN,
+  LANE_DISTANCE_MIN,
+  PEG_CONTRAST_MIN,
+  bannerTextColor,
+  boardSkinById,
+  contrastRatio,
+  holeContrast,
+  holeContrastExempt,
+  isHexColor,
+  laneRingColor,
+  laneSeparation,
+  pegContrast,
+  pegContrastExempt,
+  readBoardSkinId,
+  writeBoardSkinId,
+} from "../lib/boardSkins";
 import {
   DEAL_CARD_MS,
   DEAL_CARD_MS_FOUR,
@@ -859,6 +880,153 @@ check("board: 123 holes a lane, every one inside the board, none touching", () =
     }
     strictEqual(g.holeR * 2 < g.pitch, true);
     strictEqual(g.pitch >= 5.4, true, `pitch ${g.pitch} at ${w}`);
+  }
+});
+check("board: pegs at least 9.8px on a phone, bigger than a hole, inside the board", () => {
+  // 343 wide: a 375px phone less a 16px gutter each side (the strip itself
+  // is the full 375 today).
+  for (const [w, h] of [[343, 67], [375, 67], [390, 84], [502, 108], [896, 108]]) {
+    const g = boardGeometry(w, h);
+    strictEqual(g.pegR >= PEG_MIN_R && g.pegR * 2 >= 9.8, true, `peg ${g.pegR * 2} at ${w}x${h}`);
+    strictEqual(g.pegR > g.holeR * 1.5, true);
+    for (const row of g.rows) strictEqual(row.out - g.pegR >= 0 && row.back + g.pegR <= h, true, `rows at ${w}x${h}`);
+    // Clear of the next lane's pegs.
+    for (let lane = 1; lane < g.rows.length; lane++) {
+      strictEqual(g.rows[lane].out - g.rows[lane - 1].back >= 2 * g.pegR, true, `lanes at ${w}x${h}`);
+    }
+  }
+});
+
+// THE BOARD SKINS (lib/boardSkins.ts).
+const NEW_SKINS = BOARD_SKIN_LIST.filter((s) => s.id !== CLASSIC_WOOD.id);
+check("board skins: six, unique ids, 3 lanes and 3 pegs each, every colour valid hex", () => {
+  strictEqual(BOARD_SKIN_LIST.length, 6);
+  deepStrictEqual(
+    BOARD_SKIN_LIST.map((s) => s.id),
+    ["classic-wood", "midnight", "espresso", "mahogany", "heritage", "metallic"]
+  );
+  strictEqual(new Set(BOARD_SKIN_LIST.map((s) => s.id)).size, BOARD_SKIN_LIST.length);
+  strictEqual(CLASSIC_WOOD.name, "Classic Pine");
+  for (const s of BOARD_SKIN_LIST) {
+    strictEqual(s.lanes.length, 3, s.id);
+    const colors = [
+      ...s.lanes.flatMap((l) => [l.color, l.peg, ...(l.paint ? [l.paint] : [])]),
+      s.wood.top,
+      s.wood.bottom,
+      ...(s.wood.grain ? [s.wood.grain] : []),
+      s.rim.edge,
+      s.rim.highlight,
+      ...(s.rim.chrome ?? []),
+      s.hole.fill,
+      ...(s.hole.lip ? [s.hole.lip] : []),
+      ...(s.panel ? [s.panel] : []),
+    ];
+    for (const c of colors) strictEqual(isHexColor(c), true, `${s.id}: ${c}`);
+    strictEqual(s.lanes.filter((l) => isHexColor(l.peg)).length, 3, s.id);
+    // An outline board needs its panel colour.
+    if (s.laneStyle === "outline") strictEqual(s.panel !== undefined, true, s.id);
+  }
+});
+check("board skins: the exact colours asked for", () => {
+  const lanes = (id: string) => boardSkinById(id).lanes.map((l) => l.color);
+  const pegs = (id: string) => boardSkinById(id).lanes.map((l) => l.peg);
+  deepStrictEqual(lanes("midnight"), ["#f2f2f2", "#e0b443", "#6cc4ff"]);
+  deepStrictEqual(pegs("midnight"), ["#ffffff", "#e0b443", "#6cc4ff"]);
+  deepStrictEqual(lanes("espresso"), ["#e5413b", "#34b857", "#3578ec"]);
+  deepStrictEqual(pegs("espresso"), ["#e9edf2", "#17110e", "#f2cf63"]);
+  deepStrictEqual(lanes("mahogany"), ["#d8302f", "#f4f1ea", "#2c63c8"]);
+  deepStrictEqual(pegs("mahogany"), ["#d9dde2", "#1b1b1f", "#f6d57a"]);
+  deepStrictEqual(lanes("heritage"), ["#8c5a44", "#c8a47c", "#efe6d4"]);
+  deepStrictEqual(pegs("heritage"), ["#f3e3c3", "#2c1d17", "#a8622f"]);
+  deepStrictEqual(lanes("metallic"), ["#b9733a", "#d9b44c", "#c9cdd3"]);
+  deepStrictEqual(pegs("metallic"), ["#f5f7fa", "#2b3038", "#a85a26"]);
+  // Classic Pine: today's colours; its rings stay today's peg colours.
+  deepStrictEqual(pegs("classic-wood"), ["#d32f2f", "#1e63d6", "#2e9b4b"]);
+  deepStrictEqual([0, 1, 2].map((i) => laneRingColor(CLASSIC_WOOD, i)), ["#d32f2f", "#1e63d6", "#2e9b4b"]);
+});
+check("board skins: every peg reads on its lane (2.5:1), Classic Pine the one exception", () => {
+  for (const s of BOARD_SKIN_LIST) {
+    strictEqual(pegContrastExempt(s), s.id === CLASSIC_WOOD.id, s.id);
+    if (pegContrastExempt(s)) continue;
+    for (const lane of [0, 1, 2]) {
+      const ratio = pegContrast(s, lane);
+      strictEqual(ratio >= PEG_CONTRAST_MIN, true, `${s.id} lane ${lane}: ${ratio.toFixed(2)}`);
+    }
+  }
+  // The outline board measures against its dark panel, not the outline.
+  const midnight = boardSkinById("midnight");
+  strictEqual(pegContrast(midnight, 0), contrastRatio("#ffffff", "#1d1d23"));
+});
+check("board skins: holes read on their lane (2.9:1); outlined lanes exempt", () => {
+  for (const s of NEW_SKINS) {
+    strictEqual(holeContrastExempt(s), s.laneStyle === "outline", s.id);
+    if (holeContrastExempt(s)) continue;
+    for (const lane of [0, 1, 2]) {
+      const ratio = holeContrast(s, lane);
+      strictEqual(ratio >= HOLE_CONTRAST_MIN, true, `${s.id} lane ${lane}: ${ratio.toFixed(2)}`);
+    }
+  }
+});
+check("board skins: a board's three lane colours are clearly different", () => {
+  for (const s of BOARD_SKIN_LIST) {
+    const d = laneSeparation(s);
+    strictEqual(d >= LANE_DISTANCE_MIN, true, `${s.id}: ${d.toFixed(1)}`);
+  }
+});
+check("board skins: the self-scoring banner's text reads on every new board", () => {
+  for (const s of NEW_SKINS) {
+    const text = bannerTextColor(s);
+    const worst = Math.min(contrastRatio(text, s.wood.top), contrastRatio(text, s.wood.bottom));
+    strictEqual(worst >= 4.5, true, `${s.id}: ${worst.toFixed(2)}`);
+  }
+  // Classic Pine keeps its rim-coloured text.
+  strictEqual(bannerTextColor(CLASSIC_WOOD), CLASSIC_WOOD.rim.edge);
+});
+check("board setting: unknown or missing falls back to Classic Pine, storage never throws", () => {
+  strictEqual(boardSkinById(null).id, "classic-wood");
+  strictEqual(boardSkinById(undefined).id, "classic-wood");
+  strictEqual(boardSkinById("").id, "classic-wood");
+  strictEqual(boardSkinById("walnut").id, "classic-wood");
+  strictEqual(boardSkinById("toString").id, "classic-wood");
+  strictEqual(boardSkinById("metallic").id, "metallic");
+  // No localStorage at all (as here, in Node): reads Classic Pine, writes
+  // quietly do nothing.
+  strictEqual(readBoardSkinId(), "classic-wood");
+  writeBoardSkinId("midnight");
+  // A working store.
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  try {
+    strictEqual(readBoardSkinId(), "classic-wood");
+    writeBoardSkinId("espresso");
+    strictEqual(store.get(BOARD_SETTING_KEY), "espresso");
+    strictEqual(readBoardSkinId(), "espresso");
+    store.set(BOARD_SETTING_KEY, "no-such-board");
+    strictEqual(readBoardSkinId(), "classic-wood");
+    // Back to Classic Pine clears the key.
+    writeBoardSkinId("classic-wood");
+    strictEqual(store.has(BOARD_SETTING_KEY), false);
+    // A store that throws on every call.
+    g.localStorage = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    strictEqual(readBoardSkinId(), "classic-wood");
+    writeBoardSkinId("heritage");
+  } finally {
+    delete g.localStorage;
   }
 });
 check("board: lanes by seat order, never 'me first'", () => {

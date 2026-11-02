@@ -47,8 +47,8 @@ import {
   type SeatPosition,
   type TableScreen,
 } from "@/lib/tableLayout";
-import { CribbageBoard, SelfScoringBanner } from "@/components/table/CribbageBoard";
-import { DEFAULT_BOARD_SKIN } from "@/lib/boardSkins";
+import { CribbageBoard, SelfScoringBanner, useBoardSkin } from "@/components/table/CribbageBoard";
+import { laneRingColor } from "@/lib/boardSkins";
 import {
   ComputerDiscardClock,
   CountingStarter,
@@ -569,6 +569,9 @@ export default function TablePage() {
   // and the system's reduced motion.
   const dealAnimationOn = useDealAnimationOn();
   const reducedMotion = usePrefersReducedMotion();
+  // The board THIS player picked in Profile (this device only): the square
+  // table's board strip, lane rings and self-scoring banner.
+  const boardSkin = useBoardSkin();
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -3166,7 +3169,7 @@ export default function TablePage() {
   // each team's pegs on its team score -- from its plate (buildPlates: the
   // team total, and the newest award, the scorer's, for the back peg).
   const squareBoardFor = (seatOrder: string[], teams = false) => {
-    const skin = DEFAULT_BOARD_SKIN;
+    const skin = boardSkin;
     // A self-scoring (Muggins) table (2 players only): no board, pegs or lane
     // rings -- the self-scoring banner in the board strip's slot.
     if (isMuggins) {
@@ -3180,7 +3183,7 @@ export default function TablePage() {
     const laneOfPlayer = (userId: string) => laneForPlayer({ players: seatOrder, userId, teams });
     const laneColorOf = (userId: string) => {
       const lane = laneOfPlayer(userId);
-      return lane === null ? undefined : skin.lanes[lane].peg;
+      return lane === null ? undefined : laneRingColor(skin, lane);
     };
     const boardPlayers = teams
       ? plates.flatMap((p) => {
