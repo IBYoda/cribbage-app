@@ -7,7 +7,10 @@
 // other players. Pure, no React; tested by scripts/test-phase3.ts.
 //
 // All our own art: the board is drawn in code from these colours (SVG
-// gradients and patterns), never from an image.
+// gradients and patterns), never from an image. Every skin works on both
+// patterns (Straight and S: lib/boardLayout.ts).
+
+import type { BoardPattern } from "@/lib/boardLayout";
 
 export type LaneSkin = {
   // The lane's colour: its panel (or outline, or painted line) and the
@@ -264,6 +267,31 @@ export function laneSurface(skin: BoardSkin, lane: number): string {
   return skin.laneStyle === "outline" && skin.panel ? skin.panel : skin.lanes[lane].color;
 }
 
+// THE S BOARD's ribbon for a lane (components/table/CribbageBoard.tsx draws
+// it with this): what its pegs and holes sit on -- the same surface as the
+// straight board's lane, so the contrast floors hold on both patterns. A
+// painted lane (Classic Pine) is a thin painted line along its holes.
+export function sRibbonFill(skin: BoardSkin, lane: number): string {
+  return skin.laneStyle === "paint" ? (skin.lanes[lane].paint ?? skin.lanes[lane].color) : laneSurface(skin, lane);
+}
+
+// The S board's score plates (on the middle lane): a white oval with dark
+// numbers, or a dark one with light numbers on the outline board (Midnight).
+// Where the oval is too close in colour to its ribbon to show -- white on
+// Mahogany's white lane, dark on Midnight's dark panel -- it gets a thin edge:
+// the lane's colour on the outline board, else a darker shade of the ribbon.
+export function sPlateColors(skin: BoardSkin): { fill: string; text: string; edge: string | null } {
+  const plate = skin.laneStyle === "outline" ? { fill: "#2a2a32", text: "#f2f2f2" } : { fill: "#f5f1e6", text: "#2a1c12" };
+  const ribbon = sRibbonFill(skin, 1);
+  const edge =
+    contrastRatio(plate.fill, ribbon) >= 1.5
+      ? null
+      : skin.laneStyle === "outline"
+        ? skin.lanes[1].color
+        : darken(ribbon, 0.5);
+  return { ...plate, edge };
+}
+
 // A peg's round body: a radial gradient from a highlight (at 36% / 30% of
 // the peg) through its colour to a dark edge.
 export function pegShades(peg: string): { light: string; base: string; dark: string } {
@@ -345,5 +373,34 @@ export function writeBoardSkinId(id: string) {
     else localStorage.setItem(BOARD_SETTING_KEY, skin.id);
   } catch {
     // Not saved; the board stays as it was for next time.
+  }
+}
+
+// THE PROFILE SETTING "Pattern": the board's shape (lib/boardLayout.ts),
+// beside its colours -- this device only, guarded the same way. Anything but
+// "s" reads as Straight.
+export const BOARD_PATTERN_KEY = "nobs:board-pattern";
+
+export const DEFAULT_BOARD_PATTERN: BoardPattern = "straight";
+
+export function boardPatternById(id: string | null | undefined): BoardPattern {
+  return id === "s" ? "s" : DEFAULT_BOARD_PATTERN;
+}
+
+export function readBoardPattern(): BoardPattern {
+  try {
+    return boardPatternById(localStorage.getItem(BOARD_PATTERN_KEY));
+  } catch {
+    return DEFAULT_BOARD_PATTERN;
+  }
+}
+
+export function writeBoardPattern(pattern: string) {
+  try {
+    const p = boardPatternById(pattern);
+    if (p === DEFAULT_BOARD_PATTERN) localStorage.removeItem(BOARD_PATTERN_KEY);
+    else localStorage.setItem(BOARD_PATTERN_KEY, p);
+  } catch {
+    // Not saved; the pattern stays as it was for next time.
   }
 }
