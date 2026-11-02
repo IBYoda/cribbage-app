@@ -60,13 +60,13 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
                 {plate.members.length > 1 ? (
                   // A team plate (4-player Teams): my name first, with "(you)"
                   // right after it, then my partner's.
-                  <span className="truncate">
+                  <span className="truncate" title={plate.members.map((m) => m.name).join(" & ")}>
                     {plate.members[0].name}
                     {plate.isMine && <span className="text-zinc-500"> (you)</span>}
                     {plate.members.slice(1).map((m) => ` & ${m.name}`).join("")}
                   </span>
                 ) : (
-                  <span className="truncate">
+                  <span className="truncate" title={plate.members.map((m) => m.name).join(" & ")}>
                     {plate.members.map((m) => m.name).join(" & ")}
                     {plate.isMine && <span className="text-zinc-500"> (you)</span>}
                   </span>

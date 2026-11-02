@@ -91,22 +91,32 @@ export function SquareTableHeader({
   right: ReactNode;
 }) {
   const header = (
-    <header className={opponent?.status || muggins ? "sq-header sq-header--seat-status" : "sq-header"}>
-      <h1 className="min-w-0 truncate font-semibold">
-        Table {code}
-        {handNo != null && <span className="font-normal text-zinc-500"> · Hand {handNo}</span>}
+    <header className="sq-header">
+      {/* "Table CODE" always shows whole (the column's minimum, .sq-header);
+          the hand number takes only the room left over (contain: its own
+          width never counts) and ends in an ellipsis. */}
+      <h1 className="flex min-w-0 font-semibold">
+        <span className="shrink-0 whitespace-nowrap">Table {code}</span>
+        {handNo != null && (
+          <span className="min-w-0 flex-1 truncate font-normal text-zinc-500 [contain:inline-size]">
+            {" "}· Hand {handNo}
+          </span>
+        )}
       </h1>
       <div className="flex min-w-0 items-center gap-2" data-sq="opp-seat">
         {opponent && (
           <>
-            <span data-sq="opp-avatar">
+            <span className="shrink-0" data-sq="opp-avatar">
               <Avatar name={opponent.name} url={opponent.avatarUrl} size="sm" tone="table" ringColor={opponent.laneColor} />
             </span>
-            <span className="min-w-0 max-w-[9rem] truncate text-sm font-medium" data-sq="opp-name">
+            {/* Up to 9rem, then less as the header runs out of room; the
+                full name in the tooltip (and in the text itself, which the
+                ellipsis only hides from view). */}
+            <span className="min-w-0 max-w-[9rem] truncate text-sm font-medium" data-sq="opp-name" title={opponent.name}>
               {opponent.name}
             </span>
             {opponent.saidGo ? (
-              <span className="text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>
+              <span className="shrink-0 text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>
             ) : (
               opponent.status
             )}

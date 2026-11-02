@@ -2789,6 +2789,24 @@ export default function TablePage() {
 
   // THE RESULT and New Game, below the final board's run -- the same in the
   // square view's final board.
+  // Who won, as words (also the banner's tooltip: a 4-player table's banner
+  // ends in an ellipsis when a name runs out of room).
+  const winText = finishedGame
+    ? isPhase3Table
+      ? winHeadline({
+          players: finishedGame.players,
+          winnerId: finishedGame.winner_id,
+          myId: session.user.id,
+          nameOf: (id) => {
+            const m = members.find((x) => x.user_id === id);
+            return m ? displayName(m) : null;
+          },
+          teams: isTeams,
+        })
+      : finishedGame.winner_id === session.user.id
+        ? "You win!"
+        : `${winner ? displayName(winner) : "A player who has left"} wins!`
+    : null;
   const resultStage = (
     <div className="result-stage">
       {/* THE RESULT. Shown once a game has ended by a win and nothing
@@ -2797,21 +2815,8 @@ export default function TablePage() {
           the winner's 121 shows even if its UPDATE lands after this. */}
       {finishedGame && (
         <div className="result-banner flex flex-col items-center gap-1 rounded border-2 border-emerald-600 surface:border-violet-300 px-6 py-3 text-center">
-          <p className="text-lg font-semibold">
-            {isPhase3Table
-              ? winHeadline({
-                  players: finishedGame.players,
-                  winnerId: finishedGame.winner_id,
-                  myId: session.user.id,
-                  nameOf: (id) => {
-                    const m = members.find((x) => x.user_id === id);
-                    return m ? displayName(m) : null;
-                  },
-                  teams: isTeams,
-                })
-              : finishedGame.winner_id === session.user.id
-                ? "You win!"
-                : `${winner ? displayName(winner) : "A player who has left"} wins!`}
+          <p className="text-lg font-semibold" title={winText ?? undefined}>
+            {winText}
             {/* How it ended: the winner's last award IS the winning one,
                 since nothing can score after the game ends. */}
             {/* Not on a Muggins table: it shows no score anywhere. */}
@@ -2836,7 +2841,7 @@ export default function TablePage() {
       <>
         <div className="result-stage__actions">
           {!iAmReadyForNewGame && othersReadyForNewGame.length > 0 && (
-            <p className="text-sm font-medium">
+            <p className="text-sm font-medium" title={othersReadyForNewGame.map(nameOf).join(", ")}>
               {othersReadyForNewGame.map(nameOf).join(", ")}{" "}
               {othersReadyForNewGame.length === 1 ? "is" : "are"} ready
             </p>
@@ -2853,13 +2858,13 @@ export default function TablePage() {
               : "New Game"}
           </button>
           {iAmReadyForNewGame && othersNotReadyForNewGame.length > 0 && (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-zinc-500" title={othersNotReadyForNewGame.map(nameOf).join(", ")}>
               Waiting for {othersNotReadyForNewGame.map(nameOf).join(", ")}…
             </p>
           )}
           {/* 3 and 4 players: who deals the rematch (no cut). */}
           {rematchDealerId && (
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-zinc-500" title={rematchDealerId === session.user.id ? undefined : nameOf(rematchDealerId)}>
               Next dealer: {rematchDealerId === session.user.id ? "you" : nameOf(rematchDealerId)}
             </p>
           )}

@@ -184,7 +184,9 @@ function SeatTag({ seat }: { seat: RingSeat }) {
   return (
     <div className={`sq-ring__tag sq-ring__tag--${seat.position}`} data-sq={`tag-${seat.position}`}>
       <Avatar name={seat.name} url={seat.avatarUrl} size="xs" tone="table" ringColor={seat.laneColor} />
-      <span className="min-w-0 truncate text-sm font-medium">{seat.name}</span>
+      <span className="min-w-0 truncate text-sm font-medium" title={seat.name}>
+        {seat.name}
+      </span>
       {seat.status}
     </div>
   );

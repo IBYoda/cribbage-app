@@ -68,6 +68,7 @@ export function CenterCount({
         <div className="center-count__pill">
           {!ended && (prompt ?? (
             <p
+              title={!handOver && !isMyTurn && currentPlayer ? nameFor(currentPlayer) : undefined}
               className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${
                 isMyTurn
                   ? "bg-green-600 text-white surface:bg-violet-600"
