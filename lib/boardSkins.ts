@@ -7,8 +7,8 @@
 // other players. Pure, no React; tested by scripts/test-phase3.ts.
 //
 // All our own art: the board is drawn in code from these colours (SVG
-// gradients and patterns), never from an image. Every skin works on both
-// patterns (Straight and S: lib/boardLayout.ts).
+// gradients and patterns), never from an image. Every skin works on every
+// pattern (Straight, S and Snake: lib/boardLayout.ts).
 
 import type { BoardPattern } from "@/lib/boardLayout";
 
@@ -267,9 +267,10 @@ export function laneSurface(skin: BoardSkin, lane: number): string {
   return skin.laneStyle === "outline" && skin.panel ? skin.panel : skin.lanes[lane].color;
 }
 
-// THE S BOARD's ribbon for a lane (components/table/CribbageBoard.tsx draws
-// it with this): what its pegs and holes sit on -- the same surface as the
-// straight board's lane, so the contrast floors hold on both patterns. A
+// THE S (and SNAKE) BOARD's ribbon for a lane (components/table/
+// CribbageBoard.tsx draws it with this): what its pegs and holes sit on --
+// the same surface as the straight board's lane, so the contrast floors hold
+// on every pattern. A
 // painted lane (Classic Pine) is a thin painted line along its holes.
 export function sRibbonFill(skin: BoardSkin, lane: number): string {
   return skin.laneStyle === "paint" ? (skin.lanes[lane].paint ?? skin.lanes[lane].color) : laneSurface(skin, lane);
@@ -378,13 +379,13 @@ export function writeBoardSkinId(id: string) {
 
 // THE PROFILE SETTING "Pattern": the board's shape (lib/boardLayout.ts),
 // beside its colours -- this device only, guarded the same way. Anything but
-// "s" reads as Straight.
+// "s" or "snake" reads as Straight.
 export const BOARD_PATTERN_KEY = "nobs:board-pattern";
 
 export const DEFAULT_BOARD_PATTERN: BoardPattern = "straight";
 
 export function boardPatternById(id: string | null | undefined): BoardPattern {
-  return id === "s" ? "s" : DEFAULT_BOARD_PATTERN;
+  return id === "s" || id === "snake" ? id : DEFAULT_BOARD_PATTERN;
 }
 
 export function readBoardPattern(): BoardPattern {

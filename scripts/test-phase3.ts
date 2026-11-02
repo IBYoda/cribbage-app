@@ -48,6 +48,8 @@ import {
   nextPegs,
   PEG_MIN_R,
   S_VARIANTS,
+  TRACK_ASPECT_MAX,
+  trackStretch,
   boardGeometryFor,
   isSBoard,
   pegPosition,
@@ -57,6 +59,7 @@ import {
   sVariantFor,
   sSlidePoints,
   pegSlideFrames,
+  SNAKE_VARIANT,
 } from "../lib/boardLayout";
 import {
   BOARD_SKIN_LIST,
@@ -82,6 +85,7 @@ import {
   readBoardPattern,
   writeBoardPattern,
   sRibbonFill,
+  sPlateColors,
 } from "../lib/boardSkins";
 import {
   DEAL_CARD_MS,
@@ -1214,6 +1218,231 @@ check("S board: a peg's slide follows its lane (round the turns, across the S, b
   const frames = pegSlideFrames(g, 2, 55, 66)!;
   deepStrictEqual(frames[frames.length - 1], sHolePosition(g, 2, 66));
 });
+check("board pattern: the S and the snake as drawn (every hole, plate, line point and a slide, fingerprinted)", () => {
+  // Taken when the S and the snake were stretched to the strip's width
+  // (trackStretch); a change to either board shows here.
+  const fp = (nums: number[]) => {
+    const s = nums.map((n) => n.toFixed(4)).join(",");
+    let x = 0;
+    for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) | 0;
+    return [s.length, x];
+  };
+  const expected: Record<string, [number, number]> = {
+    "375x67": [79725, 1103962872],
+    "390x84": [75769, 1254954566],
+    "502x108": [76175, 1876352292],
+    "896x86": [149772, -347375122],
+  };
+  const expectedSnake: Record<string, [number, number]> = {
+    "375x67": [84813, 1345305158],
+    "390x84": [71037, 592824981],
+    "502x108": [71412, -1917070306],
+    "896x86": [159247, -1042515116],
+  };
+  for (const [key, want] of Object.entries(expectedSnake)) {
+    const [w, h] = key.split("x").map(Number);
+    const g = sBoardGeometry(w, h, SNAKE_VARIANT);
+    const nums = [
+      g.board.x, g.board.y, g.board.width, g.board.height, g.pegR, g.holeR, g.ribbonWidth, g.plateRx, g.plateRy,
+      ...g.lanes.flatMap((l) => [...l.holes, ...l.path].flatMap((p) => [p.x, p.y])),
+      ...g.plates.flatMap((p) => [p.x, p.y, p.angle]),
+    ];
+    deepStrictEqual(fp(nums), want, `snake ${key}`);
+  }
+  deepStrictEqual(fp(sSlidePoints(SNAKE_VARIANT, 1, 30, 52).flatMap((p) => [p.x, p.y])), [2929, -1284831856]);
+  for (const [key, want] of Object.entries(expected)) {
+    const [w, h] = key.split("x").map(Number);
+    const g = sBoardGeometry(w, h);
+    const nums = [
+      g.board.x, g.board.y, g.board.width, g.board.height, g.pegR, g.holeR, g.ribbonWidth, g.plateRx, g.plateRy,
+      ...g.lanes.flatMap((l) => [...l.holes, ...l.path].flatMap((p) => [p.x, p.y])),
+      ...g.plates.flatMap((p) => [p.x, p.y, p.angle]),
+    ];
+    deepStrictEqual(fp(nums), want, key);
+    // The S through the pattern call is the same board.
+    deepStrictEqual(boardGeometryFor("s", w, h), g);
+  }
+  deepStrictEqual(fp(sSlidePoints(S_VARIANTS.sflat, 1, 55, 66).flatMap((p) => [p.x, p.y])), [1668, -548985297]);
+});
+
+check("S and snake: drawn as wide as the straight board in the same strip, lanes unchanged", () => {
+  // The straight board fills the strip (its width); the track boards are
+  // stretched to match (trackStretch), up to TRACK_ASPECT_MAX : 1.
+  for (const [w, h] of [[375, 66.7], [375, 67], [390, 84], [502, 108], [896, 86.4], [896, 86]]) {
+    const straight = boardGeometry(w, h).width;
+    for (const [name, g] of [
+      ["S", sBoardGeometry(w, h)],
+      ["snake", sBoardGeometry(w, h, SNAKE_VARIANT)],
+    ] as const) {
+      strictEqual(Math.abs(g.board.width - straight) <= 1, true, `${name} ${w}x${h}: ${g.board.width.toFixed(1)} vs ${straight}`);
+      // Height sets the scale, so the lane spacing is as before.
+      strictEqual(Math.abs(g.laneGap - (g.variant.LS * h) / g.variant.H) < 1e-6, true);
+      strictEqual(g.board.height <= h + 0.01, true);
+    }
+  }
+  // Never narrower than the unstretched board; capped on a very wide strip
+  // (a landscape phone's, ~21 : 1), where the board is centred.
+  strictEqual(trackStretch(300, 100, 215, 877), 0);
+  const phone = sBoardGeometry(844, 39);
+  strictEqual(Math.abs(phone.board.width / phone.board.height - TRACK_ASPECT_MAX) < 1e-6, true);
+  strictEqual(Math.abs(phone.board.x - (844 - phone.board.width) / 2) < 1e-6, true);
+  // The most-stretched boards still keep their lanes apart, their plates on
+  // the middle lane and clear of the holes, and their pegs on the board.
+  for (const g of [phone, sBoardGeometry(844, 39, SNAKE_VARIANT)]) {
+    const t = sTrack(g.variant, g.stretch);
+    const pts = t.lanes.map((l) => l.points.filter((_, i) => i % 8 === 0));
+    let min = Infinity;
+    for (let a = 0; a < 3; a++) {
+      for (let b = a + 1; b < 3; b++) for (const p of pts[a]) for (const q of pts[b]) min = Math.min(min, Math.hypot(p.x - q.x, p.y - q.y));
+    }
+    strictEqual(min >= g.variant.LS - 0.5, true, `${g.variant.id}: ${min.toFixed(2)}`);
+    const mid = t.lanes[1];
+    for (const p of t.plates) {
+      const da = Math.hypot(p.x - mid.holes[p.label].x, p.y - mid.holes[p.label].y);
+      strictEqual(t.plateRx < da - g.variant.holeR && t.plateRx <= t.plateRy, true);
+    }
+  }
+});
+
+// THE SNAKE BOARD (lib/boardLayout.ts: SNAKE_VARIANT, built like the S).
+check("snake board: the track as specified (LS 17, D, YC, H, three right turns' worth of lanes)", () => {
+  const v = SNAKE_VARIANT;
+  strictEqual(v.LS, 17);
+  strictEqual(Math.abs(v.R - (2 * 17 + 15.8 + 8)) < 1e-9, true);
+  strictEqual(Math.abs(v.H - (3 + v.R + 17 + 7.9 + 14 + v.R + 17 + 7.9 + 14 + 3)) < 1e-9, true);
+  const t = sTrack(v);
+  // It only turns right (a full turn in all), so each lane is 2 pi LS
+  // shorter than the one outside it.
+  strictEqual(Math.abs(t.lanes[0].length - t.lanes[1].length - 2 * Math.PI * 17) < 0.5, true);
+  strictEqual(Math.abs(t.lanes[1].length - t.lanes[2].length - 2 * Math.PI * 17) < 0.5, true);
+  // Starts top left heading east; finishes in the middle band, inside the U.
+  const mid = t.lanes[1];
+  strictEqual(Math.abs(mid.points[0].x - 100) < 1e-9 && mid.points[0].y < mid.points[mid.points.length - 1].y, true);
+  for (const [w, h] of [[502, 108], [375, 67]]) {
+    const g = boardGeometryFor("snake", w, h);
+    strictEqual(isSBoard(g) && g.variant.id === "snake", true);
+  }
+});
+check("snake board: positions 0 .. 121 in every lane, in order along the path", () => {
+  const t = sTrack(SNAKE_VARIANT);
+  for (const lane of t.lanes) {
+    strictEqual(lane.holes.length, 122);
+    for (let s = 1; s < 122; s++) strictEqual(lane.holeAlong[s] > lane.holeAlong[s - 1], true, `${s}`);
+    strictEqual(lane.holeAlong[0] > 0 && lane.holeAlong[121] < lane.length, true);
+    const step = lane.holeAlong[2] - lane.holeAlong[1];
+    strictEqual(lane.holeAlong[6] - lane.holeAlong[5] > step * 1.3, true);
+  }
+});
+check("snake board: holes in a lane at least 4px apart at 375, 390 and 502, every lane", () => {
+  const minPerLane = (w: number, h: number) =>
+    sBoardGeometry(w, h, SNAKE_VARIANT).lanes.map((lane) => {
+      let min = Infinity;
+      for (let i = 0; i < lane.holes.length; i++) {
+        for (let j = i + 1; j < lane.holes.length; j++) {
+          min = Math.min(min, Math.hypot(lane.holes[i].x - lane.holes[j].x, lane.holes[i].y - lane.holes[j].y));
+        }
+      }
+      return min;
+    });
+  for (const [w, h] of [[375, 67], [375, 66.7], [390, 84], [502, 108]]) {
+    minPerLane(w, h).forEach((d, lane) => strictEqual(d >= 4, true, `${w}x${h} lane ${lane}: ${d.toFixed(2)}px`));
+  }
+});
+check("snake board: no two lanes closer than LS - 0.5 anywhere, the whole ribbon", () => {
+  const v = SNAKE_VARIANT;
+  const pts = sTrack(v).lanes.map((l) => l.points.filter((_, i) => i % 4 === 0));
+  let min = Infinity;
+  for (let a = 0; a < 3; a++) {
+    for (let b = a + 1; b < 3; b++) for (const p of pts[a]) for (const q of pts[b]) min = Math.min(min, Math.hypot(p.x - q.x, p.y - q.y));
+  }
+  strictEqual(min >= v.LS - 0.5, true, min.toFixed(2));
+});
+check("snake board: plates on the middle lane, clear of their holes", () => {
+  const v = SNAKE_VARIANT;
+  const t = sTrack(v);
+  strictEqual(t.plates.length, 23);
+  const mid = t.lanes[1];
+  for (const p of t.plates) {
+    strictEqual(Math.min(...mid.points.map((q) => Math.hypot(p.x - q.x, p.y - q.y))) < 0.5, true, `plate ${p.label}`);
+    const da = Math.hypot(p.x - mid.holes[p.label].x, p.y - mid.holes[p.label].y);
+    const db = Math.hypot(p.x - mid.holes[p.label + 1].x, p.y - mid.holes[p.label + 1].y);
+    strictEqual(Math.abs(da - db) < 1, true);
+    strictEqual(t.plateRx < da - v.holeR, true, `plate ${p.label} clear of its holes`);
+  }
+});
+check("snake board: fits the strip whole, pegs at the 9.8px floor and inside the board", () => {
+  for (const [w, h] of [[375, 67], [390, 84], [502, 108], [896, 86]]) {
+    const g = sBoardGeometry(w, h, SNAKE_VARIANT);
+    strictEqual(g.board.x >= -0.01 && g.board.x + g.board.width <= w + 0.01, true);
+    strictEqual(g.board.y >= -0.01 && g.board.y + g.board.height <= h + 0.01, true);
+    strictEqual(g.pegR >= PEG_MIN_R, true);
+    for (const lane of g.lanes) {
+      for (const p of lane.holes) {
+        strictEqual(p.x - g.pegR >= g.board.x && p.x + g.pegR <= g.board.x + g.board.width, true);
+        strictEqual(p.y - g.pegR >= g.board.y && p.y + g.pegR <= g.board.y + g.board.height, true);
+      }
+    }
+    deepStrictEqual(pegPosition(g, 0, 0, 0), pegPosition(g, 0, 0, 1));
+  }
+});
+check("snake board: a peg's slide follows its lane (the big U, the small hairpin, backward), stretched too", () => {
+  const v = SNAKE_VARIANT;
+  const offLane = (points: { x: number; y: number }[], p: { x: number; y: number }) =>
+    Math.min(...points.map((q) => Math.hypot(p.x - q.x, p.y - q.y)));
+  // Unstretched, and as drawn on the 375 and wide landscape strips.
+  for (const stretch of [0, sBoardGeometry(375, 67, v).stretch, sBoardGeometry(896, 86, v).stretch]) {
+  const t = sTrack(v, stretch);
+  // Where each turn is, by position on the middle lane: the big U, then
+  // the small hairpin -- found from this track's band length.
+  const mid = t.lanes[1];
+  const posAt = (d: number) => mid.holeAlong.findIndex((a) => a >= d);
+  const band = 520 + stretch;
+  const topEnd = band;
+  const uEnd = topEnd + Math.PI * v.R;
+  const hairpinStart = uEnd + band;
+  const hairpinEnd = hairpinStart + (Math.PI * v.R) / 2;
+  const throughU = [posAt(topEnd) - 3, posAt(uEnd) + 3];
+  const throughHairpin = [posAt(hairpinStart) - 3, posAt(hairpinEnd) + 3];
+  for (const [from, to] of [throughU, throughHairpin, [0, 29], [throughHairpin[1], throughU[0]], [121, 0]]) {
+    for (const lane of [0, 1, 2]) {
+      const pts = sSlidePoints(v, lane, from, to, stretch);
+      const l = t.lanes[lane];
+      strictEqual(Math.hypot(pts[0].x - l.holes[from].x, pts[0].y - l.holes[from].y) < 1e-6, true);
+      const end = pts[pts.length - 1];
+      strictEqual(Math.hypot(end.x - l.holes[to].x, end.y - l.holes[to].y) < 1e-6, true);
+      for (const f of [1 / 3, 1 / 2, 2 / 3]) {
+        const p = pts[Math.round((pts.length - 1) * f)];
+        const off = offLane(l.points, p);
+        strictEqual(off < 0.5, true, `lane ${lane} ${from}->${to} at ${f.toFixed(2)}: ${off.toFixed(3)}`);
+      }
+      const steps = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
+      strictEqual(Math.max(...steps) <= 2.05, true);
+    }
+  }
+  }
+  // In px on a stretched board: the slide ends on the hole as drawn.
+  const g = sBoardGeometry(375, 67, v);
+  const frames = pegSlideFrames(g, 2, 30, 52)!;
+  deepStrictEqual(frames[frames.length - 1], sHolePosition(g, 2, 52));
+});
+check("snake board: every skin's pegs and holes read on its ribbons; plates show on Mahogany and Midnight", () => {
+  // The same ribbons as the S (sRibbonFill), so the same floors and
+  // exemptions.
+  for (const s of BOARD_SKIN_LIST) {
+    for (const lane of [0, 1, 2]) {
+      const surface = sRibbonFill(s, lane);
+      if (!pegContrastExempt(s)) strictEqual(contrastRatio(s.lanes[lane].peg, surface) >= PEG_CONTRAST_MIN, true, s.id);
+      if (!holeContrastExempt(s)) strictEqual(contrastRatio(s.hole.fill, surface) >= HOLE_CONTRAST_MIN, true, s.id);
+    }
+    // A plate either stands out from the middle ribbon or has an edge that
+    // does.
+    const plate = sPlateColors(s);
+    const ribbon = sRibbonFill(s, 1);
+    strictEqual(contrastRatio(plate.fill, ribbon) >= 1.5 || (!!plate.edge && contrastRatio(plate.edge, ribbon) >= 1.5), true, s.id);
+  }
+  strictEqual(sPlateColors(boardSkinById("mahogany")).edge !== null, true);
+  strictEqual(sPlateColors(boardSkinById("midnight")).edge !== null, true);
+});
 check("board pattern: Straight's slide is unchanged (its own CSS transition, no path)", () => {
   for (const [w, h] of [[375, 67], [502, 108]]) {
     const g = boardGeometryFor("straight", w, h);
@@ -1228,6 +1457,8 @@ check("board pattern setting: unknown or missing is Straight, storage never thro
   strictEqual(boardPatternById(undefined), "straight");
   strictEqual(boardPatternById("spiral"), "straight");
   strictEqual(boardPatternById("S"), "straight");
+  strictEqual(boardPatternById("snake"), "snake");
+  strictEqual(boardPatternById("Snake"), "straight");
   strictEqual(readBoardPattern(), "straight");
   writeBoardPattern("s");
   const store = new Map<string, string>();
