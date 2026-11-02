@@ -4,7 +4,15 @@ import { useState } from "react";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { setDealAnimationOn, useDealAnimationOn } from "@/components/table/DealAnimation";
-import { CribbageBoard, setBoardSkin, useBoardSkin, type BoardPlayer } from "@/components/table/CribbageBoard";
+import {
+  CribbageBoard,
+  setBoardPattern,
+  setBoardSkin,
+  useBoardPattern,
+  useBoardSkin,
+  type BoardPlayer,
+} from "@/components/table/CribbageBoard";
+import type { BoardPattern } from "@/lib/boardLayout";
 import { BOARD_SKIN_LIST } from "@/lib/boardSkins";
 import {
   CARD_BACKS,
@@ -31,11 +39,16 @@ const PREVIEW_PLAYERS: BoardPlayer[] = [
   { userId: "b", name: "Second seat", lane: 1, score: 27, lastPoints: 6 },
   { userId: "c", name: "Third seat", lane: 2, score: 15, lastPoints: 2 },
 ];
+const BOARD_PATTERN_CHOICES: { id: BoardPattern; label: string }[] = [
+  { id: "straight", label: "Straight" },
+  { id: "s", label: "S" },
+];
 
 export function AppearanceSettings() {
   const appearance = useAppearance();
   const dealAnimationOn = useDealAnimationOn();
   const boardSkin = useBoardSkin();
+  const boardPattern = useBoardPattern();
   const saved: Appearance = {
     surface: appearance.surface,
     back: appearance.back,
@@ -204,12 +217,46 @@ export function AppearanceSettings() {
 
       {/* BOARD: the cribbage board on the square table, for this player's
           own screen -- this device only (localStorage), so it saves at once,
-          like Card animations. A list, one board a row: each preview is the
-          real board, drawn at a phone's strip size (375 x 67) and scaled to
-          the row's width, so its pegs and lanes read as on the table. */}
+          like Card animations. Two choices: the PATTERN (the track's shape:
+          Straight or S), previewed in the chosen colours, and the COLORS (the
+          six skins), listed one board a row and previewed in the chosen
+          pattern. Each preview is the real board, drawn at a phone's strip
+          size (375 x 67) and scaled to its box, so its pegs and lanes read as
+          on the table. */}
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-2 text-sm font-medium">Board</legend>
-        <div className="flex flex-col gap-3">
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-xs font-medium">Pattern</legend>
+          <div className="grid grid-cols-2 gap-3">
+            {BOARD_PATTERN_CHOICES.map((choice) => (
+              <label key={choice.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
+                <input
+                  type="radio"
+                  name="board-pattern"
+                  value={choice.id}
+                  checked={boardPattern === choice.id}
+                  onChange={() => setBoardPattern(choice.id)}
+                  className="peer sr-only"
+                />
+                <span
+                  className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
+                  aria-hidden="true"
+                >
+                  <CribbageBoard
+                    skin={boardSkin}
+                    pattern={choice.id}
+                    players={PREVIEW_PLAYERS}
+                    fixedSize={PREVIEW_SIZE}
+                  />
+                </span>
+                <span className="text-xs leading-tight peer-checked:font-semibold">{choice.label}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-xs font-medium">Colors</legend>
+          <div className="flex flex-col gap-3">
           {BOARD_SKIN_LIST.map((skin) => (
             <label key={skin.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
               <input
@@ -224,12 +271,13 @@ export function AppearanceSettings() {
                 className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
                 aria-hidden="true"
               >
-                <CribbageBoard skin={skin} players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} />
+                <CribbageBoard skin={skin} pattern={boardPattern} players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} />
               </span>
               <span className="text-xs leading-tight peer-checked:font-semibold">{skin.name}</span>
             </label>
           ))}
-        </div>
+          </div>
+        </fieldset>
         <p className="text-sm">
           The board on your table -- only you see it. Saved on this device only, at once.
         </p>

@@ -47,7 +47,7 @@ import {
   type SeatPosition,
   type TableScreen,
 } from "@/lib/tableLayout";
-import { CribbageBoard, SelfScoringBanner, useBoardSkin } from "@/components/table/CribbageBoard";
+import { CribbageBoard, SelfScoringBanner, useBoardPattern, useBoardSkin } from "@/components/table/CribbageBoard";
 import { laneRingColor } from "@/lib/boardSkins";
 import {
   ComputerDiscardClock,
@@ -572,6 +572,8 @@ export default function TablePage() {
   // The board THIS player picked in Profile (this device only): the square
   // table's board strip, lane rings and self-scoring banner.
   const boardSkin = useBoardSkin();
+  // ...and its pattern (Straight or S), likewise this device only.
+  const boardPattern = useBoardPattern();
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -3206,7 +3208,7 @@ export default function TablePage() {
         }));
     return {
       laneColorOf,
-      board: <CribbageBoard skin={skin} players={boardPlayers} />,
+      board: <CribbageBoard skin={skin} pattern={boardPattern} players={boardPlayers} />,
       plates: plates.map((p) => ({
         ...p,
         hasDealer: false,

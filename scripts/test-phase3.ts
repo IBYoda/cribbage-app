@@ -47,6 +47,16 @@ import {
   laneOf,
   nextPegs,
   PEG_MIN_R,
+  S_VARIANTS,
+  boardGeometryFor,
+  isSBoard,
+  pegPosition,
+  sBoardGeometry,
+  sHolePosition,
+  sTrack,
+  sVariantFor,
+  sSlidePoints,
+  pegSlideFrames,
 } from "../lib/boardLayout";
 import {
   BOARD_SKIN_LIST,
@@ -67,6 +77,11 @@ import {
   pegContrastExempt,
   readBoardSkinId,
   writeBoardSkinId,
+  BOARD_PATTERN_KEY,
+  boardPatternById,
+  readBoardPattern,
+  writeBoardPattern,
+  sRibbonFill,
 } from "../lib/boardSkins";
 import {
   DEAL_CARD_MS,
@@ -1025,6 +1040,226 @@ check("board setting: unknown or missing falls back to Classic Pine, storage nev
     };
     strictEqual(readBoardSkinId(), "classic-wood");
     writeBoardSkinId("heritage");
+  } finally {
+    delete g.localStorage;
+  }
+});
+// THE S BOARD (lib/boardLayout.ts) and the board's pattern.
+check("board pattern: Straight is unchanged (every hole and size, fingerprinted before the S)", () => {
+  // Taken from the straight board before the S pattern was added: each
+  // size's peg and hole radii, pitch and every hole, to 4 places.
+  const expected: Record<string, [number, number]> = {
+    "375x67": [6132, -1273785418],
+    "390x84": [6135, 1432211088],
+    "502x108": [6221, 1179808240],
+    "896x108": [6252, 2136128248],
+  };
+  for (const [key, [len, hash]] of Object.entries(expected)) {
+    const [w, h] = key.split("x").map(Number);
+    const g = boardGeometry(w, h);
+    const s = [g.pegR, g.holeR, g.pitch, ...boardHoles(g).flatMap((p) => [p.x, p.y])].map((n) => n.toFixed(4)).join(",");
+    let x = 0;
+    for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) | 0;
+    deepStrictEqual([s.length, x], [len, hash], key);
+    // Through the pattern-aware calls too.
+    const any = boardGeometryFor("straight", w, h);
+    strictEqual(isSBoard(any), false);
+    deepStrictEqual(pegPosition(any, 1, 37, 0), holePosition(g, 1, 37, 0));
+  }
+});
+check("S board: positions 0 .. 121 in every lane, in order along the path", () => {
+  for (const v of Object.values(S_VARIANTS)) {
+    const t = sTrack(v);
+    strictEqual(t.lanes.length, 3);
+    for (const lane of t.lanes) {
+      strictEqual(lane.holes.length, 122, v.id);
+      strictEqual(lane.holeAlong.length, 122);
+      for (let s = 1; s < 122; s++) strictEqual(lane.holeAlong[s] > lane.holeAlong[s - 1], true, `${v.id} ${s}`);
+      // Start near the path's start, the game hole near its end.
+      strictEqual(lane.holeAlong[0] > 0 && lane.holeAlong[121] < lane.length, true);
+      // A wider gap after every fifth hole.
+      const step = lane.holeAlong[2] - lane.holeAlong[1];
+      strictEqual(lane.holeAlong[6] - lane.holeAlong[5] > step * 1.3, true);
+    }
+  }
+});
+check("S board: holes in a lane at least 4px apart at 375 wide (and at 390, 502)", () => {
+  for (const [w, h] of [[375, 67], [375, 66.7], [390, 84], [502, 108]]) {
+    const g = sBoardGeometry(w, h);
+    for (const lane of g.lanes) {
+      for (let i = 0; i < lane.holes.length; i++) {
+        for (let j = i + 1; j < lane.holes.length; j++) {
+          const d = Math.hypot(lane.holes[i].x - lane.holes[j].x, lane.holes[i].y - lane.holes[j].y);
+          strictEqual(d >= 4, true, `${w}x${h}: holes ${i} and ${j} ${d.toFixed(2)}px`);
+        }
+      }
+    }
+  }
+});
+check("S board: no two lanes closer than LS - 0.5 anywhere, the ribbon tips included", () => {
+  for (const v of Object.values(S_VARIANTS)) {
+    const t = sTrack(v);
+    // Every 4th point (1 view unit), all pairs between different lanes.
+    const minBetween = (from: (l: (typeof t.lanes)[number], d: number) => boolean) => {
+      const pts = t.lanes.map((l) => l.points.filter((_, i) => i % 4 === 0 && from(l, l.along[i])));
+      let min = Infinity;
+      for (let a = 0; a < 3; a++) {
+        for (let b = a + 1; b < 3; b++) {
+          for (const p of pts[a]) for (const q of pts[b]) min = Math.min(min, Math.hypot(p.x - q.x, p.y - q.y));
+        }
+      }
+      return min;
+    };
+    // Where the holes and pegs are: never under LS - 0.5 (in fact LS).
+    const playing = minBetween((l, d) => d >= l.holeAlong[0] && d <= l.holeAlong[121]);
+    strictEqual(playing >= v.LS - 0.5, true, `${v.id}: ${playing.toFixed(2)}`);
+    // The whole ribbon, the bare tips before the start hole and after the
+    // game hole included (x0 = 212.2 - R keeps them clear).
+    const whole = minBetween(() => true);
+    strictEqual(whole >= v.LS - 0.5, true, `${v.id} whole ribbon: ${whole.toFixed(2)}`);
+  }
+});
+check("S board: the plates sit on the middle lane, between holes 5k and 5k + 1", () => {
+  for (const v of Object.values(S_VARIANTS)) {
+    const t = sTrack(v);
+    strictEqual(t.plates.length, 23);
+    const mid = t.lanes[1];
+    for (const p of t.plates) {
+      const near = Math.min(...mid.points.map((q) => Math.hypot(p.x - q.x, p.y - q.y)));
+      strictEqual(near < 0.5, true, `${v.id} plate ${p.label}`);
+      const a = mid.holes[p.label];
+      const b = mid.holes[p.label + 1];
+      // Nearer those two holes than any other.
+      const da = Math.hypot(p.x - a.x, p.y - a.y);
+      const db = Math.hypot(p.x - b.x, p.y - b.y);
+      strictEqual(Math.abs(da - db) < 1, true);
+      strictEqual(t.plateRx < da - v.holeR, true, `${v.id} plate ${p.label} clear of its holes`);
+    }
+  }
+});
+check("S board: fits the strip whole, the right variant for its shape, pegs at the 9.8px floor", () => {
+  strictEqual(sVariantFor(502, 108).id, "sflat");
+  strictEqual(sVariantFor(390, 84).id, "sflat");
+  strictEqual(sVariantFor(375, 67).id, "sflat2");
+  for (const [w, h] of [[375, 67], [390, 84], [502, 108], [896, 86]]) {
+    const g = sBoardGeometry(w, h);
+    strictEqual(g.board.x >= -0.01 && g.board.x + g.board.width <= w + 0.01, true);
+    strictEqual(g.board.y >= -0.01 && g.board.y + g.board.height <= h + 0.01, true);
+    strictEqual(g.pegR >= PEG_MIN_R, true);
+    // Every hole inside the board, with room for a peg.
+    for (const lane of g.lanes) {
+      for (const p of lane.holes) {
+        strictEqual(p.x - g.pegR >= g.board.x && p.x + g.pegR <= g.board.x + g.board.width, true);
+        strictEqual(p.y - g.pegR >= g.board.y && p.y + g.pegR <= g.board.y + g.board.height, true);
+      }
+    }
+    deepStrictEqual(pegPosition(g, 2, 121, 1), sHolePosition(g, 2, 121));
+    // One start hole: both pegs start on it.
+    deepStrictEqual(pegPosition(g, 0, 0, 0), pegPosition(g, 0, 0, 1));
+  }
+});
+check("S board: every skin's pegs and holes read on its ribbons (same floors and exemptions)", () => {
+  for (const s of BOARD_SKIN_LIST) {
+    for (const lane of [0, 1, 2]) {
+      const surface = sRibbonFill(s, lane);
+      if (!pegContrastExempt(s)) {
+        const ratio = contrastRatio(s.lanes[lane].peg, surface);
+        strictEqual(ratio >= PEG_CONTRAST_MIN, true, `${s.id} lane ${lane} peg: ${ratio.toFixed(2)}`);
+      }
+      if (!holeContrastExempt(s)) {
+        const ratio = contrastRatio(s.hole.fill, surface);
+        strictEqual(ratio >= HOLE_CONTRAST_MIN, true, `${s.id} lane ${lane} hole: ${ratio.toFixed(2)}`);
+      }
+    }
+  }
+  // Midnight's ribbon is its dark panel, outlined.
+  strictEqual(sRibbonFill(boardSkinById("midnight"), 0), "#1d1d23");
+});
+check("S board: a peg's slide follows its lane (round the turns, across the S, backward too)", () => {
+  // The distance from a point to a lane's line (view units).
+  const offLane = (points: { x: number; y: number }[], p: { x: number; y: number }) =>
+    Math.min(...points.map((q) => Math.hypot(p.x - q.x, p.y - q.y)));
+  for (const v of Object.values(S_VARIANTS)) {
+    const t = sTrack(v);
+    // Through the first hairpin (3 -> 25), across the middle S (55 -> 66),
+    // the 2-peg leapfrog's long jump (0 -> 29), the last turn (100 -> 121)
+    // and a correction backward (66 -> 52).
+    for (const [from, to] of [[3, 25], [55, 66], [0, 29], [100, 121], [66, 52], [121, 0]]) {
+      for (const lane of [0, 1, 2]) {
+        const pts = sSlidePoints(v, lane, from, to);
+        const line = t.lanes[lane].points;
+        // Starts and ends on the holes.
+        strictEqual(Math.hypot(pts[0].x - t.lanes[lane].holes[from].x, pts[0].y - t.lanes[lane].holes[from].y) < 1e-6, true);
+        const end = pts[pts.length - 1];
+        strictEqual(Math.hypot(end.x - t.lanes[lane].holes[to].x, end.y - t.lanes[lane].holes[to].y) < 1e-6, true);
+        // Sampled partway (a third, half, two-thirds): on the lane's line.
+        for (const f of [1 / 3, 1 / 2, 2 / 3]) {
+          const p = pts[Math.round((pts.length - 1) * f)];
+          const off = offLane(line, p);
+          strictEqual(off < 0.5, true, `${v.id} lane ${lane} ${from}->${to} at ${f.toFixed(2)}: ${off.toFixed(3)}`);
+        }
+        // Evenly spaced along the lane, never jumping across the board.
+        const steps = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
+        strictEqual(Math.max(...steps) <= 2.05, true, `${v.id} ${from}->${to} step ${Math.max(...steps).toFixed(2)}`);
+      }
+    }
+    // Backward is the forward slide reversed (to rounding).
+    const back = sSlidePoints(v, 1, 66, 52).reverse();
+    const fwd = sSlidePoints(v, 1, 52, 66);
+    strictEqual(back.length, fwd.length);
+    strictEqual(back.every((p, i) => Math.hypot(p.x - fwd[i].x, p.y - fwd[i].y) < 1e-9), true);
+  }
+  // In px on a board: the same path scaled.
+  const g = sBoardGeometry(375, 67);
+  const frames = pegSlideFrames(g, 2, 55, 66)!;
+  deepStrictEqual(frames[frames.length - 1], sHolePosition(g, 2, 66));
+});
+check("board pattern: Straight's slide is unchanged (its own CSS transition, no path)", () => {
+  for (const [w, h] of [[375, 67], [502, 108]]) {
+    const g = boardGeometryFor("straight", w, h);
+    strictEqual(pegSlideFrames(g, 0, 3, 25), null);
+    strictEqual(pegSlideFrames(g, 2, 66, 52), null);
+  }
+});
+check("board pattern setting: unknown or missing is Straight, storage never throws", () => {
+  strictEqual(boardPatternById("s"), "s");
+  strictEqual(boardPatternById("straight"), "straight");
+  strictEqual(boardPatternById(null), "straight");
+  strictEqual(boardPatternById(undefined), "straight");
+  strictEqual(boardPatternById("spiral"), "straight");
+  strictEqual(boardPatternById("S"), "straight");
+  strictEqual(readBoardPattern(), "straight");
+  writeBoardPattern("s");
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  try {
+    writeBoardPattern("s");
+    strictEqual(store.get(BOARD_PATTERN_KEY), "s");
+    strictEqual(readBoardPattern(), "s");
+    // The colours keep their own key.
+    strictEqual(store.has(BOARD_SETTING_KEY), false);
+    store.set(BOARD_PATTERN_KEY, "zigzag");
+    strictEqual(readBoardPattern(), "straight");
+    writeBoardPattern("straight");
+    strictEqual(store.has(BOARD_PATTERN_KEY), false);
+    g.localStorage = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    strictEqual(readBoardPattern(), "straight");
+    writeBoardPattern("s");
   } finally {
     delete g.localStorage;
   }
