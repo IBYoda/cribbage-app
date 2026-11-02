@@ -42,6 +42,7 @@ const PREVIEW_PLAYERS: BoardPlayer[] = [
 const BOARD_PATTERN_CHOICES: { id: BoardPattern; label: string }[] = [
   { id: "straight", label: "Straight" },
   { id: "s", label: "S" },
+  { id: "snake", label: "Snake" },
 ];
 
 export function AppearanceSettings() {
@@ -218,7 +219,7 @@ export function AppearanceSettings() {
       {/* BOARD: the cribbage board on the square table, for this player's
           own screen -- this device only (localStorage), so it saves at once,
           like Card animations. Two choices: the PATTERN (the track's shape:
-          Straight or S), previewed in the chosen colours, and the COLORS (the
+          Straight, S or Snake), previewed in the chosen colours, and the COLORS (the
           six skins), listed one board a row and previewed in the chosen
           pattern. Each preview is the real board, drawn at a phone's strip
           size (375 x 67) and scaled to its box, so its pegs and lanes read as
@@ -227,7 +228,7 @@ export function AppearanceSettings() {
         <legend className="mb-2 text-sm font-medium">Board</legend>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-1 text-xs font-medium">Pattern</legend>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             {BOARD_PATTERN_CHOICES.map((choice) => (
               <label key={choice.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
                 <input

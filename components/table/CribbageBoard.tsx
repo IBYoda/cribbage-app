@@ -49,9 +49,11 @@ import {
 // fixedSize: draw the board for that strip size and scale the picture to the
 // box's width (the Profile picker's previews), instead of measuring the box.
 //
-// pattern: the board's shape -- "straight" (out and back) or "s" (one long
-// S lane each, as big as fits the strip at its own shape, centred). The
-// pegs, their slide and the two layers are the same on both.
+// pattern: the board's shape -- "straight" (out and back), "s" (one long S
+// lane each) or "snake" (one long lane each, in three bands); the S and the
+// snake are track boards, as big as fits the strip at their own shape,
+// centred, drawn and pegged alike. The pegs and the two layers are the same
+// on every pattern; on the track boards they slide along their lane.
 
 export type BoardPlayer = {
   userId: string;
@@ -124,13 +126,13 @@ export function CribbageBoard({
     });
   if (changed) setPegs(next);
 
-  // The S board is worked out with trigonometry, which differs in its last
-  // decimal places between the server and the browser, so it is drawn in the
-  // browser only (a server-rendered preview would not match). The straight
-  // board renders on the server as before.
+  // The track boards (S and snake) are worked out with trigonometry, which
+  // differs in its last decimal places between the server and the browser,
+  // so they are drawn in the browser only (a server-rendered preview would
+  // not match). The straight board renders on the server as before.
   const onClient = useSyncExternalStore(subscribeNothing, clientSnapshot, serverSnapshot);
   const geometry = useMemo(
-    () => (size && (pattern !== "s" || onClient) ? boardGeometryFor(pattern, size.w, size.h) : null),
+    () => (size && (pattern === "straight" || onClient) ? boardGeometryFor(pattern, size.w, size.h) : null),
     [pattern, size, onClient]
   );
   const label = `Scoreboard: ${[...seated]

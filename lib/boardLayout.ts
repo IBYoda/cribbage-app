@@ -204,10 +204,11 @@ export function laneOf(seatOrder: readonly string[], userId: string): number | n
 
 // THE BOARD'S PATTERN: a board is a pattern (the track's shape) in a skin's
 // colours (lib/boardSkins.ts). "straight": the out-and-back board above;
-// "s": the S board below. Both have three lanes, positions 0 .. 121.
-export type BoardPattern = "straight" | "s";
+// "s": the S board below; "snake": the snake board below. All three have
+// three lanes, positions 0 .. 121.
+export type BoardPattern = "straight" | "s" | "snake";
 
-export const BOARD_PATTERNS: readonly BoardPattern[] = ["straight", "s"];
+export const BOARD_PATTERNS: readonly BoardPattern[] = ["straight", "s", "snake"];
 
 // THE S BOARD (our own drawing): one continuous lane per player, not out and
 // back -- a start hole, holes 1-120 in groups of five, and a game hole. Drawn
@@ -222,8 +223,16 @@ export const BOARD_PATTERNS: readonly BoardPattern[] = ["straight", "s"];
 // way, ending at the finish inside the right hairpin. The three lanes are
 // that line moved -LS, 0 and +LS along its right-hand normal, so they are
 // always LS apart. Holes go by distance along each lane.
+//
+// THE SNAKE BOARD is built the same way (sTrack and everything after it):
+// one continuous lane each, three bands of three lanes. From the top left,
+// east along the top band; a big U on the right down to the bottom band;
+// west along it; a small hairpin on the left up into the middle band, which
+// sits inside the big U; east along the middle band to the finish. It only
+// ever turns right, so the +LS lane is always the inside one.
 export type SVariant = {
-  id: "sflat" | "sflat2";
+  id: "sflat" | "sflat2" | "snake";
+  shape: "s" | "snake";
   // The board's height, the lane spacing, the big turn's radius and a hole's
   // radius (view units).
   H: number;
@@ -233,9 +242,25 @@ export type SVariant = {
 };
 
 // The normal strip (about 4.65:1) and a short phone's (about 5.6:1).
-export const S_VARIANTS: Record<SVariant["id"], SVariant> = {
-  sflat: { id: "sflat", H: 215, LS: 19, R: 61, holeR: 3.3 },
-  sflat2: { id: "sflat2", H: 190, LS: 17.5, R: 56, holeR: 3.2 },
+export const S_VARIANTS: Record<"sflat" | "sflat2", SVariant> = {
+  sflat: { id: "sflat", shape: "s", H: 215, LS: 19, R: 61, holeR: 3.3 },
+  sflat2: { id: "sflat2", shape: "s", H: 190, LS: 17.5, R: 56, holeR: 3.2 },
+};
+
+// The snake: LS 17, a ribbon LS - 1.2 wide; D (the big U's radius, and the
+// distance between the bands' centrelines) = 2 LS + ribbon + 8; YC the
+// middle band's centreline; the board H tall. One size for every strip.
+const SNAKE_LS = 17;
+const SNAKE_RIBBON = SNAKE_LS - 1.2;
+const SNAKE_D = 2 * SNAKE_LS + SNAKE_RIBBON + 8;
+const SNAKE_YC = 3 + SNAKE_D + SNAKE_LS + SNAKE_RIBBON / 2 + 14;
+export const SNAKE_VARIANT: SVariant = {
+  id: "snake",
+  shape: "snake",
+  H: SNAKE_YC + SNAKE_D + SNAKE_LS + SNAKE_RIBBON / 2 + 14 + 3,
+  LS: SNAKE_LS,
+  R: SNAKE_D,
+  holeR: 3.3,
 };
 
 // Which one a strip uses: half way between the two strips' shapes.
@@ -277,13 +302,9 @@ export type STrack = {
   plateRy: number;
 };
 
-// The S centreline as a dense polyline (view units).
-function sCenterline(v: SVariant): Point[] {
-  const YC = v.H / 2;
-  const R = v.R;
-  // 212.2 rather than 211: the start strip's bare tip (before the start
-  // hole) then clears the big turn's nearest lane by LS - 0.5 too.
-  const x0 = 212.2 - R;
+// A polyline builder: straight lines and circular arcs, sampled every
+// S_STEP view units, with no repeated points where they join.
+function pathBuilder() {
   const pts: Point[] = [];
   const push = (p: Point) => {
     const last = pts[pts.length - 1];
@@ -302,14 +323,53 @@ function sCenterline(v: SVariant): Point[] {
       push({ x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) });
     }
   };
-  line({ x: x0, y: YC }, { x: 346, y: YC });
-  arc({ x: 346, y: YC - R / 2 }, R / 2, 90, -90);
-  line({ x: 346, y: YC - R }, { x: 165, y: YC - R });
+  return { pts, push, line, arc };
+}
+
+// The snake centreline as a dense polyline (view units): the top band east,
+// the big U (radius D) down, the bottom band west, the small hairpin
+// (radius D/2) up, the middle band east. stretch: view units added to each
+// band (and so to the board's width) to fill a wider strip (trackStretch).
+function snakeCenterline(v: SVariant, stretch: number): Point[] {
+  const { pts, line, arc } = pathBuilder();
+  const D = v.R;
+  const YC = SNAKE_YC;
+  const xL = 100;
+  // At least 520 (not 430): the longer bands space the holes so every
+  // lane's are at least 4px apart on the 375px strip.
+  const xR = xL + 520 + stretch;
+  line({ x: xL, y: YC - D }, { x: xR, y: YC - D });
+  arc({ x: xR, y: YC }, D, -90, 90);
+  line({ x: xR, y: YC + D }, { x: xL, y: YC + D });
+  arc({ x: xL, y: YC + D / 2 }, D / 2, 90, 270);
+  line({ x: xL, y: YC }, { x: xR, y: YC });
+  return pts;
+}
+
+// The S centreline (or the snake's) as a dense polyline (view units).
+// stretch: view units added to the board's width to fill a wider strip
+// (trackStretch). On the S each half's three straight rows (start, top,
+// bottom) grow by stretch / 2 -- the small turn and the end of the bottom
+// row move right -- and the right half is still the left half turned 180
+// degrees, now about (500 + stretch / 2, YC), so the crossing is unchanged.
+function sCenterline(v: SVariant, stretch: number): Point[] {
+  if (v.shape === "snake") return snakeCenterline(v, stretch);
+  const YC = v.H / 2;
+  const R = v.R;
+  const e = stretch / 2;
+  // 212.2 rather than 211: the start strip's bare tip (before the start
+  // hole) then clears the big turn's nearest lane by LS - 0.5 too.
+  const x0 = 212.2 - R;
+  const { pts, push, line, arc } = pathBuilder();
+  line({ x: x0, y: YC }, { x: 346 + e, y: YC });
+  arc({ x: 346 + e, y: YC - R / 2 }, R / 2, 90, -90);
+  line({ x: 346 + e, y: YC - R }, { x: 165, y: YC - R });
   arc({ x: 165, y: YC }, R, -90, -270);
-  line({ x: 165, y: YC + R }, { x: 330, y: YC + R });
+  line({ x: 165, y: YC + R }, { x: 330 + e, y: YC + R });
   const left = pts.slice();
   const E = left[left.length - 1];
-  const turn = (p: Point): Point => ({ x: 1000 - p.x, y: 2 * YC - p.y });
+  const cx = 500 + e;
+  const turn = (p: Point): Point => ({ x: 2 * cx - p.x, y: 2 * YC - p.y });
   const E2 = turn(E);
   const dx = 0.55 * (E2.x - E.x);
   const c1 = { x: E.x + dx, y: E.y };
@@ -351,13 +411,32 @@ export function sHoleDistance(length: number, score: number): number {
   return (q + S_M) * U;
 }
 
-const sTracks: Partial<Record<SVariant["id"], STrack>> = {};
+// Tracks worked out so far, by variant and stretch (a few strip sizes; the
+// oldest dropped past a handful, say after many window resizes).
+const sTracks = new Map<string, STrack>();
 
-// The S track for a variant, in view units (worked out once, then kept).
-export function sTrack(v: SVariant): STrack {
-  const kept = sTracks[v.id];
+// HOW MUCH WIDER A TRACK BOARD IS DRAWN for a strip, in view units -- shared
+// by the S and the snake. The board is scaled by its height, so to reach the
+// strip's sides (as the straight board does) it must be the strip's shape:
+// `height` x aspect wide. Never narrower than the unstretched board
+// (`baseWidth`), and never wider than TRACK_ASPECT_MAX : 1 -- a wide
+// landscape desktop strip (896 x 86, about 10.4 : 1) is filled; a landscape
+// phone's (about 21 : 1) gets a 12 : 1 board, centred.
+export const TRACK_ASPECT_MAX = 12;
+
+export function trackStretch(width: number, height: number, boardHeight: number, baseWidth: number): number {
+  if (!(width > 0 && height > 0)) return 0;
+  const aspect = Math.min(width / height, TRACK_ASPECT_MAX);
+  return Math.max(aspect * boardHeight - baseWidth, 0);
+}
+
+// The track for a variant, in view units (worked out once per stretch, then
+// kept). stretch: view units added to the board's width (trackStretch).
+export function sTrack(v: SVariant, stretch = 0): STrack {
+  const id = `${v.id} ${stretch}`;
+  const kept = sTracks.get(id);
   if (kept) return kept;
-  const centre = sCenterline(v);
+  const centre = sCenterline(v, stretch);
   const lanes = [-v.LS, 0, v.LS].map((offset): STrackLane => {
     const points = centre.map((p, i) => {
       const a = centre[Math.max(i - 1, 0)];
@@ -393,11 +472,14 @@ export function sTrack(v: SVariant): STrack {
     lanes,
     board,
     plates,
-    // In the gap between two holes, clear of both; across, inside the ribbon.
-    plateRx: ((1 + S_GR) * U) / 2 - v.holeR - 0.6,
+    // In the gap between two holes, clear of both, and never longer than it
+    // is tall (a stretched board's holes are far apart); across, inside the
+    // ribbon.
+    plateRx: Math.min(((1 + S_GR) * U) / 2 - v.holeR - 0.6, (v.LS - 1.2) / 2 - 0.8),
     plateRy: (v.LS - 1.2) / 2 - 0.8,
   };
-  sTracks[v.id] = track;
+  if (sTracks.size >= 16) sTracks.delete(sTracks.keys().next().value!);
+  sTracks.set(id, track);
   return track;
 }
 
@@ -406,6 +488,8 @@ export type SBoardGeometry = {
   width: number;
   height: number;
   variant: SVariant;
+  // View units added to the board's width for this strip (trackStretch).
+  stretch: number;
   // View units to px, and where the view's origin lands in the strip.
   scale: number;
   offsetX: number;
@@ -432,11 +516,16 @@ export type SBoardGeometry = {
 export const S_PLATE_FONT_MIN = 6;
 
 // The S board for a strip `width` x `height` px: the variant that matches
-// the strip's shape, scaled to fit it whole (the same scale both ways, so the
-// lanes stay evenly spaced), centred.
-export function sBoardGeometry(width: number, height: number): SBoardGeometry {
-  const v = sVariantFor(width, height);
-  const track = sTrack(v);
+// the strip's shape, its straight stretches lengthened (trackStretch) so it
+// is the strip's shape too, then scaled to fit (the same scale both ways, so
+// the lanes stay evenly spaced), centred -- edge to edge like the straight
+// board, up to TRACK_ASPECT_MAX.
+// v: the S's variant for the strip's shape by default; the snake passes
+// SNAKE_VARIANT (one size, fitted the same way).
+export function sBoardGeometry(width: number, height: number, v: SVariant = sVariantFor(width, height)): SBoardGeometry {
+  const base = sTrack(v).board;
+  const stretch = trackStretch(width, height, base.height, base.width);
+  const track = sTrack(v, stretch);
   const scale = Math.max(Math.min(width / track.board.width, height / track.board.height), 0);
   const offsetX = (width - track.board.width * scale) / 2 - track.board.x * scale;
   const offsetY = (height - track.board.height * scale) / 2 - track.board.y * scale;
@@ -449,6 +538,7 @@ export function sBoardGeometry(width: number, height: number): SBoardGeometry {
     width,
     height,
     variant: v,
+    stretch,
     scale,
     offsetX,
     offsetY,
@@ -483,19 +573,24 @@ export function isSBoard(g: AnyBoardGeometry): g is SBoardGeometry {
   return "kind" in g && g.kind === "s";
 }
 
-// Either board for a strip, by pattern.
+// Any board for a strip, by pattern. The S and the snake are both track
+// boards (SBoardGeometry, drawn and pegged the same way).
 export function boardGeometryFor(pattern: BoardPattern, width: number, height: number): AnyBoardGeometry {
-  return pattern === "s" ? sBoardGeometry(width, height) : boardGeometry(width, height);
+  if (pattern === "s") return sBoardGeometry(width, height);
+  if (pattern === "snake") return sBoardGeometry(width, height, SNAKE_VARIANT);
+  return boardGeometry(width, height);
 }
 
 // A PEG'S SLIDE on the S board: the points along its lane from position
 // `from` to position `to`, evenly spaced by distance along the lane (view
 // units), so a peg moving through them goes round the turns -- forward for
 // a score, backward for a correction -- never across the board. A point
-// every 2 view units or less (the whole lane is ~1,000), so even a long
-// slide never cuts a corner on the tightest turn.
-export function sSlidePoints(v: SVariant, lane: number, from: number, to: number, maxFrames = 1200): Point[] {
-  const l = sTrack(v).lanes[clampNum(lane, 0, BOARD_LANES - 1)];
+// every 2 view units or less (the longest lane, stretched, is under 6,000),
+// so even a long slide never cuts a corner on the tightest turn.
+// stretch: the board's (SBoardGeometry.stretch), so the slide is on the
+// track as drawn.
+export function sSlidePoints(v: SVariant, lane: number, from: number, to: number, stretch = 0, maxFrames = 3000): Point[] {
+  const l = sTrack(v, stretch).lanes[clampNum(lane, 0, BOARD_LANES - 1)];
   const d0 = l.holeAlong[clampScore(from)];
   const d1 = l.holeAlong[clampScore(to)];
   const n = Math.min(Math.max(Math.ceil(Math.abs(d1 - d0) / 2), 1), maxFrames);
@@ -507,7 +602,10 @@ export function sSlidePoints(v: SVariant, lane: number, from: number, to: number
 // (app/globals.css, .board-peg) exactly as before.
 export function pegSlideFrames(g: AnyBoardGeometry, lane: number, from: number, to: number): Point[] | null {
   if (!isSBoard(g)) return null;
-  return sSlidePoints(g.variant, lane, from, to).map((p) => ({ x: g.offsetX + p.x * g.scale, y: g.offsetY + p.y * g.scale }));
+  return sSlidePoints(g.variant, lane, from, to, g.stretch).map((p) => ({
+    x: g.offsetX + p.x * g.scale,
+    y: g.offsetY + p.y * g.scale,
+  }));
 }
 
 // A peg's place on either board (startSlot: which start hole on the straight
