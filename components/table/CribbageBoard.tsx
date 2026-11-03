@@ -6,6 +6,7 @@ import {
   S_PLATE_FONT_MIN,
   boardGeometryFor,
   boardHoles,
+  boardPatternFor,
   isSBoard,
   nextPegs,
   pegPosition,
@@ -21,8 +22,10 @@ import {
   bannerTextColor,
   boardSkinById,
   darken,
+  laneSkins,
   lighten,
   metalLaneStops,
+  skinLane,
   pegShades,
   readBoardPattern,
   readBoardSkinId,
@@ -66,12 +69,16 @@ export type BoardPlayer = {
 export function CribbageBoard({
   players,
   skin = DEFAULT_BOARD_SKIN,
-  pattern = DEFAULT_BOARD_PATTERN,
+  pattern: chosenPattern = DEFAULT_BOARD_PATTERN,
+  lanes = BOARD_LANES,
   fixedSize,
 }: {
   players: BoardPlayer[];
   skin?: BoardSkin;
   pattern?: BoardPattern;
+  // 4: a 4-player Solo game's board -- always the 4-lane straight board,
+  // whatever the pattern (boardPatternFor); the player's pick is untouched.
+  lanes?: 3 | 4;
   fixedSize?: { w: number; h: number };
 }) {
   const uid = useId().replace(/:/g, "");
@@ -100,7 +107,8 @@ export function CribbageBoard({
   // measure, a resize, a rotation) or a new pattern redraws them in place:
   // they are drawn without a transition until a moment after it settles (a
   // timer, not an animation frame, so a hidden tab catches up too).
-  const drawKey = size ? `${pattern} ${size.w} ${size.h}` : null;
+  const pattern = boardPatternFor(chosenPattern, lanes);
+  const drawKey = size ? `${pattern} ${lanes} ${size.w} ${size.h}` : null;
   const [settledKey, setSettledKey] = useState(drawKey);
   const resizing = settledKey !== drawKey;
   useEffect(() => {
@@ -113,7 +121,7 @@ export function CribbageBoard({
   // survives a 0 award and the pegs leapfrog. Updated during render (as
   // ScoreFlash does): the next pegs follow only from the scores and the
   // pegs before, so this settles in one pass.
-  const seated = players.filter((p) => p.lane >= 0 && p.lane < BOARD_LANES);
+  const seated = players.filter((p) => p.lane >= 0 && p.lane < lanes);
   const [pegs, setPegs] = useState<Record<string, PegPair>>({});
   const next: Record<string, PegPair> = {};
   for (const p of seated) next[p.userId] = nextPegs(pegs[p.userId] ?? null, p.score, p.lastPoints);
@@ -132,8 +140,8 @@ export function CribbageBoard({
   // not match). The straight board renders on the server as before.
   const onClient = useSyncExternalStore(subscribeNothing, clientSnapshot, serverSnapshot);
   const geometry = useMemo(
-    () => (size && (pattern === "straight" || onClient) ? boardGeometryFor(pattern, size.w, size.h) : null),
-    [pattern, size, onClient]
+    () => (size && (pattern === "straight" || onClient) ? boardGeometryFor(pattern, size.w, size.h, lanes) : null),
+    [pattern, lanes, size, onClient]
   );
   const label = `Scoreboard: ${[...seated]
     .sort((a, b) => a.lane - b.lane)
@@ -200,7 +208,7 @@ export function CribbageBoard({
             <BoardWood g={geometry} skin={skin} uid={uid} />
           )}
           <defs>
-            {skin.lanes.map((lane, i) => {
+            {laneSkins(skin, lanes).map((lane, i) => {
               const shade = pegShades(lane.peg);
               return (
                 <radialGradient key={i} id={`${uid}-peg${i}`} cx="36%" cy="30%" r="70%">
@@ -348,7 +356,18 @@ export function SelfScoringBanner({ skin = DEFAULT_BOARD_SKIN }: { skin?: BoardS
 // The board's gradients and patterns (both patterns): the face, its grain
 // (a tile `height` tall), the brushed metal, the chrome rim, and the
 // straight board's metal lanes.
-function WoodDefs({ skin, uid, height }: { skin: BoardSkin; uid: string; height: number }) {
+function WoodDefs({
+  skin,
+  uid,
+  height,
+  lanes = BOARD_LANES,
+}: {
+  skin: BoardSkin;
+  uid: string;
+  height: number;
+  // How many lanes the straight board has (its metal lanes' gradients).
+  lanes?: number;
+}) {
   // Grain: a tile of gently wavy lines, as wide as a plank's figure.
   const tileW = 220;
   const grainLines = Array.from({ length: 9 }, (_, i) => {
@@ -409,7 +428,7 @@ function WoodDefs({ skin, uid, height }: { skin: BoardSkin; uid: string; height:
           </linearGradient>
         )}
         {skin.laneStyle === "metal" &&
-          skin.lanes.map((lane, i) => (
+          laneSkins(skin, lanes).map((lane, i) => (
             <linearGradient key={i} id={`${uid}-metal${i}`} x1="0" y1="0" x2="0" y2="1">
               {metalLaneStops(lane.color).map(([at, c]) => (
                 <stop key={at} offset={`${at}%`} stopColor={c} />
@@ -509,12 +528,12 @@ const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; 
   });
   return (
     <>
-      <WoodDefs skin={skin} uid={uid} height={g.height} />
+      <WoodDefs skin={skin} uid={uid} height={g.height} lanes={g.rows.length} />
       <WoodFace skin={skin} uid={uid} box={{ x: 0, y: 0, width: g.width, height: g.height }} rim={g.rim} corner={g.corner} />
       {/* Each lane: a painted line between its two rows (Classic Pine), or
           a panel round both -- filled, outlined or brushed metal. */}
       {g.rows.map((row, lane) => {
-        const color = skin.lanes[lane].color;
+        const color = skinLane(skin, lane).color;
         const p = panels[lane];
         if (skin.laneStyle === "paint") {
           const mid = (row.out + row.back) / 2;
@@ -523,7 +542,7 @@ const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; 
               key={lane}
               d={`M${g.startX[0]} ${mid} H${lastX + g.pitch * 0.5}`}
               fill="none"
-              stroke={skin.lanes[lane].paint ?? color}
+              stroke={skinLane(skin, lane).paint ?? color}
               strokeWidth={Math.max(1, (row.back - row.out) * 0.16)}
               strokeLinecap="round"
               opacity={0.85}
@@ -601,7 +620,7 @@ const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; 
               cy={h.y}
               r={g.holeR}
               fill={skin.hole.fill}
-              stroke={skin.hole.laneStroke ? skin.lanes[h.lane].color : undefined}
+              stroke={skin.hole.laneStroke ? skinLane(skin, h.lane).color : undefined}
               strokeOpacity={skin.hole.laneStroke ? 0.85 : undefined}
               strokeWidth={skin.hole.laneStroke ? 0.6 : undefined}
             />

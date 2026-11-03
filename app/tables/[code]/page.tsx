@@ -39,6 +39,7 @@ import {
   countingStarterPlace,
   isSquareTable,
   laneForPlayer,
+  boardLanesFor,
   ringLayout,
   playedBySeat,
   seatGeometry,
@@ -75,7 +76,7 @@ import {
 } from "@/lib/dealAnimation";
 
 // THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
-// 2- or 3-player table or a 4-player Teams table, self-scoring (Muggins,
+// 2-, 3- or 4-player table (Teams or Solo), self-scoring (Muggins,
 // 2-player only) included (chooseTableLayout, lib/tableLayout.ts);
 // ?layout=classic on the page's URL
 // forces the classic table. Read through
@@ -2083,8 +2084,8 @@ export default function TablePage() {
   // THE FIRST READ, on a table that will draw square: until the table's first
   // full read is in, the same "Loading..." as above -- not the classic table
   // with nothing on it, which would flash before the square one (2 and 3
-  // players -- self-scoring (Muggins) ones too -- and 4-player Teams). A
-  // classic table (4-player Solo, ?layout=classic) draws as it always has.
+  // players -- self-scoring (Muggins) ones too -- and 4 players, Teams or
+  // Solo). A classic table (?layout=classic) draws as it always has.
   if (
     !tableRead &&
     isSquareTable({
@@ -2241,7 +2242,7 @@ export default function TablePage() {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
-  // The square table (by default for 2 and 3 players and 4-player Teams, not
+  // The square table (by default for 2, 3 and 4 players, Teams or Solo, not
   // Muggins, without ?layout=classic): only it shows the
   // deal and the discard tosses -- with every seat filled, as its screens
   // need (3 and 4 players: every game player still at the table, as THE
@@ -3145,7 +3146,7 @@ export default function TablePage() {
   // (see below); the final board after a win is the next block. 3 players
   // (also by default) have their own square screen (THE SQUARE SCREEN, 3
   // PLAYERS, after the board helpers). Everything else -- the cut for the
-  // deal, the waiting room, 4-player Solo, ?layout=classic -- is the table
+  // deal, the waiting room, ?layout=classic -- is the table
   // below, unchanged. A self-scoring (Muggins) table: the self-scoring banner
   // in the board's place (squareBoardFor), the win bar in the plates' place
   // (mugginsWinBar), its tag under the header; scores, flashes and count
@@ -3175,6 +3176,8 @@ export default function TablePage() {
   // (laneForPlayer: team 1 red, team 2 blue), both partners ringed in it,
   // each team's pegs on its team score -- from its plate (buildPlates: the
   // team total, and the newest award, the scorer's, for the back peg).
+  // 4-player Solo: a lane per player on the 4-lane straight board
+  // (boardLanesFor), four plates of one player each.
   const squareBoardFor = (seatOrder: string[], teams = false) => {
     const skin = boardSkin;
     // A self-scoring (Muggins) table (2 players only): no board, pegs or lane
@@ -3208,7 +3211,15 @@ export default function TablePage() {
         }));
     return {
       laneColorOf,
-      board: <CribbageBoard skin={skin} pattern={boardPattern} players={boardPlayers} />,
+      // 4-player Solo: the 4-lane straight board, whatever the pattern.
+      board: (
+        <CribbageBoard
+          skin={skin}
+          pattern={boardPattern}
+          lanes={boardLanesFor(seatOrder.length, teams)}
+          players={boardPlayers}
+        />
+      ),
       plates: plates.map((p) => ({
         ...p,
         hasDealer: false,
@@ -3272,10 +3283,11 @@ export default function TablePage() {
   };
 
   // THE SQUARE SCREEN, 3 AND 4 PLAYERS (PRD item 31; mockups 04 and 05) --
-  // 3 players and 4-player Teams by default (chooseTableLayout;
-  // ?layout=classic for the classic table); every seat filled, me
-  // among the game's players. Me at the bottom, the next player clockwise on
-  // my LEFT, then (4 players: my partner) the TOP, the last on my RIGHT
+  // 3 players and 4 players (Teams, and Solo on the 4-lane board) by default
+  // (chooseTableLayout; ?layout=classic for the classic table); every seat
+  // filled, me among the game's players. Me at the bottom, the next player
+  // clockwise on my LEFT, then (4 players: in Teams my partner) the TOP, the
+  // last on my RIGHT
   // (seatsOnScreen); 3 players: nobody across. The top seat is drawn as the
   // 2-player across seat -- its name, ring and status word in the header, its
   // hand (and, when it deals, its piles, level with it: ringLayout) as the
@@ -3292,7 +3304,7 @@ export default function TablePage() {
   // stage's text, recap and buttons in the centre.
   const ringPlayers = activeGame?.players ?? finalBoard?.players ?? null;
   const ringTable = (screen: TableScreen) =>
-    (capacity === 3 || (capacity === 4 && isTeams)) &&
+    (capacity === 3 || capacity === 4) &&
     chooseTableLayout({ layoutParam, playerCount: capacity, isMuggins, teams: isTeams, screen }) === "square" &&
     opponents.length === capacity - 1 &&
     !!ringPlayers &&
@@ -3505,9 +3517,9 @@ export default function TablePage() {
     );
   }
 
-  // THE SQUARE FINAL BOARD, 3 AND 4 PLAYERS (by default; 4-player Teams with
-  // the top seat as the across row, the winning team in the headline and on
-  // the board): a won game, as the
+  // THE SQUARE FINAL BOARD, 3 AND 4 PLAYERS (by default; 4 players with the
+  // top seat as the across row -- Teams: the winning team in the headline
+  // and on the board; Solo: the winner, on the 4-lane board): a won game, as the
   // 2-player square final board below does it -- a pegging win shows the
   // run in front of its players with its count, and the rest of each hand
   // at its seat; a count win (or his heels) every hand face-up at its seat

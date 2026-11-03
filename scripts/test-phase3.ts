@@ -33,6 +33,7 @@ import {
   countingReveals,
   countingStarterPlace,
   laneForPlayer,
+  boardLanesFor,
   ringLayout,
   seatPositionOf,
   seatsOnScreen,
@@ -51,6 +52,7 @@ import {
   TRACK_ASPECT_MAX,
   trackStretch,
   boardGeometryFor,
+  boardPatternFor,
   isSBoard,
   pegPosition,
   sBoardGeometry,
@@ -580,10 +582,27 @@ check("layout: ?layout=classic always classic; ?layout=square and unknown values
   }
   for (const s of CLASSIC_SCREENS) strictEqual(layoutFor("square", 2, false, s), "classic", s);
 });
-check("layout: 4-player Solo (not Teams), and 3- or 4-player Muggins, are classic with or without the param", () => {
+check("layout: 4-player Solo is square by default, ?layout=classic classic -- the Teams rule", () => {
+  for (const param of [null, "square", "x", "", "Square"]) {
+    for (const s of SQUARE_SCREENS) strictEqual(layoutFor(param, 4, false, s), "square", `4p solo ${param} ${s}`);
+    for (const s of CLASSIC_SCREENS) strictEqual(layoutFor(param, 4, false, s), "classic", `4p solo ${param} ${s}`);
+  }
+  for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(layoutFor("classic", 4, false, s), "classic", s);
+  // Exactly what 4-player Teams gets.
   for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
-      strictEqual(layoutFor(param, 4, false, s), "classic", `4p ${param} ${s}`);
+      strictEqual(
+        chooseTableLayout({ layoutParam: param, playerCount: 4, isMuggins: false, teams: false, screen: s }),
+        chooseTableLayout({ layoutParam: param, playerCount: 4, isMuggins: false, teams: true, screen: s })
+      );
+    }
+  }
+  strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false }), true);
+  strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 4, isMuggins: false }), false);
+});
+check("layout: 3- or 4-player Muggins are classic with or without the param", () => {
+  for (const param of [null, "square", "classic", "x"]) {
+    for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
       strictEqual(layoutFor(param, 3, true, s), "classic", `3p muggins ${param} ${s}`);
       strictEqual(layoutFor(param, 4, true, s), "classic", `4p muggins ${param} ${s}`);
       strictEqual(
@@ -595,8 +614,6 @@ check("layout: 4-player Solo (not Teams), and 3- or 4-player Muggins, are classi
   }
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: false }), true);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 2, isMuggins: false }), false);
-  strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false }), false);
-  strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false }), false);
 });
 check("layout: 2-player self-scoring (Muggins) -- the 2-player rule: square by default, ?layout=classic classic", () => {
   for (const param of [null, "square", "x", "", "Square"]) {
@@ -626,11 +643,12 @@ check("layout: 3 players -- ?layout=classic always classic", () => {
   for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(layoutFor("classic", 3, false, s), "classic", s);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 3, isMuggins: false }), false);
 });
-check("layout: 2 and 3 players follow the same rule; other table sizes (and 4-player Solo) never square", () => {
+check("layout: 2, 3 and 4 players (Solo) follow the same rule; other table sizes never square", () => {
   for (const param of [null, "square", "classic", "x"]) {
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
       strictEqual(layoutFor(param, 3, false, s), layoutFor(param, 2, false, s), `${param} ${s}`);
-      for (const n of [0, 1, 4, 5]) strictEqual(layoutFor(param, n, false, s), "classic", `${n}p ${param} ${s}`);
+      strictEqual(layoutFor(param, 4, false, s), layoutFor(param, 2, false, s), `4p solo ${param} ${s}`);
+      for (const n of [0, 1, 5]) strictEqual(layoutFor(param, n, false, s), "classic", `${n}p ${param} ${s}`);
     }
   }
 });
@@ -644,12 +662,9 @@ check("layout: 4-player Teams -- square by default on its screens, classic elsew
   }
   // ?layout=classic: always classic.
   for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(teams4("classic", s), "classic", s);
-  // Muggins never; 4-player Solo (not Teams) never.
+  // Muggins never. (4-player Solo: the same as Teams -- its own check.)
   for (const param of [null, "square", "classic", "x"]) {
-    for (const s of SQUARE_SCREENS) {
-      strictEqual(teams4(param, s, true), "classic", `muggins ${param} ${s}`);
-      strictEqual(chooseTableLayout({ layoutParam: param, playerCount: 4, isMuggins: false, teams: false, screen: s }), "classic");
-    }
+    for (const s of SQUARE_SCREENS) strictEqual(teams4(param, s, true), "classic", `muggins ${param} ${s}`);
   }
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false, teams: true }), true);
   strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false, teams: true }), true);
@@ -701,7 +716,101 @@ check("board lanes: Teams by team (red 0 / blue 1) for every seat and viewer; 2/
   // 2 and 3 players (and teams off): the seat lanes, as before.
   deepStrictEqual(["a", "b", "c"].map((id) => laneForPlayer({ players: ["a", "b", "c"], userId: id, teams: false })), [0, 1, 2]);
   deepStrictEqual(["a", "b"].map((id) => laneForPlayer({ players: ["a", "b"], userId: id, teams: true })), [0, 1]);
-  strictEqual(laneForPlayer({ players: P4, userId: "d", teams: false }), null);
+  // 4-player Solo: a lane each by seat, the fourth seat lane 3 (4-lane board).
+  deepStrictEqual(P4.map((id) => laneForPlayer({ players: P4, userId: id, teams: false })), [0, 1, 2, 3]);
+  strictEqual(laneForPlayer({ players: P4, userId: "z", teams: false }), null);
+  strictEqual(boardLanesFor(4, false), 4);
+  strictEqual(boardLanesFor(4, true), 3);
+  for (const n of [2, 3]) for (const t of [false, true]) strictEqual(boardLanesFor(n, t), 3);
+});
+// 4-PLAYER SOLO: the 4-lane straight board and its four plates.
+check("4-lane board: four lanes, 123 holes each in order, inside the board, pegs at 9.8px clear of the next lane", () => {
+  for (const [w, h] of [[375, 66.7], [375, 67], [390, 84], [502, 108], [896, 86]]) {
+    const g = boardGeometry(w, h, 4);
+    strictEqual(g.rows.length, 4);
+    const holes = boardHoles(g);
+    strictEqual(holes.length, 4 * 123);
+    for (let lane = 0; lane < 4; lane++) {
+      // In order: the same rows and columns as a 3-lane board's lane.
+      for (const s of [1, 30, 60, 61, 90, 120]) {
+        const p = holePosition(g, lane, s);
+        const spot = holeSpot(s);
+        strictEqual(spot.kind === "hole" && p.y === (spot.row === "out" ? g.rows[lane].out : g.rows[lane].back), true);
+      }
+      strictEqual(holePosition(g, lane, 121).y, g.rows[lane].back);
+    }
+    for (const hole of holes) {
+      strictEqual(hole.x - g.pegR >= 0 && hole.x + g.pegR <= w && hole.y - g.pegR >= 0 && hole.y + g.pegR <= h, true, `${w}x${h}`);
+    }
+    // The 9.8px peg, and a peg in one lane never touches one in the next.
+    strictEqual(g.pegR * 2 >= 9.8 - 1e-9, true, `peg ${(g.pegR * 2).toFixed(2)} at ${w}x${h}`);
+    for (let lane = 1; lane < 4; lane++) {
+      strictEqual(g.rows[lane].out - g.rows[lane - 1].back >= 2 * g.pegR - 1e-9, true, `lanes at ${w}x${h}`);
+    }
+  }
+  // Lanes stay in seat order down the board; lane 3 is the fourth seat's.
+  const g = boardGeometry(502, 108, 4);
+  strictEqual(g.rows.every((r, i) => i === 0 || r.out > g.rows[i - 1].back), true);
+});
+check("4-lane board: the 3-lane board is untouched (same geometry, default lanes)", () => {
+  for (const [w, h] of [[375, 67], [502, 108]]) {
+    deepStrictEqual(boardGeometry(w, h, 3), boardGeometry(w, h));
+    deepStrictEqual(boardGeometryFor("straight", w, h, 3), boardGeometry(w, h));
+  }
+});
+check("4-lane board: every skin's 4th lane meets the peg and hole floors; four lane colours clearly different", () => {
+  for (const s of BOARD_SKIN_LIST) {
+    strictEqual(isHexColor(s.fourthLane.color) && isHexColor(s.fourthLane.peg), true, s.id);
+    if (!pegContrastExempt(s)) strictEqual(pegContrast(s, 3) >= PEG_CONTRAST_MIN, true, `${s.id} peg ${pegContrast(s, 3).toFixed(2)}`);
+    if (!holeContrastExempt(s)) strictEqual(holeContrast(s, 3) >= HOLE_CONTRAST_MIN, true, `${s.id} hole ${holeContrast(s, 3).toFixed(2)}`);
+    strictEqual(laneSeparation(s, 4) >= LANE_DISTANCE_MIN, true, `${s.id} ${laneSeparation(s, 4).toFixed(1)}`);
+    // Its ring colour is its lane colour.
+    strictEqual(laneRingColor(s, 3), s.fourthLane.color);
+  }
+  // The colours asked for.
+  deepStrictEqual(
+    BOARD_SKIN_LIST.map((s) => [s.id, s.fourthLane.color, s.fourthLane.peg]),
+    [
+      ["classic-wood", "#f0b429", "#8a5a00"],
+      ["midnight", "#ff7a59", "#ff7a59"],
+      ["espresso", "#e8a93a", "#5a1f7a"],
+      ["mahogany", "#d9a441", "#0f3d2e"],
+      ["heritage", "#6b7f5e", "#1e2a18"],
+      ["metallic", "#5a86b0", "#0e2236"],
+    ]
+  );
+});
+check("4-player Solo: S and Snake fall back to the 4-lane straight board; every other game keeps the pattern", () => {
+  for (const p of ["straight", "s", "snake"] as const) {
+    strictEqual(boardPatternFor(p, 4), "straight");
+    strictEqual(boardPatternFor(p, 3), p);
+    const g = boardGeometryFor(p, 375, 67, 4);
+    strictEqual(isSBoard(g), false);
+    strictEqual(!isSBoard(g) && g.rows.length === 4, true);
+  }
+  strictEqual(isSBoard(boardGeometryFor("s", 375, 67, 3)), true);
+  strictEqual(isSBoard(boardGeometryFor("snake", 375, 67)), true);
+});
+check("4-player Solo: four plates, one a player, in seat order from me (Teams: two)", () => {
+  const P = ["y", "s", "n", "k"];
+  const rows = seatOrderFrom(P, "y").map((id, i) => ({
+    user_id: id,
+    name: id.toUpperCase().repeat(30),
+    avatar_url: null,
+    score: 10 + i,
+    last_points: null,
+    last_reason: null,
+    last_awarded_at: null,
+  }));
+  const solo = buildPlates({ rows, myId: "y", dealerId: "s", teamsPlayers: null });
+  deepStrictEqual(solo.map((p) => p.key), ["y", "s", "n", "k"]);
+  strictEqual(solo.every((p) => p.members.length === 1), true);
+  // Each a quarter of the strip -- half a Teams plate.
+  const teams = buildPlates({ rows, myId: "y", dealerId: "s", teamsPlayers: P });
+  strictEqual(teams.length, 2);
+  strictEqual(solo.length, teams.length * 2);
+  // Names kept whole for the tooltip (the strip ellipsises them).
+  strictEqual(solo[1].members[0].name, "S".repeat(30));
 });
 check("ring layout: side names and columns keyed on whether the top seat is filled", () => {
   deepStrictEqual(ringLayout({ top: false, sides: true }), {

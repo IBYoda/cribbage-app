@@ -38,6 +38,12 @@ export type ScorePlate = {
 // Fits 2, 3 or 4 plates at 375px wide (4 plates are ~90px each: the name
 // truncates, the score doesn't).
 export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
+  // FOUR PLATES (4-player Solo): too narrow for name and score side by side,
+  // so the avatar on the left and, beside it, the name (11px, the smallest
+  // that stays readable) over the score -- the score as big as the plate's
+  // width and height allow (.plate-stack in app/globals.css). Same height.
+  // 2 and 3 plates (and Teams) are drawn exactly as before.
+  if (plates.length === 4) return <StackedScoreStrip plates={plates} />;
   return (
     <div className="relative">
       <div className="flex h-12 gap-1">
@@ -77,6 +83,45 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
             <span className="shrink-0 text-xl font-bold tabular-nums">{plate.score}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// The four-plate row: one player a plate (see ScoreStrip).
+function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
+  return (
+    <div className="relative">
+      <div className="flex h-12 gap-1">
+        {plates.map((plate) => {
+          const name = plate.members.map((m) => m.name).join(" & ");
+          return (
+            <div
+              key={plate.key}
+              className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-1.5 ${
+                plate.isMine
+                  ? "border-zinc-500 bg-zinc-100 dark:border-zinc-400 dark:bg-zinc-800"
+                  : "border-zinc-300 dark:border-zinc-700"
+              }`}
+            >
+              <div className="flex shrink-0 -space-x-2">
+                {plate.members.map((m) => (
+                  <Avatar key={m.userId} name={m.name} url={m.avatarUrl} size="sm" tone="table" ringColor={plate.laneColor} />
+                ))}
+              </div>
+              <div className="plate-stack flex min-w-0 flex-1 flex-col justify-center">
+                <span className="flex min-w-0 items-center gap-1 text-[11px] font-medium leading-tight">
+                  <span className="truncate" title={name}>
+                    {name}
+                    {plate.isMine && <span className="text-zinc-500"> (you)</span>}
+                  </span>
+                  {plate.hasDealer && <DealerChip />}
+                </span>
+                <span className="plate-stack__score font-bold tabular-nums">{plate.score}</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

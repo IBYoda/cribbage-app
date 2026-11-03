@@ -2,9 +2,9 @@
 // rules its layout is built on. Everyone sits around a square table facing
 // the centre, each player's played cards lie in front of them, turned to face
 // them, and the dealer's crib and deck sit beside the dealer's hand. Tested
-// by scripts/test-phase3.ts. The square layout is the default for 2- and
-// 3-player tables and 4-player Teams tables, self-scoring (Muggins) ones
-// included -- they are 2-player only (chooseTableLayout, at the end).
+// by scripts/test-phase3.ts. The square layout is the default for 2-, 3- and
+// 4-player tables (Teams and Solo), self-scoring (Muggins) ones included --
+// they are 2-player only (chooseTableLayout, at the end).
 
 import { laneOf } from "@/lib/boardLayout";
 import { countingOrder } from "@/lib/countingN";
@@ -133,7 +133,9 @@ export function countingReveals(input: {
 //     second lane 1 (blue), the third lane 2 (green);
 //   * 4-player Teams: by team (teamOfPosition: seats 1 and 3 against 2 and
 //     4) -- team 1 lane 0 (red), team 2 lane 1 (blue), both partners alike,
-//     each team pegging its team score; the third lane stays drawn but empty.
+//     each team pegging its team score; the third lane stays drawn but empty;
+//   * 4-player Solo: by seat, on the 4-lane board (boardLanesFor) -- the
+//     fourth seat lane 3.
 // null: not a player in that list.
 export function laneForPlayer(input: { players: readonly string[]; userId: string; teams: boolean }): number | null {
   const { players, userId, teams } = input;
@@ -141,7 +143,13 @@ export function laneForPlayer(input: { players: readonly string[]; userId: strin
     const team = teamOfPosition([...players], userId);
     return team === null ? null : team - 1;
   }
-  return laneOf(players, userId);
+  return laneOf(players, userId, boardLanesFor(players.length, teams));
+}
+
+// How many lanes a game's board has: 4 for a 4-player Solo game (a lane each),
+// else 3 (2 and 3 players, and 4-player Teams: a lane per team).
+export function boardLanesFor(playerCount: number, teams: boolean): 3 | 4 {
+  return playerCount === 4 && !teams ? 4 : 3;
 }
 
 // THE SQUARE TABLE'S SEATS AROUND THE MIDDLE, keyed on whether the top
@@ -192,10 +200,10 @@ export function countingStarterPlace(dealer: SeatPosition | null, counting: bool
 // WHICH LAYOUT A TABLE SHOWS. The square layout covers a dealt hand (the
 // discard, pegging and its hold, counting through Next Hand) and a won
 // game's final board; everything else is the classic table: the waiting
-// room, the cut for the deal, a game that ended any other way, and 4-player
-// Solo (which has no square layout).
-//   * 2 and 3 players, 4-player Teams, and 2-player self-scoring (Muggins)
-//     tables (no board: the self-scoring banner in its place): square by default;
+// room, the cut for the deal and a game that ended any other way.
+//   * 2 and 3 players, 4 players (Teams, and Solo on the 4-lane board), and
+//     2-player self-scoring (Muggins) tables (no board: the self-scoring
+//     banner in its place): square by default;
 //     ?layout=classic on the page's URL gives the classic table
 //     (?layout=square, a missing or any other value is the default). URL
 //     only, nothing saved.
@@ -216,7 +224,8 @@ export function isSquareTable(input: {
   // Self-scoring (Muggins) tables are 2-player only: the 2-player square
   // layout, with the self-scoring banner in the board's place.
   if (input.isMuggins) return input.playerCount === 2 && input.layoutParam !== "classic";
-  const squareSize = input.playerCount === 2 || input.playerCount === 3 || (input.playerCount === 4 && !!input.teams);
+  // 4 players: Teams and Solo alike (Solo on the 4-lane board).
+  const squareSize = input.playerCount === 2 || input.playerCount === 3 || input.playerCount === 4;
   return squareSize && input.layoutParam !== "classic";
 }
 

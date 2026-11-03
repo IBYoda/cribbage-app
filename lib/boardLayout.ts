@@ -61,8 +61,10 @@ export type BoardGeometry = {
 
 const clampNum = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
 
-// The board for a strip `width` x `height` px.
-export function boardGeometry(width: number, height: number): BoardGeometry {
+// The board for a strip `width` x `height` px. lanes: 3 (every table but
+// one), or 4 (a 4-player Solo game: one lane a player) -- the same strip, so
+// the rows come closer together.
+export function boardGeometry(width: number, height: number, lanes: 3 | 4 = BOARD_LANES): BoardGeometry {
   const rim = clampNum(height * 0.05, 3, 6);
   const corner = clampNum(height * 0.12, 4, 12);
   const padX = 3.5;
@@ -78,22 +80,26 @@ export function boardGeometry(width: number, height: number): BoardGeometry {
     (_, i) => hole1 + i * pitch + Math.floor(i / GROUP) * groupGap
   );
   // Rows: out, back | lane gap | out, back | lane gap | out, back -- three
-  // row gaps and two lane gaps, centred in the rim with room for a peg.
+  // row gaps and two lane gaps (four and three with 4 lanes), centred in the
+  // rim with room for a peg.
   const padY = Math.max(4, height * 0.06);
   const span = Math.max(height - 2 * (rim + padY), 0);
-  const rowGap = span / (BOARD_LANES + (BOARD_LANES - 1) * LANE_GAP);
+  const rowGap = span / (lanes + (lanes - 1) * LANE_GAP);
   const top = rim + padY;
-  const rows = Array.from({ length: BOARD_LANES }, (_, lane) => {
+  const rows = Array.from({ length: lanes }, (_, lane) => {
     const out = top + lane * rowGap * (1 + LANE_GAP);
     return { out, back: out + rowGap };
   });
   const tight = Math.min(pitch, rowGap);
   // The peg: bigger than a hole, and never under PEG_MIN_R on a phone (it
   // may cover the neighbouring holes; it sits on top of the board). At most
-  // what keeps it clear of the next lane's pegs and inside the board.
+  // what keeps it clear of the next lane's pegs and inside the board: 0.85
+  // row gaps on the 3-lane board (as always); on the 4-lane board, half the
+  // lane gap, so the 9.8px floor holds there too (pegs in neighbouring lanes
+  // just clear each other).
   const pegR = Math.min(
     Math.max(Math.min(pitch * 0.6, rowGap * 0.55), PEG_MIN_R),
-    rowGap * 0.85,
+    lanes === BOARD_LANES ? rowGap * 0.85 : (rowGap * LANE_GAP) / 2,
     rim + padY - 0.5,
     rim + padX - 0.5
   );
@@ -138,7 +144,7 @@ export function holeSpot(score: number): HoleSpot {
 // Where a score's hole is, in a lane. startSlot picks which of the two start
 // holes (0 or 1) position 0 uses -- each peg has its own.
 export function holePosition(g: BoardGeometry, lane: number, score: number, startSlot: 0 | 1 = 0): Point {
-  const row = g.rows[clampNum(lane, 0, BOARD_LANES - 1)];
+  const row = g.rows[clampNum(lane, 0, g.rows.length - 1)];
   const spot = holeSpot(score);
   if (spot.kind === "start") return { x: g.startX[startSlot], y: row.out };
   if (spot.kind === "game") return { x: g.gameX, y: row.back };
@@ -151,7 +157,7 @@ export type BoardHole = Point & { lane: number; score: number };
 
 export function boardHoles(g: BoardGeometry): BoardHole[] {
   const holes: BoardHole[] = [];
-  for (let lane = 0; lane < BOARD_LANES; lane++) {
+  for (let lane = 0; lane < g.rows.length; lane++) {
     holes.push({ lane, score: 0, ...holePosition(g, lane, 0, 0) });
     holes.push({ lane, score: 0, ...holePosition(g, lane, 0, 1) });
     for (let s = 1; s <= GAME_HOLE; s++) holes.push({ lane, score: s, ...holePosition(g, lane, s) });
@@ -197,9 +203,18 @@ export function leapfrog(prev: PegPair | null, front: number, back: number): Peg
 // Each player's lane, by the game's seat order (games.players, the same array
 // on every screen): the first seat lane 0, the second lane 1, the third lane
 // 2. Never "me first", so every screen shows the same colours.
-export function laneOf(seatOrder: readonly string[], userId: string): number | null {
+// lanes: how many the board has (4 on a 4-player Solo game's board).
+export function laneOf(seatOrder: readonly string[], userId: string, lanes: number = BOARD_LANES): number | null {
   const i = seatOrder.indexOf(userId);
-  return i >= 0 && i < BOARD_LANES ? i : null;
+  return i >= 0 && i < lanes ? i : null;
+}
+
+// THE 4-LANE BOARD: a 4-player Solo game (four players, one lane each) is
+// drawn on a 4-lane straight board. S and snake are 3-lane boards, so a
+// 4-lane game always gets the straight board whatever pattern the player
+// picked (their saved pick is untouched, for every other game).
+export function boardPatternFor(pattern: BoardPattern, lanes: 3 | 4): BoardPattern {
+  return lanes === 4 ? "straight" : pattern;
 }
 
 // THE BOARD'S PATTERN: a board is a pattern (the track's shape) in a skin's
@@ -575,7 +590,9 @@ export function isSBoard(g: AnyBoardGeometry): g is SBoardGeometry {
 
 // Any board for a strip, by pattern. The S and the snake are both track
 // boards (SBoardGeometry, drawn and pegged the same way).
-export function boardGeometryFor(pattern: BoardPattern, width: number, height: number): AnyBoardGeometry {
+// lanes 4: the 4-lane straight board, whatever the pattern (boardPatternFor).
+export function boardGeometryFor(pattern: BoardPattern, width: number, height: number, lanes: 3 | 4 = BOARD_LANES): AnyBoardGeometry {
+  if (lanes === 4) return boardGeometry(width, height, 4);
   if (pattern === "s") return sBoardGeometry(width, height);
   if (pattern === "snake") return sBoardGeometry(width, height, SNAKE_VARIANT);
   return boardGeometry(width, height);
