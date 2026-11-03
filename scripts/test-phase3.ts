@@ -13,6 +13,7 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
+import { hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
 import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
 import { countingOrder, countingViewN } from "../lib/countingN";
 import { countingView } from "../components/table/countingView";
@@ -2313,6 +2314,56 @@ check("Open Tables age filter: waiting tables older than 2 hours hide, live ones
   strictEqual(isStaleWaitingTable({ createdAt: ago(11 * 60 * 60 * 1000), gameLive: true }, now), false);
   // An unreadable time hides nothing.
   strictEqual(isStaleWaitingTable({ createdAt: "not a date", gameLive: false }, now), false);
+});
+
+// A WON GAME'S RESULT AFTER A REJOIN (lib/resultScores.ts).
+check("rejoin: a seat joined after the game began doesn't hold its score; older, equal or bad times do", () => {
+  const game = "2026-11-03T20:00:00.000Z";
+  strictEqual(scoreFromThisGame("2026-11-03T19:59:00.000Z", game), true); // seat older: reliable
+  strictEqual(scoreFromThisGame("2026-11-03T20:10:00.000Z", game), false); // left and came back
+  strictEqual(scoreFromThisGame(game, game), true); // equal: reliable
+  // Missing or unreadable: never hide.
+  strictEqual(scoreFromThisGame(null, game), true);
+  strictEqual(scoreFromThisGame("2026-11-03T20:10:00.000Z", null), true);
+  strictEqual(scoreFromThisGame(undefined, undefined), true);
+  strictEqual(scoreFromThisGame("not a date", game), true);
+  strictEqual(scoreFromThisGame("2026-11-03T20:10:00.000Z", "garbage"), true);
+  // Different formats of the same moment (a REST read vs a realtime payload).
+  strictEqual(scoreFromThisGame("2026-11-03 20:00:00+00", game), true);
+  // A rematch: New Game is created after everyone already sits there, so
+  // nobody's score is hidden on its result.
+  const seats = ["2026-11-03T18:00:00Z", "2026-11-03T18:05:00Z"];
+  const rematch = "2026-11-03T21:00:00Z";
+  for (const joined of seats) strictEqual(scoreFromThisGame(joined, rematch), true);
+});
+check("rejoin: only the rejoined players' plates are blanked; a Teams plate only if both partners rejoined", () => {
+  const plate = (key: string, ids: string[], score: number) => ({
+    key,
+    members: ids.map((userId) => ({ userId, name: userId, avatarUrl: null })),
+    score,
+    isMine: false,
+    hasDealer: false,
+    lastPoints: null,
+    lastReason: null,
+    lastAwardedAt: null,
+  });
+  const solo = [plate("a", ["a"], 121), plate("b", ["b"], 0), plate("c", ["c"], 98)];
+  deepStrictEqual(
+    hideRejoinedScores(solo, new Set(["b"])).map((p) => `${p.key}:${p.scoreHidden ? "-" : p.score}`),
+    ["a:121", "b:-", "c:98"]
+  );
+  // Nobody rejoined: the very same plates.
+  strictEqual(hideRejoinedScores(solo, new Set()), solo);
+  // Teams: the partner who stayed still holds the team score.
+  const teams = [plate("team-1", ["a", "c"], 121), plate("team-2", ["b", "d"], 90)];
+  deepStrictEqual(
+    hideRejoinedScores(teams, new Set(["a"])).map((p) => `${p.key}:${p.scoreHidden ? "-" : p.score}`),
+    ["team-1:121", "team-2:90"]
+  );
+  deepStrictEqual(
+    hideRejoinedScores(teams, new Set(["b", "d"])).map((p) => `${p.key}:${p.scoreHidden ? "-" : p.score}`),
+    ["team-1:121", "team-2:-"]
+  );
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
