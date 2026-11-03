@@ -5,27 +5,18 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { AdminTableRow, type AdminTable } from "@/components/brand/AdminTableRow";
+import { adminTableLabel, seatedNames } from "@/lib/tableListing";
 
 // A game is "live" while it is either cutting for deal or being played. Both
 // occupy the table's one-live-game slot, so both must be listed and killable.
 const LIVE_GAME_STATUSES = ["cutting", "active"];
 
-type TableRow = {
-  id: string;
-  code: string;
-  created_at: string;
-  // A computer table's level ('easy' / 'medium' / 'hard'), null otherwise.
-  // Shown as a tag; computer tables are listed and force-endable like any.
-  computerLevel: string | null;
-  memberCount: number;
-  activeGame: { id: string; created_at: string; status: string } | null;
-};
-
 export default function AdminPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
-  const [tables, setTables] = useState<TableRow[]>([]);
+  const [tables, setTables] = useState<AdminTable[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [actionInFlight, setActionInFlight] = useState<string | null>(null);
 
@@ -59,7 +50,7 @@ export default function AdminPage() {
 
       const { data: openTables, error: tablesError } = await supabase
         .from("tables")
-        .select("id, code, created_at, computer_level")
+        .select("id, code, created_at, computer_level, max_players, team_mode, is_muggins")
         .eq("status", "open")
         .order("created_at", { ascending: false });
 
@@ -83,11 +74,22 @@ export default function AdminPage() {
           .in("table_id", tableIds.length > 0 ? tableIds : [""]),
         supabase
           .from("table_members")
-          .select("table_id")
+          .select("table_id, user_id, seat")
           .in("table_id", tableIds.length > 0 ? tableIds : [""]),
       ]);
 
       if (cancelled) return;
+
+      // The seated players' names (any signed-in user can read profiles). If
+      // this read fails, the rows still come back, each name as "A player".
+      const memberIds = [...new Set((memberRows ?? []).map((m) => m.user_id))];
+      const { data: profiles } = memberIds.length
+        ? await supabase.from("profiles").select("id, nickname").in("id", memberIds)
+        : { data: [] as { id: string; nickname: string | null }[] };
+
+      if (cancelled) return;
+
+      const nicknameOf = new Map((profiles ?? []).map((p) => [p.id, p.nickname]));
 
       const gameByTableId = new Map(
         (activeGames ?? []).map((g) => [
@@ -96,20 +98,24 @@ export default function AdminPage() {
         ])
       );
 
-      const memberCountByTableId = new Map<string, number>();
-      for (const row of memberRows ?? []) {
-        memberCountByTableId.set(row.table_id, (memberCountByTableId.get(row.table_id) ?? 0) + 1);
-      }
-
       setTables(
-        (openTables ?? []).map((t) => ({
-          id: t.id,
-          code: t.code,
-          created_at: t.created_at,
-          computerLevel: t.computer_level ?? null,
-          memberCount: memberCountByTableId.get(t.id) ?? 0,
-          activeGame: gameByTableId.get(t.id) ?? null,
-        }))
+        (openTables ?? []).map((t) => {
+          const seated = (memberRows ?? []).filter((m) => m.table_id === t.id);
+          return {
+            id: t.id,
+            code: t.code,
+            created_at: t.created_at,
+            computerLevel: t.computer_level ?? null,
+            label: adminTableLabel({
+              seated: seated.length,
+              maxPlayers: t.max_players ?? 2,
+              teamMode: t.team_mode ?? null,
+              isMuggins: t.is_muggins === true,
+            }),
+            names: seatedNames(seated.map((m) => ({ seat: m.seat, nickname: nicknameOf.get(m.user_id) }))),
+            activeGame: gameByTableId.get(t.id) ?? null,
+          };
+        })
       );
     }
 
@@ -203,54 +209,13 @@ export default function AdminPage() {
       ) : (
         <ul className="flex w-full flex-col gap-3">
           {tables.map((t) => (
-            <li
+            <AdminTableRow
               key={t.id}
-              className="flex flex-col gap-2 rounded-xl border border-[rgb(226_193_125/0.4)] bg-black/25 p-4"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2">
-                  <span className="text-xl font-bold tracking-widest">{t.code}</span>
-                  {t.computerLevel && <span className="muggins-tag">Computer ({t.computerLevel})</span>}
-                </span>
-                <button
-                  onClick={() => handleForceEndTable(t.id)}
-                  disabled={actionInFlight === t.id}
-                  className="danger-btn"
-                >
-                  {actionInFlight === t.id ? "Ending..." : "Force-End Table"}
-                </button>
-              </div>
-              <p className="text-sm">
-                {t.memberCount} member{t.memberCount === 1 ? "" : "s"} · created{" "}
-                {new Date(t.created_at).toLocaleString()}
-              </p>
-              {t.activeGame && (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-black/30 px-3 py-2">
-                  {/* A cutting game has no cards dealt yet -- worth
-                      distinguishing, since "abandoned mid-cut" is a likely
-                      reason to be killing one from here. */}
-                  <span
-                    className={
-                      t.activeGame.status === "cutting"
-                        ? "text-sm text-[var(--brass-light)]"
-                        : "text-sm text-[var(--success-on-felt)]"
-                    }
-                  >
-                    {t.activeGame.status === "cutting"
-                      ? "Cutting for deal (nothing dealt) since "
-                      : "Game in progress since "}
-                    {new Date(t.activeGame.created_at).toLocaleTimeString()}
-                  </span>
-                  <button
-                    onClick={() => handleForceEndGame(t.id, t.activeGame!.id)}
-                    disabled={actionInFlight === t.activeGame.id}
-                    className="danger-btn"
-                  >
-                    {actionInFlight === t.activeGame.id ? "Ending..." : "Force-End Game"}
-                  </button>
-                </div>
-              )}
-            </li>
+              table={t}
+              actionInFlight={actionInFlight}
+              onForceEndTable={() => handleForceEndTable(t.id)}
+              onForceEndGame={(gameId) => handleForceEndGame(t.id, gameId)}
+            />
           ))}
         </ul>
       )}

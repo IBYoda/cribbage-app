@@ -25,8 +25,13 @@ export type OpponentSeat = {
 // 2-player: one seat, across the top. Phase 3 adds left/right seats as
 // sideways stacks at the screen edges; this band then holds only the top
 // seat (the partner, in a 4-player team game).
-export function OpponentBand({ seats }: { seats: OpponentSeat[] }) {
+//
+// No seats: "Waiting for another player to join..." -- unless the middle
+// already says it (waitingShown: WaitingForPlayer, with the code), when the
+// band keeps its height and stays empty, so the message shows once.
+export function OpponentBand({ seats, waitingShown = false }: { seats: OpponentSeat[]; waitingShown?: boolean }) {
   if (seats.length === 0) {
+    if (waitingShown) return <div className="h-8" aria-hidden />;
     return (
       <p className="flex h-8 items-center justify-center text-xs text-zinc-500">
         Waiting for another player to join...

@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { isStaleWaitingTable } from "@/lib/tableListing";
 
 // OPEN TABLES -- the reads behind the home page's "Open Tables" list
 // (components/brand/HomeView.tsx). Two independent reads, each returning
@@ -84,10 +85,17 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
 // show only as "Your table" (loadMyTables), never twice. The row shows the
 // first seated player (the earliest seat) and how full it is ("1/2
 // seated"). A failed profiles read only loses the names ("A player").
+//
+// THE AGE FILTER (isStaleWaitingTable, lib/tableListing.ts): a table still
+// waiting -- no game being cut for or played -- created more than
+// STALE_WAITING_TABLE_MS ago is left out, as most likely abandoned. Display
+// only: nothing is ended or changed, and its code still joins. If the games
+// read fails, nothing is hidden. Only this list: "Your table" rows
+// (loadMyTables) are never filtered.
 export async function loadJoinableTables(userId: string): Promise<JoinableTable[] | null> {
   const { data, error } = await supabase
     .from("tables")
-    .select("code, status, is_public, is_muggins, max_players, created_at, table_members(user_id, seat)")
+    .select("id, code, status, is_public, is_muggins, max_players, created_at, table_members(user_id, seat)")
     .eq("status", "open")
     .eq("is_public", true)
     .order("created_at", { ascending: false });
@@ -107,6 +115,7 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
     if (!listed) return [];
     return [
       {
+        id: t.id,
         code: t.code,
         isMuggins: t.is_muggins === true,
         createdAt: t.created_at,
@@ -118,14 +127,26 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
   });
   if (joinable.length === 0) return [];
 
-  const hostIds = [...new Set(joinable.map((t) => t.host))];
+  const { data: liveGames, error: gamesError } = await supabase
+    .from("games")
+    .select("table_id")
+    .in("table_id", joinable.map((t) => t.id))
+    .in("status", LIVE_GAME_STATUSES);
+  const live = new Set((liveGames ?? []).map((g) => g.table_id));
+  const now = Date.now();
+  const shown = gamesError
+    ? joinable
+    : joinable.filter((t) => !isStaleWaitingTable({ createdAt: t.createdAt, gameLive: live.has(t.id) }, now));
+  if (shown.length === 0) return [];
+
+  const hostIds = [...new Set(shown.map((t) => t.host))];
   const { data: profiles } = await supabase
     .from("profiles")
     .select("id, nickname, avatar_url")
     .in("id", hostIds);
   const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
 
-  return joinable.map((t) => {
+  return shown.map((t) => {
     const host = byId.get(t.host);
     return {
       code: t.code,
