@@ -10,7 +10,8 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
-import { fourPlayerModeOffered, newTableFields } from "../lib/newTable";
+import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
+import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
 import { countingOrder, countingViewN } from "../lib/countingN";
 import { countingView } from "../components/table/countingView";
@@ -601,18 +602,25 @@ check("layout: 4-player Solo is square by default, ?layout=classic classic -- th
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false }), true);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 4, isMuggins: false }), false);
 });
-check("layout: 3- or 4-player Muggins are classic with or without the param", () => {
-  for (const param of [null, "square", "classic", "x"]) {
+check("layout: 3- or 4-player self-scoring is square on its screens -- ?layout=classic ignored", () => {
+  for (const param of [null, "square", "classic", "x", "", "Square"]) {
+    for (const n of [3, 4]) {
+      for (const s of SQUARE_SCREENS) strictEqual(layoutFor(param, n, true, s), "square", `${n}p muggins ${param} ${s}`);
+      for (const s of CLASSIC_SCREENS) strictEqual(layoutFor(param, n, true, s), "classic", `${n}p muggins ${param} ${s}`);
+      strictEqual(isSquareTable({ layoutParam: param, playerCount: n, isMuggins: true }), true, `${n}p ${param}`);
+    }
+    // The teams flag changes nothing (a 4-player self-scoring table is
+    // 'solo' anyway).
     for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) {
-      strictEqual(layoutFor(param, 3, true, s), "classic", `3p muggins ${param} ${s}`);
-      strictEqual(layoutFor(param, 4, true, s), "classic", `4p muggins ${param} ${s}`);
       strictEqual(
         chooseTableLayout({ layoutParam: param, playerCount: 4, isMuggins: true, teams: true, screen: s }),
-        "classic",
+        layoutFor(param, 4, true, s),
         `4p teams muggins ${param} ${s}`
       );
     }
   }
+  // Other sizes never square, self-scoring or not.
+  for (const n of [0, 1, 5]) strictEqual(isSquareTable({ layoutParam: null, playerCount: n, isMuggins: true }), false);
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 2, isMuggins: false }), true);
   strictEqual(isSquareTable({ layoutParam: "classic", playerCount: 2, isMuggins: false }), false);
 });
@@ -663,9 +671,10 @@ check("layout: 4-player Teams -- square by default on its screens, classic elsew
   }
   // ?layout=classic: always classic.
   for (const s of [...SQUARE_SCREENS, ...CLASSIC_SCREENS]) strictEqual(teams4("classic", s), "classic", s);
-  // Muggins never. (4-player Solo: the same as Teams -- its own check.)
+  // Self-scoring: its own rule (square always -- its own check). (4-player
+  // Solo: the same as Teams -- its own check.)
   for (const param of [null, "square", "classic", "x"]) {
-    for (const s of SQUARE_SCREENS) strictEqual(teams4(param, s, true), "classic", `muggins ${param} ${s}`);
+    for (const s of SQUARE_SCREENS) strictEqual(teams4(param, s, true), "square", `muggins ${param} ${s}`);
   }
   strictEqual(isSquareTable({ layoutParam: null, playerCount: 4, isMuggins: false, teams: true }), true);
   strictEqual(isSquareTable({ layoutParam: "square", playerCount: 4, isMuggins: false, teams: true }), true);
@@ -854,6 +863,116 @@ check("Start a Table: the row created -- 2/3 players and Teams exactly as before
     max_players: 4,
     team_mode: "solo",
   });
+});
+check("Start a Table: Self-Scoring with 2, 3 and 4 players, never a Team/Solo choice with it", () => {
+  for (const n of [2, 3, 4] as const) {
+    // Self-Scoring is offered whatever the size; every size whatever the
+    // scoring -- nothing greyed out between them.
+    for (const muggins of [false, true]) {
+      const o = startTableOptions(n, muggins);
+      strictEqual(o.mugginsOffered, true, `${n} ${muggins}`);
+      deepStrictEqual(o.playerCounts, [2, 3, 4], `${n} ${muggins}`);
+    }
+    // With Self-Scoring: no Team/Solo shown, nor offered.
+    deepStrictEqual(
+      { shown: startTableOptions(n, true).fourPlayerModeShown, offered: startTableOptions(n, true).fourPlayerModeOffered },
+      { shown: false, offered: false },
+      `${n}p self-scoring`
+    );
+    // Regular play: shown, and offered for 4 only -- as before.
+    strictEqual(startTableOptions(n, false).fourPlayerModeShown, true, `${n}p regular`);
+    strictEqual(startTableOptions(n, false).fourPlayerModeOffered, n === 4, `${n}p regular`);
+  }
+});
+check("Start a Table: the Self-Scoring row -- 3 and 4 players 'solo', 2 players as before", () => {
+  for (const isPublic of [true, false]) {
+    for (const mode of ["teams", "solo"] as const) {
+      // 2 players: exactly the old insert (no team_mode).
+      deepStrictEqual(newTableFields({ isPublic, isMuggins: true, maxPlayers: 2, fourPlayerMode: mode }), {
+        is_public: isPublic,
+        is_muggins: true,
+        max_players: 2,
+      });
+      // 3 and 4: 'solo', whatever the (hidden) Team/Solo choice left behind
+      // -- the database requires it for 4 (tables_muggins_no_teams).
+      for (const n of [3, 4] as const) {
+        deepStrictEqual(newTableFields({ isPublic, isMuggins: true, maxPlayers: n, fourPlayerMode: mode }), {
+          is_public: isPublic,
+          is_muggins: true,
+          max_players: n,
+          team_mode: "solo",
+        });
+      }
+    }
+  }
+});
+
+// THE SELF-SCORING PLATES (lib/mugginsPlates.ts), 3 and 4 players. Seen as
+// "a" (plates me first, then clockwise). Each plate as kind:label (+ "✓"
+// when ticked), and my plate's action.
+const MP3 = ["a", "b", "c"];
+const MP4 = ["a", "b", "c", "d"];
+const mpOrder = (ids: string[], name = (id: string) => id.toUpperCase()) => ids.map((id) => ({ userId: id, name: name(id) }));
+const mpShow = (plates: MugginsPlateState[]) =>
+  plates.map((p) => `${p.kind}${p.label ? `:${p.label}` : ""}${p.tick ? "✓" : ""}`).join(" | ");
+const mpFor = (ids: string[], claimBy: string | null, confirmedBy?: string[] | null, winnerId?: string | null) =>
+  mugginsPlateStates({ order: mpOrder(ids), myId: "a", claimBy, confirmedBy, winnerId });
+check("muggins plates: idle -- my plate is I win, the others just their names", () => {
+  strictEqual(mpShow(mpFor(MP3, null)), "i-win:I win | idle | idle");
+  strictEqual(mpShow(mpFor(MP4, null)), "i-win:I win | idle | idle | idle");
+  strictEqual(mpFor(MP4, null)[0].action, "claim");
+  for (const p of mpFor(MP4, null).slice(1)) strictEqual(p.action, null);
+  // A stale row (no win_confirmed_by) and null read as nobody.
+  strictEqual(mpShow(mpFor(MP4, null, undefined)), mpShow(mpFor(MP4, null, [])));
+  strictEqual(mpShow(mpFor(MP4, null, null)), mpShow(mpFor(MP4, null, [])));
+});
+check("muggins plates: I claimed -- Waiting (tap to cancel); ticks as the others confirm", () => {
+  strictEqual(mpShow(mpFor(MP3, "a")), "waiting:Waiting… (tap to cancel) | idle | idle");
+  strictEqual(mpFor(MP3, "a")[0].action, "cancel");
+  strictEqual(mpShow(mpFor(MP4, "a", ["c"])), "waiting:Waiting… (tap to cancel) | idle | confirmed✓ | idle");
+  strictEqual(mpShow(mpFor(MP4, "a", ["c", "b"])), "waiting:Waiting… (tap to cancel) | confirmed✓ | confirmed✓ | idle");
+  strictEqual(mpShow(mpFor(MP3, "a", undefined)), "waiting:Waiting… (tap to cancel) | idle | idle");
+});
+check("muggins plates: someone else claimed -- Claims the win on theirs, Confirm loss on mine", () => {
+  strictEqual(mpShow(mpFor(MP3, "b")), "confirm-loss:Confirm loss | claims:Claims the win | idle");
+  strictEqual(mpShow(mpFor(MP4, "c")), "confirm-loss:Confirm loss | idle | claims:Claims the win | idle");
+  strictEqual(mpFor(MP4, "c")[0].action, "confirm");
+  // Another player (not me) has confirmed: their tick, my button unchanged.
+  strictEqual(mpShow(mpFor(MP4, "c", ["d"])), "confirm-loss:Confirm loss | idle | claims:Claims the win | confirmed✓");
+  strictEqual(mpShow(mpFor(MP3, "b", ["c"])), "confirm-loss:Confirm loss | claims:Claims the win | confirmed✓");
+  // Stale row: nobody confirmed yet.
+  strictEqual(mpShow(mpFor(MP4, "c", undefined)), "confirm-loss:Confirm loss | idle | claims:Claims the win | idle");
+});
+check("muggins plates: I confirmed -- ✓ Confirmed, nothing to tap; the others' ticks", () => {
+  strictEqual(mpShow(mpFor(MP3, "b", ["a"])), "confirmed-mine:✓ Confirmed | claims:Claims the win | idle");
+  strictEqual(mpFor(MP3, "b", ["a"])[0].action, null);
+  strictEqual(mpShow(mpFor(MP4, "b", ["a"])), "confirmed-mine:✓ Confirmed | claims:Claims the win | idle | idle");
+  strictEqual(mpShow(mpFor(MP4, "b", ["d", "a"])), "confirmed-mine:✓ Confirmed | claims:Claims the win | idle | confirmed✓");
+  // The claimant never shows a tick, whatever the array says.
+  strictEqual(mpShow(mpFor(MP4, "b", ["b"])), "confirm-loss:Confirm loss | claims:Claims the win | idle | idle");
+});
+check("muggins plates: game over -- Won on the winner's plate, nothing to tap", () => {
+  strictEqual(mpShow(mpFor(MP3, null, [], "b")), "over-mine | won:Won | over");
+  strictEqual(mpShow(mpFor(MP4, null, [], "a")), "won-mine:Won | over | over | over");
+  strictEqual(mpShow(mpFor(MP4, null, [], "d")), "over-mine | over | over | won:Won");
+  for (const p of mpFor(MP4, null, [], "d")) strictEqual(p.action, null);
+  // A leftover claim or confirmation on the row never shows on a final board.
+  strictEqual(mpShow(mpFor(MP4, "c", ["b"], "c")), "over-mine | over | won:Won | over");
+});
+check("muggins plates: long names are kept whole (the plates ellipsize them) and change nothing else", () => {
+  const long = (id: string) => `${id.toUpperCase()}${"x".repeat(29)}`;
+  for (const ids of [MP3, MP4]) {
+    for (const [claim, conf, won] of [
+      [null, [], null],
+      ["b", [], null],
+      ["b", ["a"], null],
+      [null, [], "b"],
+    ] as [string | null, string[], string | null][]) {
+      const plates = mugginsPlateStates({ order: mpOrder(ids, long), myId: "a", claimBy: claim, confirmedBy: conf, winnerId: won });
+      strictEqual(mpShow(plates), mpShow(mpFor(ids, claim, conf, won)), `${ids.length} ${claim} ${conf} ${won}`);
+      for (const p of plates) strictEqual(p.name.length, 30);
+    }
+  }
 });
 check("ring layout: side names and columns keyed on whether the top seat is filled", () => {
   deepStrictEqual(ringLayout({ top: false, sides: true }), {

@@ -20,6 +20,8 @@ import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
+import { MugginsPlates } from "@/components/table/MugginsPlates";
+import { mugginsPlateStates } from "@/lib/mugginsPlates";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -76,10 +78,11 @@ import {
 } from "@/lib/dealAnimation";
 
 // THE LAYOUT PARAM (PRD item 31): the square layout is the default for a
-// 2-, 3- or 4-player table (Teams or Solo), self-scoring (Muggins,
-// 2-player only) included (chooseTableLayout, lib/tableLayout.ts);
+// 2-, 3- or 4-player table (Teams or Solo), self-scoring (Muggins)
+// included (chooseTableLayout, lib/tableLayout.ts);
 // ?layout=classic on the page's URL
-// forces the classic table. Read through
+// forces the classic table -- except on a 3- or 4-player self-scoring
+// table, which is always square. Read through
 // useSyncExternalStore with no param on the server and in the hydrating
 // render. That render is always the "Loading..." screen (the session is read
 // in an effect, so `loading` starts true on both sides), so the param can
@@ -195,16 +198,20 @@ type Game = {
   // a refresh shows exactly what the server knows.
   ready_by: string[];
   // MUGGINS: who has claimed the win of this live match, waiting for the
-  // other player to confirm it (claim_win / confirm_win). Always null on a
-  // normal table. Carried here, not read yet.
+  // other player(s) to confirm it (claim_win / confirm_win). Always null on
+  // a normal table.
   win_claim_by: string | null;
+  // MUGGINS, 3 and 4 players: who has confirmed that claim so far; the last
+  // confirmation ends the match (confirm_win). Optional: a row from before
+  // the column existed has none -- read it as nobody (`?? []`).
+  win_confirmed_by?: string[] | null;
 };
 
 // Must stay a single string LITERAL, not a concatenation: supabase-js infers
 // the returned row shape from this exact literal type, and "a" + "b" widens to
 // plain `string`, which silently collapses the result type to an error type.
 const GAME_COLUMNS =
-  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id, hand_no, ready_by, win_claim_by";
+  "id, created_at, status, players, dealer_id, discarded_by, deal_cut, deal_cut_ack_by, starter_card, phase, current_player, play_count, play_segment, count_step, revealed_by, crib_revealed, winner_id, hand_no, ready_by, win_claim_by, win_confirmed_by";
 
 // The last game to end in a win, kept after the live game is gone so the
 // result stays on screen (and survives a reload) until the next game starts.
@@ -312,7 +319,7 @@ const GAME_SYNC_FIELDS = [
   "status", "players", "dealer_id", "discarded_by", "deal_cut", "deal_cut_ack_by",
   "starter_card", "phase", "current_player", "play_count", "play_segment",
   "count_step", "revealed_by", "crib_revealed", "winner_id", "hand_no", "ready_by",
-  "win_claim_by",
+  "win_claim_by", "win_confirmed_by",
 ] as const;
 
 function gameDiff(shown: Game, fresh: Game) {
@@ -1603,6 +1610,7 @@ export default function TablePage() {
             hand_no: number | null;
             ready_by: string[] | null;
             win_claim_by: string | null;
+            win_confirmed_by?: string[] | null;
           };
           // A new game arrives as EITHER 'cutting' (no decisive previous
           // result -- first game, a non-win ending, a changed roster: cut for
@@ -1645,6 +1653,7 @@ export default function TablePage() {
               hand_no: newGame.hand_no ?? 1,
               ready_by: newGame.ready_by ?? [],
               win_claim_by: newGame.win_claim_by ?? null,
+              win_confirmed_by: newGame.win_confirmed_by ?? [],
             });
             // Set NOW, not one render later: the UPDATEs that follow (a
             // discard, a cut card) are matched against this, and can arrive
@@ -1699,6 +1708,7 @@ export default function TablePage() {
             hand_no: number | null;
             ready_by: string[] | null;
             win_claim_by: string | null;
+            win_confirmed_by?: string[] | null;
           };
           // THE WON GAME ON SCREEN: its only change after it ends is a New
           // Game tap (ready_by). Merge that and nothing else -- a union, so an
@@ -1833,6 +1843,9 @@ export default function TablePage() {
                   hand_no: updatedGame.hand_no ?? current.hand_no,
                   ready_by: updatedGame.ready_by ?? [],
                   win_claim_by: updatedGame.win_claim_by ?? null,
+                  // A payload without the column (a stale row) keeps what
+                  // the screen has, rather than wiping the confirmations.
+                  win_confirmed_by: updatedGame.win_confirmed_by ?? current.win_confirmed_by ?? [],
                 }
               : current
           );
@@ -2070,6 +2083,7 @@ export default function TablePage() {
         <MugginsNotice
           open
           mode="join"
+          playerCount={pendingJoin.max_players}
           onCancel={() => router.replace("/")}
           onConfirm={() => {
             const row = pendingJoin;
@@ -2242,8 +2256,9 @@ export default function TablePage() {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
-  // The square table (by default for 2, 3 and 4 players, Teams or Solo, not
-  // Muggins, without ?layout=classic): only it shows the
+  // The square table (by default for 2, 3 and 4 players, Teams or Solo,
+  // self-scoring ones too, without ?layout=classic -- 3- and 4-player
+  // self-scoring always): only it shows the
   // deal and the discard tosses -- with every seat filled, as its screens
   // need (3 and 4 players: every game player still at the table, as THE
   // SQUARE SCREEN, 3 AND 4 PLAYERS requires, so a deal is never held for a
@@ -3139,6 +3154,36 @@ export default function TablePage() {
         onConfirm={() => runWinAction("confirm_win")}
       />
     ) : null;
+  // MUGGINS, 3 AND 4 PLAYERS: no win bar -- the plates ARE the win controls
+  // (MugginsPlates; what each says: mugginsPlateStates), me first then
+  // clockwise, as the score plates are. A live match: from win_claim_by and
+  // win_confirmed_by (kept current like the claim; `?? []` for a row without
+  // it); the final board (winnerId): "Won" on the winner's, nothing to tap.
+  // The calls are the win bar's, with the same error pill above.
+  const mugginsPlatesFor = (players: string[], winnerId: string | null) => (
+    <MugginsPlates
+      plates={mugginsPlateStates({
+        order: seatOrderFrom(players, session.user.id).map((id) => ({ userId: id, name: nameOf(id) })),
+        myId: session.user.id,
+        claimBy: winnerId ? null : winClaimBy,
+        confirmedBy: winnerId ? [] : (activeGame?.win_confirmed_by ?? []),
+        winnerId,
+      })}
+      busy={winSending}
+      error={!winnerId && activeGame && winError?.gameId === activeGame.id ? winError.message : null}
+      onClaim={() => runWinAction("claim_win")}
+      onCancel={() => runWinAction("clear_win_claim")}
+      onConfirm={() => runWinAction("confirm_win")}
+    />
+  );
+  // The live controls for a Muggins table of any size (null when there is
+  // nothing to claim): the win bar for 2 players, the plates for 3 and 4.
+  const mugginsControls =
+    capacity > 2
+      ? isMuggins && activeGame?.players && isActive
+        ? mugginsPlatesFor(activeGame.players, null)
+        : null
+      : mugginsWinBar;
 
   // THE SQUARE SCREEN (PRD item 31) -- the default on a 2-player table,
   // unless ?layout=classic (chooseTableLayout), for a dealt
@@ -3180,8 +3225,8 @@ export default function TablePage() {
   // (boardLanesFor), four plates of one player each.
   const squareBoardFor = (seatOrder: string[], teams = false) => {
     const skin = boardSkin;
-    // A self-scoring (Muggins) table (2 players only): no board, pegs or lane
-    // rings -- the self-scoring banner in the board strip's slot.
+    // A self-scoring (Muggins) table (2, 3 or 4 players): no board, pegs or
+    // lane rings -- the self-scoring banner in the board strip's slot.
     if (isMuggins) {
       return {
         laneColorOf: (): string | undefined => undefined,
@@ -3444,6 +3489,7 @@ export default function TablePage() {
               handNo={activeGame.hand_no ?? null}
               opponent={topRow?.header ?? null}
               right={headerRight}
+              muggins={isMuggins}
             />
           }
           opponent={topRow?.row ?? null}
@@ -3504,9 +3550,11 @@ export default function TablePage() {
           }
           hand={<div className="sq-hand-row">{hand}</div>}
           board={ringScores.board}
+          // A self-scoring (Muggins) table: the plates are the win controls
+          // (mugginsPlatesFor).
           scores={
             <div className="sq-plates">
-              <ScoreStrip plates={ringScores.plates} />
+              {isMuggins ? (mugginsControls ?? <div className="h-12" aria-hidden />) : <ScoreStrip plates={ringScores.plates} />}
             </div>
           }
           surface={appearance.surface}
@@ -3593,7 +3641,15 @@ export default function TablePage() {
     return (
       <>
         <SquareTableShell
-          header={<SquareTableHeader code={code} handNo={null} opponent={topRow?.header ?? null} right={headerRight} />}
+          header={
+            <SquareTableHeader
+              code={code}
+              handNo={null}
+              opponent={topRow?.header ?? null}
+              right={headerRight}
+              muggins={isMuggins}
+            />
+          }
           opponent={topRow?.row ?? null}
           middle={
             <>
@@ -3660,9 +3716,11 @@ export default function TablePage() {
             </div>
           }
           board={ringScores.board}
+          // A self-scoring (Muggins) table: the plates, "Won" on the
+          // winner's.
           scores={
             <div className="sq-plates">
-              <ScoreStrip plates={ringScores.plates} />
+              {isMuggins ? mugginsPlatesFor(players, finalBoard.winner_id) : <ScoreStrip plates={ringScores.plates} />}
             </div>
           }
           surface={appearance.surface}
@@ -4056,10 +4114,10 @@ export default function TablePage() {
       // cut, which needs the space and has no hand to show.
       hand={isCutting || inWaitingRoom ? null : hand}
       // A Muggins table has no score strip: the win bar takes its place (see
-      // mugginsWinBar), and nothing at all -- no height -- while no game is
-      // dealt.
+      // mugginsWinBar; 3 and 4 players, the plates: mugginsControls), and
+      // nothing at all -- no height -- while no game is dealt.
       scores={
-        inWaitingRoom ? null : isMuggins ? mugginsWinBar : <ScoreStrip plates={plates} />
+        inWaitingRoom ? null : isMuggins ? mugginsControls : <ScoreStrip plates={plates} />
       }
       surface={appearance.surface}
       back={appearance.back}
