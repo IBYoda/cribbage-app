@@ -137,9 +137,10 @@ function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
 // ellipsis if the gap between the piles is too narrow (the full text is in
 // the tooltip), so the pill always stays inside the gap.
 //
-// Same pattern as PlayerScore: flash on CHANGE of the newest award, not on
-// freshness, so a page loaded with an hour-old award doesn't replay it. Keyed
-// on the award time so a new award restarts the CSS animation.
+// React's "adjusting state when a prop changes" pattern: flash on CHANGE of
+// the newest award, not on freshness, so a page loaded with an hour-old
+// award doesn't replay it. Keyed on the award time so a new award restarts
+// the CSS animation.
 //
 // EACH AWARD IS DECIDED ONCE, when it first arrives after mount: shown or
 // not, for good. Nothing else -- a later change of hideCountAwards, a

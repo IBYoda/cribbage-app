@@ -1665,7 +1665,7 @@ export default function TablePage() {
             // Plays, selection, sort, shown hands, crib, count status. Scores
             // need nothing here: start_game_with_deal reset them, and those
             // table_members UPDATEs arrive on their own -- with last_points
-            // null, so PlayerScore moves to 0 without a flash.
+            // null, so the plates move to 0 without a flash.
             resetHandState();
             handKeyRef.current = `${newGame.id}:${newGame.hand_no ?? 1}`;
             // Only fetch a hand if one can exist. During 'cutting' there are no
@@ -4097,7 +4097,9 @@ export default function TablePage() {
             ? topSeat
               ? <OpponentBand seats={[topSeat]} />
               : null
-            : <OpponentBand seats={seats} />
+            : // Alone at a 2-player table: the middle's WaitingForPlayer
+              // says it, so the band stays quiet (the message shows once).
+              <OpponentBand seats={seats} waitingShown={waitingAlone} />
       }
       sides={
         phase3Layout

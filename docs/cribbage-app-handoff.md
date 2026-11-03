@@ -92,7 +92,7 @@ Exactly **ten** functions are meant to be granted to `authenticated`: `start_gam
 ### In the repo
 
 - `app/` — `login`, `signup`, `profile`, `admin`, `tables/new`, `tables/join`, `tables/[code]` (the main table page, ~1100 lines, one Realtime channel per table)
-- `components/` — `PlayingCard.tsx`, `PlayerScore.tsx`, `PlayArea.tsx`, `CutForDealView.tsx`
+- `components/` — `PlayingCard.tsx`, `PlayArea.tsx`, `CutForDealView.tsx`
 - `lib/` — `supabase.ts`, `cards.ts` (`cardPlayValue`, `cardRankValue`, `sortHand`, rank/suit parsing), `scoring.ts`
 - `scripts/` — `test-scoring.ts`, `ts-resolve.mjs`
 - `docs/` — this file, `cribbage-app-prd.md`, `batch1-manual-test-plan.md`, `batch2a-manual-test-plan.md`, `batch2b-manual-test-plan.md`, `CribbageBasics.pdf`, `images/`, `sql/`

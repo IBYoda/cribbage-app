@@ -12,6 +12,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
+import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
 import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
 import { countingOrder, countingViewN } from "../lib/countingN";
 import { countingView } from "../components/table/countingView";
@@ -2264,6 +2265,54 @@ check("crib pile: real + shown discards, each once, less what is flying", () => 
 check("computer discard shown: remembered per game and hand", () => {
   strictEqual(discardShowKey("g:3"), "nobs:cpu-discard-shown:g:3");
   strictEqual(discardShowKey("g:3") === discardShowKey("g:4"), false);
+});
+
+// TABLE LISTS (lib/tableListing.ts): the admin rows and Open Tables.
+check("admin label: seated/max, then Teams or Solo for 4 players, then Self-Scoring", () => {
+  const label = (seated: number, maxPlayers: number, teamMode: string | null, isMuggins: boolean) =>
+    adminTableLabel({ seated, maxPlayers, teamMode, isMuggins });
+  strictEqual(label(1, 2, "teams", false), "1/2 seated");
+  strictEqual(label(2, 3, "teams", false), "2/3 seated");
+  strictEqual(label(3, 3, "solo", true), "3/3 seated · Self-Scoring");
+  strictEqual(label(4, 4, "teams", false), "4/4 seated · Teams");
+  strictEqual(label(0, 4, "solo", false), "0/4 seated · Solo");
+  strictEqual(label(1, 4, "solo", true), "1/4 seated · Solo · Self-Scoring");
+  strictEqual(label(2, 2, null, true), "2/2 seated · Self-Scoring");
+});
+check("admin names: seat order, nickname trimmed, never an id", () => {
+  deepStrictEqual(
+    seatedNames([
+      { seat: 3, nickname: "Kim" },
+      { seat: 1, nickname: "  Walt " },
+      { seat: 2, nickname: "God" },
+    ]),
+    ["Walt", "God", "Kim"]
+  );
+  // No nickname (null, blank, unread): the app's "A player"; no seat yet: last.
+  deepStrictEqual(
+    seatedNames([
+      { seat: null, nickname: "Late" },
+      { seat: 2, nickname: "  " },
+      { seat: 1, nickname: undefined },
+    ]),
+    ["A player", "A player", "Late"]
+  );
+  deepStrictEqual(seatedNames([]), []);
+  // Long names are kept whole (the row wraps them).
+  strictEqual(seatedNames([{ seat: 1, nickname: "W".repeat(30) }])[0], "W".repeat(30));
+});
+check("Open Tables age filter: waiting tables older than 2 hours hide, live ones never", () => {
+  strictEqual(STALE_WAITING_TABLE_MS, 2 * 60 * 60 * 1000);
+  const now = Date.parse("2026-11-02T20:00:00Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  strictEqual(isStaleWaitingTable({ createdAt: ago(5 * 60 * 1000), gameLive: false }, now), false);
+  strictEqual(isStaleWaitingTable({ createdAt: ago(STALE_WAITING_TABLE_MS), gameLive: false }, now), false);
+  strictEqual(isStaleWaitingTable({ createdAt: ago(STALE_WAITING_TABLE_MS + 1000), gameLive: false }, now), true);
+  strictEqual(isStaleWaitingTable({ createdAt: ago(11 * 60 * 60 * 1000), gameLive: false }, now), true);
+  // In play: never hidden, however old.
+  strictEqual(isStaleWaitingTable({ createdAt: ago(11 * 60 * 60 * 1000), gameLive: true }, now), false);
+  // An unreadable time hides nothing.
+  strictEqual(isStaleWaitingTable({ createdAt: "not a date", gameLive: false }, now), false);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
