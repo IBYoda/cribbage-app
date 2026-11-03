@@ -6,7 +6,9 @@ import { supabase } from "@/lib/supabase";
 import { loadJoinableTables, loadMyTables, type JoinableTable, type MyTable } from "@/lib/openTables";
 import { HomeMenu, type OpenTablesState } from "@/components/brand/HomeMenu";
 
-const REFRESH_MS = 15_000;
+// How often Open Tables re-reads while the tab is visible (was 15 s; 45 s
+// to cut request volume -- the Refresh button reads at once).
+const REFRESH_MS = 45_000;
 
 // THE SIGNED-IN HOME: reads what the main menu shows, then renders HomeMenu.
 // Read-only, through the existing RLS, and each part can fail on its own:
@@ -15,7 +17,7 @@ const REFRESH_MS = 15_000;
 //     that read succeeds and finds the row;
 //   * "Open Tables" (lib/openTables.ts): the open tables the player is
 //     seated at, and the public tables they could join -- two independent
-//     reads, refreshed every 15 seconds while the tab is visible.
+//     reads, refreshed every 45 seconds while the tab is visible.
 // Nothing here touches the Appearance settings or the game tables' data.
 export function HomeView({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const userId = session.user.id;
@@ -66,7 +68,7 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
   );
 }
 
-// The Open Tables list's data. Every 15 seconds while the tab is visible,
+// The Open Tables list's data. Every REFRESH_MS while the tab is visible,
 // paused while it's hidden, at once when it comes back; one refresh at a
 // time; each read keeps its last good rows if it fails, so nothing already
 // on screen is wiped or flickers.

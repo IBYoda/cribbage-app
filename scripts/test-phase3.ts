@@ -14,6 +14,13 @@ import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
 import { hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
+import {
+  pollIntervalMs,
+  profilesToFetch,
+  SAFETY_POLL_CONNECTED_MS,
+  SAFETY_POLL_MS,
+  wonBoardReusable,
+} from "../lib/tableSync";
 import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
 import { countingOrder, countingViewN } from "../lib/countingN";
 import { countingView } from "../components/table/countingView";
@@ -2364,6 +2371,42 @@ check("rejoin: only the rejoined players' plates are blanked; a Teams plate only
     hideRejoinedScores(teams, new Set(["b", "d"])).map((p) => `${p.key}:${p.scoreHidden ? "-" : p.score}`),
     ["team-1:121", "team-2:-"]
   );
+});
+
+// TABLE SYNC (lib/tableSync.ts): fewer requests, same screen.
+check("table sync: the safety poll is 12 s until realtime is connected, 30 s while it is", () => {
+  strictEqual(SAFETY_POLL_MS, 12_000);
+  strictEqual(SAFETY_POLL_CONNECTED_MS, 30_000);
+  strictEqual(pollIntervalMs(false), 12_000);
+  strictEqual(pollIntervalMs(true), 30_000);
+});
+check("table sync: profiles read for new seats, moved seats and missing names; never for the rest", () => {
+  const shown = [
+    { user_id: "a", seat: 1, nickname: "Walt" },
+    { user_id: "b", seat: 2, nickname: "Yoda" },
+    { user_id: "c", seat: 3, nickname: null }, // its profile read never landed
+  ];
+  const rows = [
+    { user_id: "a", seat: 1 }, // unchanged: skipped
+    { user_id: "b", seat: 4 }, // moved seat
+    { user_id: "c", seat: 3 }, // no name yet
+    { user_id: "d", seat: 2 }, // a new seat (or a rejoin)
+  ];
+  deepStrictEqual(profilesToFetch(rows, shown, false), ["b", "c", "d"]);
+  // The poll, as before: only players not on screen.
+  deepStrictEqual(profilesToFetch(rows, shown, true), ["d"]);
+  // The first load (nothing on screen): everyone.
+  deepStrictEqual(profilesToFetch(rows, [], false), ["a", "b", "c", "d"]);
+  // Everyone shown, named and seated as read: nothing.
+  deepStrictEqual(profilesToFetch([{ user_id: "a", seat: 1 }], shown, false), []);
+});
+check("table sync: the won board is kept only for the same game read in full", () => {
+  const shown = (id: string, complete?: boolean) => ({ id, board: complete === undefined ? {} : { complete } });
+  strictEqual(wonBoardReusable(shown("g1", true), "g1"), true);
+  strictEqual(wonBoardReusable(shown("g1", true), "g2"), false); // a different game
+  strictEqual(wonBoardReusable(shown("g1", false), "g1"), false); // an earlier read failed
+  strictEqual(wonBoardReusable(shown("g1"), "g1"), false); // built from the screen at the win
+  strictEqual(wonBoardReusable(null, "g1"), false); // nothing on screen: a reload, a rejoin
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
