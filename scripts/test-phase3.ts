@@ -10,6 +10,7 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
+import { fourPlayerModeOffered, newTableFields } from "../lib/newTable";
 import { displayedRun, goSayers, type PlayEvent } from "../lib/pegging";
 import { countingOrder, countingViewN } from "../lib/countingN";
 import { countingView } from "../components/table/countingView";
@@ -811,6 +812,48 @@ check("4-player Solo: four plates, one a player, in seat order from me (Teams: t
   strictEqual(solo.length, teams.length * 2);
   // Names kept whole for the tooltip (the strip ellipsises them).
   strictEqual(solo[1].members[0].name, "S".repeat(30));
+});
+// START A TABLE (lib/newTable.ts).
+check("Start a Table: Team or Solo is offered only with 4 players (never with Self-Scoring)", () => {
+  strictEqual(fourPlayerModeOffered(4, false), true);
+  strictEqual(fourPlayerModeOffered(2, false), false);
+  strictEqual(fourPlayerModeOffered(3, false), false);
+  for (const n of [2, 3, 4] as const) strictEqual(fourPlayerModeOffered(n, true), false);
+});
+check("Start a Table: the row created -- 2/3 players and Teams exactly as before, Solo for 4", () => {
+  const base = { isPublic: true, isMuggins: false };
+  // 2 and 3 players: no team_mode sent (the database default), whatever the
+  // 4-player choice left behind -- exactly the old insert.
+  for (const n of [2, 3] as const) {
+    for (const mode of ["teams", "solo"] as const) {
+      deepStrictEqual(newTableFields({ ...base, maxPlayers: n, fourPlayerMode: mode }), {
+        is_public: true,
+        is_muggins: false,
+        max_players: n,
+      });
+    }
+  }
+  // 2-player Self-Scoring, private: as before.
+  deepStrictEqual(newTableFields({ isPublic: false, isMuggins: true, maxPlayers: 2, fourPlayerMode: "teams" }), {
+    is_public: false,
+    is_muggins: true,
+    max_players: 2,
+  });
+  // 4 players, Teams (the default): team_mode 'teams', as before.
+  deepStrictEqual(newTableFields({ ...base, maxPlayers: 4, fourPlayerMode: "teams" }), {
+    is_public: true,
+    is_muggins: false,
+    max_players: 4,
+    team_mode: "teams",
+  });
+  // 4 players, Solo: team_mode 'solo' -- the row the solo verification
+  // suite (docs/sql/phase3-solo-verification.sql, C1) proves is accepted.
+  deepStrictEqual(newTableFields({ ...base, maxPlayers: 4, fourPlayerMode: "solo" }), {
+    is_public: true,
+    is_muggins: false,
+    max_players: 4,
+    team_mode: "solo",
+  });
 });
 check("ring layout: side names and columns keyed on whether the top seat is filled", () => {
   deepStrictEqual(ringLayout({ top: false, sides: true }), {

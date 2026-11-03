@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
+import { fourPlayerModeOffered, newTableFields, type FourPlayerMode } from "@/lib/newTable";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -36,9 +37,11 @@ export default function NewTablePage() {
   // creates the table; a Regular table never sees it.
   const [mugginsNoticeOpen, setMugginsNoticeOpen] = useState(false);
   // How many players: 2, 3 or 4. Muggins is 2-player only (the database
-  // refuses anything else too), so each greys out the other. Always sent; 4
-  // players play Teams.
+  // refuses anything else too), so each greys out the other. Always sent.
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
+  // With 4 players: Teams (the default) or Solo. Sent only for 4 players
+  // (newTableFields).
+  const [fourPlayerMode, setFourPlayerMode] = useState<FourPlayerMode>("teams");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -61,10 +64,7 @@ export default function NewTablePage() {
         .insert({
           code,
           created_by: session.user.id,
-          is_public: isPublic,
-          is_muggins: isMuggins,
-          max_players: maxPlayers,
-          ...(maxPlayers === 4 ? { team_mode: "teams" } : {}),
+          ...newTableFields({ isPublic, isMuggins, maxPlayers, fourPlayerMode }),
         })
         .select("code")
         .single();
@@ -121,6 +121,8 @@ export default function NewTablePage() {
         onMugginsChange={setIsMuggins}
         maxPlayers={maxPlayers}
         onMaxPlayersChange={setMaxPlayers}
+        fourPlayerMode={fourPlayerMode}
+        onFourPlayerModeChange={setFourPlayerMode}
       />
 
       {/* Stays disabled once created, while the table page loads -- a second
@@ -159,8 +161,9 @@ export default function NewTablePage() {
 // THE TABLE OPTIONS: three groups, always all visible. Visibility, Scoring
 // and Players are all live and sent (tables.is_public, is_muggins,
 // max_players). 3 and 4 players can be picked -- except with Muggins,
-// which is 2-player only, so each greys out the other. 4 players play
-// Teams: Team is shown checked and fixed, and Solo is still "Coming soon".
+// which is 2-player only, so each greys out the other. With 4 players, Team
+// or Solo (team_mode); the pair is greyed out for 2 and 3 players
+// (fourPlayerModeOffered).
 function TableOptions({
   isPublic,
   onVisibilityChange,
@@ -168,6 +171,8 @@ function TableOptions({
   onMugginsChange,
   maxPlayers,
   onMaxPlayersChange,
+  fourPlayerMode,
+  onFourPlayerModeChange,
 }: {
   isPublic: boolean;
   onVisibilityChange: (isPublic: boolean) => void;
@@ -175,7 +180,10 @@ function TableOptions({
   onMugginsChange: (isMuggins: boolean) => void;
   maxPlayers: 2 | 3 | 4;
   onMaxPlayersChange: (maxPlayers: 2 | 3 | 4) => void;
+  fourPlayerMode: FourPlayerMode;
+  onFourPlayerModeChange: (mode: FourPlayerMode) => void;
 }) {
+  const modeOffered = fourPlayerModeOffered(maxPlayers, isMuggins);
   // Muggins is 2-player only.
   const mugginsBlocked = maxPlayers !== 2;
   // 3 or 4: never with Muggins.
@@ -254,17 +262,32 @@ function TableOptions({
             note={morePlayersNote}
           />
         </div>
-        <fieldset className="flex flex-col gap-2 pl-3" disabled={maxPlayers !== 4}>
+        <fieldset className="flex flex-col gap-2 pl-3" disabled={!modeOffered}>
           <legend className="mb-1 text-sm">With 4 players: Team or Solo</legend>
           <div className="grid grid-cols-2 gap-2">
-            {/* Fixed: the only 4-player mode for now. */}
-            <OptionCard name="four-player-mode" label="Team" checked={maxPlayers === 4} />
-            <OptionCard name="four-player-mode" label="Solo" checked={false} disabled />
+            <OptionCard
+              name="four-player-mode"
+              label="Team"
+              checked={modeOffered && fourPlayerMode === "teams"}
+              onChange={() => onFourPlayerModeChange("teams")}
+              disabled={!modeOffered}
+              note={null}
+            />
+            <OptionCard
+              name="four-player-mode"
+              label="Solo"
+              checked={modeOffered && fourPlayerMode === "solo"}
+              onChange={() => onFourPlayerModeChange("solo")}
+              disabled={!modeOffered}
+              note={null}
+            />
           </div>
         </fieldset>
         <p id="players-help" className="text-sm">
           {maxPlayers === 4
-            ? "Two teams: partners sit opposite and share one score"
+            ? fourPlayerMode === "solo"
+              ? "Everyone plays for themselves"
+              : "Two teams: partners sit opposite and share one score"
             : maxPlayers === 3
               ? "Everyone plays for themselves"
               : "Head to head"}
