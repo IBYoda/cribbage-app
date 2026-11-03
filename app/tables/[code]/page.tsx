@@ -23,6 +23,7 @@ import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
 import { mugginsPlateStates } from "@/lib/mugginsPlates";
 import { hideRejoinedScores, scoreFromThisGame } from "@/lib/resultScores";
+import { pollIntervalMs, profilesToFetch, wonBoardReusable } from "@/lib/tableSync";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -248,10 +249,15 @@ type FinishedGame = {
 //   crib: the four crib cards, or null while unreadable (face-down). Always
 //     complete by the time of any win: the starter is cut, and his heels
 //     scored, only once every player has discarded.
+//   complete: set only by readWonBoard when all three reads succeeded, so a
+//     later full refresh of the same won game can keep this board instead of
+//     reading it again (wonBoardReusable, lib/tableSync.ts). Unset on a board
+//     built from what was on screen when the game ended.
 type WonBoard = {
   finalRun: PlayEvent[];
   hands: Record<string, string[]>;
   crib: string[] | null;
+  complete?: boolean;
 };
 
 function finalRunOf(plays: PlayEvent[], playSegment: number) {
@@ -262,7 +268,11 @@ function finalRunOf(plays: PlayEvent[], playSegment: number) {
 // user; game_hands and game_cribs by RLS (see WonBoard above). Rows stay until
 // next_hand, which an ended game never reaches.
 async function readWonBoard(gameId: string, playSegment: number): Promise<WonBoard> {
-  const [{ data: playRows }, { data: handRows }, { data: cribRow }] = await Promise.all([
+  const [
+    { data: playRows, error: playsError },
+    { data: handRows, error: handsError },
+    { data: cribRow, error: cribError },
+  ] = await Promise.all([
     supabase
       .from("game_plays")
       .select("seq, segment, user_id, kind, card, count_after")
@@ -275,6 +285,7 @@ async function readWonBoard(gameId: string, playSegment: number): Promise<WonBoa
     finalRun: finalRunOf((playRows as PlayEvent[]) ?? [], playSegment),
     hands: Object.fromEntries((handRows ?? []).map((r) => [r.user_id, r.cards as string[]])),
     crib: cribRow?.cards ?? null,
+    complete: !playsError && !handsError && !cribError,
   };
 }
 
@@ -353,9 +364,6 @@ function membersDiff(shown: Member[], fresh: Member[]) {
   for (const s of shown) if (!fresh.some((m) => m.user_id === s.user_id)) out.push(`left ${s.user_id}`);
   return out;
 }
-
-// Every 12 seconds while the tab is visible -- see the poll effect.
-const SAFETY_POLL_MS = 12_000;
 
 // A closed computer table (leave_computer_table) has no ended_reason: it was
 // closed by its player, not an admin.
@@ -517,6 +525,9 @@ export default function TablePage() {
   // activeGameIdRef, so realtime events are matched against it at once. Its
   // UPDATEs carry New Game taps (ready_by), and nothing else is taken from them.
   const finishedGameIdRef = useRef<string | null>(null);
+  // The won game on screen, board included, for readTableState to keep its
+  // fully read board (wonBoardReusable) -- in step through the effect below.
+  const finishedGameRef = useRef<FinishedGame | null>(null);
   // Every write of finishedGame goes through here: it keeps the ref in step,
   // and a second read of the SAME won game merges ready_by rather than
   // replacing it (see unionIds), so an older read can't drop a tap.
@@ -817,7 +828,8 @@ export default function TablePage() {
   // and applies them -- replacing the roster, or merging by user_id if a
   // roster event arrived during the read. Returns an error message, or null.
   // poll: compare with the screen first, apply only a difference, and log it;
-  // profiles are read only for players not already on screen.
+  // profiles are read only for players not already on screen. Otherwise
+  // (a full refresh), also for a changed seat or a name never loaded.
   const loadMembers = useCallback(async (tableId: string, poll = false): Promise<string | null> => {
     for (let attempt = 0; ; attempt++) {
       const ticket = ++membersReadSeqRef.current;
@@ -833,7 +845,14 @@ export default function TablePage() {
 
       const rows = memberRows ?? [];
       const shownById = new Map(membersRef.current.map((m) => [m.user_id, m]));
-      const profileIds = rows.map((m) => m.user_id).filter((id) => !poll || !shownById.has(id));
+      // Players already shown with their name, in the same seat, keep it
+      // (profile edits arrive through realtime); a new seat, a rejoin or a
+      // missing name is read (profilesToFetch, lib/tableSync.ts).
+      const profileIds = profilesToFetch(
+        rows.map((m) => ({ user_id: m.user_id, seat: m.seat ?? null })),
+        membersRef.current,
+        poll
+      );
       const { data: profileRows } = profileIds.length
         ? await supabase.from("profiles").select("id, nickname, avatar_url").in("id", profileIds)
         : { data: [] as { id: string; nickname: string | null; avatar_url: string | null }[] };
@@ -968,7 +987,12 @@ export default function TablePage() {
                 ready_by: lastGame.ready_by ?? [],
                 starter_card: lastGame.starter_card,
                 dealer_id: lastGame.dealer_id,
-                board: await readWonBoard(lastGame.id, lastGame.play_segment ?? 0),
+                // The same won game already on screen with a fully read
+                // board: keep it (nothing on it changes once the game has
+                // ended) rather than read the three tables again.
+                board: wonBoardReusable(finishedGameRef.current, lastGame.id)
+                  ? finishedGameRef.current!.board
+                  : await readWonBoard(lastGame.id, lastGame.play_segment ?? 0),
               }
             : null;
 
@@ -1925,14 +1949,20 @@ export default function TablePage() {
     };
   }, [table, refreshTableState]);
 
-  // TABLE SYNC: THE SAFETY POLL. Every SAFETY_POLL_MS while the tab is
-  // visible, a LIGHT read -- the table's live game row and the roster -- to
+  // TABLE SYNC: THE SAFETY POLL. While the tab is visible, every
+  // SAFETY_POLL_MS (12 s) -- or SAFETY_POLL_CONNECTED_MS (30 s) while the
+  // channel reports SUBSCRIBED (pollIntervalMs, lib/tableSync.ts) -- a LIGHT read -- the table's live game row and the roster -- to
   // repair anything a missed realtime event left wrong. Skipped while the tab
   // is hidden, while one of my actions or a full refresh is in flight, and
   // once the table has ended. A difference is applied (the game through
   // reconcileGame and its tickets, the roster through the members guard) and
   // logged as "[table-sync] poll repaired:", so a missed event shows in the
   // console instead of being silently hidden.
+  // "Connected" is exactly the channel's last status being SUBSCRIBED
+  // (realtimeStatus, set in the subscribe callback above); "connecting"
+  // (startup) and "disconnected" (CLOSED, TIMED_OUT, CHANNEL_ERROR) poll at
+  // 12 s.
+  const realtimeConnected = realtimeStatus === "connected";
   useEffect(() => {
     if (!table) return;
     const tableId = table.id;
@@ -1986,15 +2016,20 @@ export default function TablePage() {
       pollOnce().finally(() => {
         polling = false;
       });
-    }, SAFETY_POLL_MS);
+    }, pollIntervalMs(realtimeConnected));
     return () => window.clearInterval(timer);
-  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays]);
+    // realtimeConnected: a change of channel status restarts the interval at
+    // the new pace, so a disconnect is back to 12 s at once.
+  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, realtimeConnected]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
   // update, so this is a legitimate effect rather than a cascading render.
   useEffect(() => {
     activeGameIdRef.current = activeGame?.id ?? null;
   }, [activeGame?.id]);
+  useEffect(() => {
+    finishedGameRef.current = finishedGame;
+  }, [finishedGame]);
 
   // The starter's slide is over once it has had its time: a starter mounted
   // again later in the same count just sits in its place.
