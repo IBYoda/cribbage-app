@@ -32,7 +32,15 @@ export type ScorePlate = {
   // The square table only: the colour of this player's lane on the board
   // (CribbageBoard), as the ring round their avatar. Unset: the usual ring.
   laneColor?: string;
+  // A won game's result only: this plate's seat was joined after the game
+  // began (the player left and came back), so its score is the new seat's 0,
+  // not the game's -- left blank rather than shown wrong
+  // (hideRejoinedScores, lib/resultScores.ts).
+  scoreHidden?: boolean;
 };
+
+// Screen readers hear why a plate has no score.
+const HIDDEN_SCORE = <span className="sr-only">Score not shown: rejoined after this game</span>;
 
 // The scores, directly under my hand: a row of equal-width plates, 48px tall.
 // Fits 2, 3 or 4 plates at 375px wide (4 plates are ~90px each: the name
@@ -80,7 +88,9 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
                 {plate.hasDealer && <DealerChip />}
               </span>
             </div>
-            <span className="shrink-0 text-xl font-bold tabular-nums">{plate.score}</span>
+            <span className="shrink-0 text-xl font-bold tabular-nums">
+              {plate.scoreHidden ? HIDDEN_SCORE : plate.score}
+            </span>
           </div>
         ))}
       </div>
@@ -117,7 +127,9 @@ function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
                   </span>
                   {plate.hasDealer && <DealerChip />}
                 </span>
-                <span className="plate-stack__score font-bold tabular-nums">{plate.score}</span>
+                <span className="plate-stack__score font-bold tabular-nums">
+                  {plate.scoreHidden ? HIDDEN_SCORE : plate.score}
+                </span>
               </div>
             </div>
           );

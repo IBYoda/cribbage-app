@@ -22,6 +22,7 @@ import { CountsToggle } from "@/components/table/CountsToggle";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
 import { mugginsPlateStates } from "@/lib/mugginsPlates";
+import { hideRejoinedScores, scoreFromThisGame } from "@/lib/resultScores";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -219,9 +220,12 @@ const GAME_COLUMNS =
 // and who has tapped New Game since (stored on the WON game's own row).
 // starter_card, dealer_id and board are THE FINAL BOARD: the table as the
 // match ended -- the starter, whose hand it was, and (board) the last run, both
-// hands and the crib.
+// hands and the crib. created_at is when the game began: a seat joined
+// after it (a player who left and came back) can't hold this game's score
+// (scoreFromThisGame, lib/resultScores.ts). Null if it wasn't read.
 type FinishedGame = {
   id: string;
+  created_at: string | null;
   winner_id: string | null;
   players: string[];
   ready_by: string[];
@@ -947,7 +951,7 @@ export default function TablePage() {
         const { data: lastGame } = await supabase
           .from("games")
           .select(
-            "id, ended_reason, winner_id, players, ready_by, starter_card, dealer_id, play_segment"
+            "id, created_at, ended_reason, winner_id, players, ready_by, starter_card, dealer_id, play_segment"
           )
           .eq("table_id", tableId)
           .order("created_at", { ascending: false })
@@ -958,6 +962,7 @@ export default function TablePage() {
           lastGame && lastGame.ended_reason === "won"
             ? {
                 id: lastGame.id,
+                created_at: lastGame.created_at ?? null,
                 winner_id: lastGame.winner_id,
                 players: lastGame.players ?? [],
                 ready_by: lastGame.ready_by ?? [],
@@ -1689,6 +1694,7 @@ export default function TablePage() {
           gameEventSeqRef.current++; // see the safety poll
           const updatedGame = payload.new as {
             id: string;
+            created_at?: string | null;
             status: string;
             ended_reason: string | null;
             players: string[] | null;
@@ -1774,6 +1780,7 @@ export default function TablePage() {
               const mine = myHandRef.current;
               showFinishedGame({
                 id: updatedGame.id,
+                created_at: updatedGame.created_at ?? null,
                 winner_id: updatedGame.winner_id,
                 players: updatedGame.players ?? [],
                 ready_by: updatedGame.ready_by ?? [],
@@ -2514,6 +2521,17 @@ export default function TablePage() {
   const winner = members.find((m) => m.user_id === finishedGame?.winner_id);
   // THE FINAL BOARD: the won game's result, while no game is live.
   const finalBoard = activeGame ? null : finishedGame;
+  // A WON GAME'S RESULT AFTER A REJOIN: the players whose seat was joined
+  // after the won game began (they left and came back) -- their seat's score
+  // is the new seat's 0, not the game's, so the result hides it (the winner
+  // banner's number, their plate) rather than show it wrong. Empty during
+  // play, and for everyone who stayed seated.
+  const rejoinedIds = new Set(
+    finalBoard
+      ? members.filter((m) => !scoreFromThisGame(m.joined_at, finalBoard.created_at)).map((m) => m.user_id)
+      : []
+  );
+  const winnerScoreShown = !!winner && !rejoinedIds.has(winner.user_id);
   // Whose hand it was: the live game's dealer, or the won game's.
   const handDealerId = activeGame ? activeGame.dealer_id : (finalBoard?.dealer_id ?? null);
 
@@ -2623,24 +2641,28 @@ export default function TablePage() {
   // players: one plate per player, me first -- exactly the list this screen
   // always built. 3 players and 4-player Solo: one per player, me first,
   // then clockwise. 4-player Teams: one per team, my team first, the flash
-  // naming the partner who scored.
+  // naming the partner who scored. On a won game's result, a rejoined
+  // player's plate is left blank (hideRejoinedScores; rejoinedIds above).
   const plateMembers: Member[] = phase3Layout && gamePlayers
     ? seatOrderFrom(gamePlayers, session.user.id).flatMap((id) => members.filter((m) => m.user_id === id))
     : [...(me ? [me] : []), ...opponents];
-  const plates: ScorePlate[] = buildPlates({
-    rows: plateMembers.map((m) => ({
-      user_id: m.user_id,
-      name: displayName(m),
-      avatar_url: m.avatar_url,
-      score: m.score,
-      last_points: m.last_points,
-      last_reason: m.last_reason,
-      last_awarded_at: m.last_awarded_at,
-    })),
-    myId: session.user.id,
-    dealerId: handDealerId,
-    teamsPlayers: phase3Layout && isTeams && gamePlayers ? gamePlayers : null,
-  });
+  const plates: ScorePlate[] = hideRejoinedScores(
+    buildPlates({
+      rows: plateMembers.map((m) => ({
+        user_id: m.user_id,
+        name: displayName(m),
+        avatar_url: m.avatar_url,
+        score: m.score,
+        last_points: m.last_points,
+        last_reason: m.last_reason,
+        last_awarded_at: m.last_awarded_at,
+      })),
+      myId: session.user.id,
+      dealerId: handDealerId,
+      teamsPlayers: phase3Layout && isTeams && gamePlayers ? gamePlayers : null,
+    }),
+    rejoinedIds
+  );
 
   // Every error the old layout stacked into the page as extra lines now
   // shares one overlay at the bottom of the middle region.
@@ -2840,8 +2862,15 @@ export default function TablePage() {
             {/* Not on a Muggins table: it shows no score anywhere. */}
             {winner && !isMuggins && (
               <>
-                {" "}
-                {winner.score}
+                {/* No number if the winner left and came back: their seat's
+                    score is the new seat's 0 (rejoinedIds). Their new seat
+                    has no last award either, so nothing follows. */}
+                {winnerScoreShown && (
+                  <>
+                    {" "}
+                    {winner.score}
+                  </>
+                )}
                 {/* With count numbers hidden, a count win shows
                     only the score: no breakdown, no (+N). */}
                 {winner.last_reason &&
