@@ -13,11 +13,15 @@ import { useEffect, useRef } from "react";
 export function MugginsNotice({
   open,
   mode,
+  playerCount = 2,
   onConfirm,
   onCancel,
 }: {
   open: boolean;
   mode: "create" | "join";
+  // The table's size: with 3 or 4 players EVERY other player confirms the
+  // win (confirm_win), so the notice says so; 2 players read as before.
+  playerCount?: number;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -64,7 +68,8 @@ export function MugginsNotice({
           score, on a physical board or a tracker of your choice.
         </p>
         <p>
-          To end a match, tap &quot;I win&quot; when you&apos;ve won. The other player then taps
+          To end a match, tap &quot;I win&quot; when you&apos;ve won.{" "}
+          {playerCount > 2 ? "Every other player" : "The other player"} then taps
           &quot;Confirm loss&quot; and the match is over. Made a mistake or changed your mind? Tap
           &quot;I win&quot; again to take it back.
         </p>

@@ -4,7 +4,8 @@
 // them, and the dealer's crib and deck sit beside the dealer's hand. Tested
 // by scripts/test-phase3.ts. The square layout is the default for 2-, 3- and
 // 4-player tables (Teams and Solo), self-scoring (Muggins) ones included --
-// they are 2-player only (chooseTableLayout, at the end).
+// and the only layout for 3- and 4-player self-scoring (chooseTableLayout,
+// at the end).
 
 import { laneOf } from "@/lib/boardLayout";
 import { countingOrder } from "@/lib/countingN";
@@ -207,6 +208,9 @@ export function countingStarterPlace(dealer: SeatPosition | null, counting: bool
 //     ?layout=classic on the page's URL gives the classic table
 //     (?layout=square, a missing or any other value is the default). URL
 //     only, nothing saved.
+//   * 3- and 4-player self-scoring tables: square always (the banner in the
+//     board's place, the win controls on the plates); ?layout=classic is
+//     ignored.
 export type TableLayoutChoice = "square" | "classic";
 
 export type TableScreen = "waiting-room" | "cut" | "discard" | "pegging" | "counting" | "won" | "ended" | "other";
@@ -221,9 +225,14 @@ export function isSquareTable(input: {
   // A 4-player table in team_mode 'teams'.
   teams?: boolean;
 }): boolean {
-  // Self-scoring (Muggins) tables are 2-player only: the 2-player square
-  // layout, with the self-scoring banner in the board's place.
-  if (input.isMuggins) return input.playerCount === 2 && input.layoutParam !== "classic";
+  // Self-scoring (Muggins) tables, with the self-scoring banner in the
+  // board's place: 2 players follow the 2-player rule (?layout=classic gives
+  // the classic table); 3 and 4 players are square ONLY -- the param is
+  // ignored, because their win controls live on the square table's plates.
+  if (input.isMuggins) {
+    if (input.playerCount === 3 || input.playerCount === 4) return true;
+    return input.playerCount === 2 && input.layoutParam !== "classic";
+  }
   // 4 players: Teams and Solo alike (Solo on the 4-lane board).
   const squareSize = input.playerCount === 2 || input.playerCount === 3 || input.playerCount === 4;
   return squareSize && input.layoutParam !== "classic";

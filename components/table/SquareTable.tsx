@@ -6,8 +6,9 @@ import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearanc
 import type { ScreenSide } from "@/lib/tableLayout";
 
 // THE SQUARE TABLE (PRD item 31, docs/mockups/table-redesign/) -- the default
-// layout of a 2-player table that isn't Muggins (chooseTableLayout,
-// lib/tableLayout.ts; ?layout=classic for the classic one), and of the dev
+// layout of 2-, 3- and 4-player tables, self-scoring (Muggins) ones
+// included (chooseTableLayout, lib/tableLayout.ts; ?layout=classic for the
+// classic one, except on a 3- or 4-player self-scoring table), and of the dev
 // mock (app/dev/table-mock). Square-only versions of the shell, the header
 // and the across player's seat, so the classic TableShell, TableHeader and
 // OpponentBand stay exactly as they are. Sizes are in app/globals.css ("THE SQUARE TABLE").

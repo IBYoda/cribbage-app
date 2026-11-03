@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
-import { fourPlayerModeOffered, newTableFields, type FourPlayerMode } from "@/lib/newTable";
+import { TableOptions } from "@/components/brand/TableOptions";
+import { newTableFields, type FourPlayerMode } from "@/lib/newTable";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -36,11 +37,11 @@ export default function NewTablePage() {
   // The Muggins confirmation (MugginsNotice). Only its "Start Self-Scoring (Muggins) table"
   // creates the table; a Regular table never sees it.
   const [mugginsNoticeOpen, setMugginsNoticeOpen] = useState(false);
-  // How many players: 2, 3 or 4. Muggins is 2-player only (the database
-  // refuses anything else too), so each greys out the other. Always sent.
+  // How many players: 2, 3 or 4, with Regular play or Self-Scoring alike.
+  // Always sent.
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
-  // With 4 players: Teams (the default) or Solo. Sent only for 4 players
-  // (newTableFields).
+  // With 4 players: Teams (the default) or Solo. Sent only for 4 players,
+  // and never with Self-Scoring, which has no Team/Solo (newTableFields).
   const [fourPlayerMode, setFourPlayerMode] = useState<FourPlayerMode>("teams");
 
   useEffect(() => {
@@ -148,6 +149,7 @@ export default function NewTablePage() {
       <MugginsNotice
         open={mugginsNoticeOpen}
         mode="create"
+        playerCount={maxPlayers}
         onCancel={() => setMugginsNoticeOpen(false)}
         onConfirm={() => {
           setMugginsNoticeOpen(false);
@@ -155,185 +157,5 @@ export default function NewTablePage() {
         }}
       />
     </CardRoomFrame>
-  );
-}
-
-// THE TABLE OPTIONS: three groups, always all visible. Visibility, Scoring
-// and Players are all live and sent (tables.is_public, is_muggins,
-// max_players). 3 and 4 players can be picked -- except with Muggins,
-// which is 2-player only, so each greys out the other. With 4 players, Team
-// or Solo (team_mode); the pair is greyed out for 2 and 3 players
-// (fourPlayerModeOffered).
-function TableOptions({
-  isPublic,
-  onVisibilityChange,
-  isMuggins,
-  onMugginsChange,
-  maxPlayers,
-  onMaxPlayersChange,
-  fourPlayerMode,
-  onFourPlayerModeChange,
-}: {
-  isPublic: boolean;
-  onVisibilityChange: (isPublic: boolean) => void;
-  isMuggins: boolean;
-  onMugginsChange: (isMuggins: boolean) => void;
-  maxPlayers: 2 | 3 | 4;
-  onMaxPlayersChange: (maxPlayers: 2 | 3 | 4) => void;
-  fourPlayerMode: FourPlayerMode;
-  onFourPlayerModeChange: (mode: FourPlayerMode) => void;
-}) {
-  const modeOffered = fourPlayerModeOffered(maxPlayers, isMuggins);
-  // Muggins is 2-player only.
-  const mugginsBlocked = maxPlayers !== 2;
-  // 3 or 4: never with Muggins.
-  const morePlayersNote = isMuggins ? "Not with Self-Scoring (Muggins)" : null;
-  const morePlayersDisabled = isMuggins;
-  return (
-    <div className="flex flex-col gap-4">
-      <fieldset className="flex flex-col gap-1.5" aria-describedby="visibility-help">
-        <legend className="mb-1.5 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
-          Visibility
-        </legend>
-        <div className="grid grid-cols-2 gap-2">
-          <OptionCard
-            name="visibility"
-            label="Public"
-            checked={isPublic}
-            onChange={() => onVisibilityChange(true)}
-          />
-          <OptionCard
-            name="visibility"
-            label="Private"
-            checked={!isPublic}
-            onChange={() => onVisibilityChange(false)}
-          />
-        </div>
-        <p id="visibility-help" className="text-sm">
-          {isPublic ? "Listed in Open Tables" : "Only people with your code can join"}
-        </p>
-      </fieldset>
-
-      <fieldset className="flex flex-col gap-1.5" aria-describedby="scoring-help">
-        <legend className="mb-1.5 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
-          Scoring
-        </legend>
-        <div className="grid grid-cols-2 gap-2">
-          <OptionCard
-            name="scoring"
-            label="Regular play"
-            checked={!isMuggins}
-            onChange={() => onMugginsChange(false)}
-          />
-          <OptionCard
-            name="scoring"
-            label="Self-Scoring (Muggins)"
-            checked={isMuggins}
-            onChange={() => onMugginsChange(true)}
-            disabled={mugginsBlocked}
-            note={mugginsBlocked ? "2 players only" : null}
-          />
-        </div>
-        <p id="scoring-help" className="text-sm">
-          {isMuggins ? "No scoring: you keep your own score" : "The app keeps the score"}
-        </p>
-      </fieldset>
-
-      <fieldset className="flex flex-col gap-1.5" aria-describedby="players-help">
-        <legend className="mb-1.5 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
-          Players
-        </legend>
-        <div className="grid grid-cols-3 gap-2">
-          <OptionCard name="players" label="2" checked={maxPlayers === 2} onChange={() => onMaxPlayersChange(2)} />
-          <OptionCard
-            name="players"
-            label="3"
-            checked={maxPlayers === 3}
-            onChange={() => onMaxPlayersChange(3)}
-            disabled={morePlayersDisabled}
-            note={morePlayersNote}
-          />
-          <OptionCard
-            name="players"
-            label="4"
-            checked={maxPlayers === 4}
-            onChange={() => onMaxPlayersChange(4)}
-            disabled={morePlayersDisabled}
-            note={morePlayersNote}
-          />
-        </div>
-        <fieldset className="flex flex-col gap-2 pl-3" disabled={!modeOffered}>
-          <legend className="mb-1 text-sm">With 4 players: Team or Solo</legend>
-          <div className="grid grid-cols-2 gap-2">
-            <OptionCard
-              name="four-player-mode"
-              label="Team"
-              checked={modeOffered && fourPlayerMode === "teams"}
-              onChange={() => onFourPlayerModeChange("teams")}
-              disabled={!modeOffered}
-              note={null}
-            />
-            <OptionCard
-              name="four-player-mode"
-              label="Solo"
-              checked={modeOffered && fourPlayerMode === "solo"}
-              onChange={() => onFourPlayerModeChange("solo")}
-              disabled={!modeOffered}
-              note={null}
-            />
-          </div>
-        </fieldset>
-        <p id="players-help" className="text-sm">
-          {maxPlayers === 4
-            ? fourPlayerMode === "solo"
-              ? "Everyone plays for themselves"
-              : "Two teams: partners sit opposite and share one score"
-            : maxPlayers === 3
-              ? "Everyone plays for themselves"
-              : "Head to head"}
-        </p>
-      </fieldset>
-    </div>
-  );
-}
-
-// One choice: a real radio inside its label (see .option-card in
-// app/globals.css). A disabled one says why -- "Coming soon" unless a note
-// says otherwise ("2 players only") -- as part of its label, so a screen
-// reader hears it too. note={null} shows nothing.
-function OptionCard({
-  name,
-  label,
-  checked,
-  onChange,
-  disabled = false,
-  note,
-}: {
-  name: string;
-  label: string;
-  checked: boolean;
-  onChange?: () => void;
-  disabled?: boolean;
-  note?: string | null;
-}) {
-  const reason = disabled ? (note === undefined ? "Coming soon" : note) : null;
-  return (
-    <label className="option-card">
-      <input
-        type="radio"
-        name={name}
-        value={label}
-        checked={checked}
-        onChange={onChange}
-        readOnly={!onChange}
-        disabled={disabled}
-        className="sr-only"
-      />
-      <span className="option-dot" aria-hidden="true" />
-      <span className="flex flex-col leading-tight">
-        <span className="font-semibold">{label}</span>
-        {reason && <span className="coming-soon">{reason}</span>}
-      </span>
-    </label>
   );
 }
