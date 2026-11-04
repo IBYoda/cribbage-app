@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { AuthCard } from "@/components/brand/AuthCard";
+import { NotConfirmedNotice } from "@/components/brand/NotConfirmedNotice";
+import { isEmailNotConfirmed } from "@/lib/authFlow";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,16 +14,24 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
+  // Refused because the address isn't confirmed yet ("Confirm email" on):
+  // a friendly explanation and Resend, instead of the raw message.
+  const [notConfirmed, setNotConfirmed] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("loading");
     setMessage(null);
+    setNotConfirmed(false);
 
     const { error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
       setStatus("error");
+      if (isEmailNotConfirmed(error)) {
+        setNotConfirmed(true);
+        return;
+      }
       setMessage(error.message);
       return;
     }
@@ -77,6 +87,8 @@ export default function LoginPage() {
 
         {message && <p className="text-sm text-[var(--error-on-felt)]">{message}</p>}
       </form>
+
+      {notConfirmed && <NotConfirmedNotice email={email} />}
 
       <Link href="/forgot-password" className="footer-link self-center text-sm">
         Forgot password?
