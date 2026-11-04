@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { nicknameStepHref } from "@/lib/nickname";
+import { fetchNeedsNickname } from "@/lib/profileNickname";
 import { cardPlayValue, sortHand } from "@/lib/cards";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { CutForDealView } from "@/components/CutForDealView";
@@ -393,6 +395,10 @@ export default function TablePage() {
   // seated at, waiting for "Join Self-Scoring (Muggins) table". Nothing about the table is
   // loaded or shown, and no seat exists, until they agree.
   const [pendingJoin, setPendingJoin] = useState<TableRow | null>(null);
+  // THE NICKNAME GATE: a player without a nickname, about to take a NEW
+  // seat, is on their way to the nickname step (and back here after). The
+  // page stays "Loading..." meanwhile.
+  const [toNickname, setToNickname] = useState(false);
   // MUGGINS: no visible scoring on this table, for everyone (see TableRow).
   const isMuggins = table?.is_muggins === true;
   // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
@@ -1079,6 +1085,32 @@ export default function TablePage() {
         return;
       }
 
+      // Who is seated: for the nickname gate and the Muggins notice below.
+      const { data: seats, error: seatsError } = await supabase
+        .from("table_members")
+        .select("user_id")
+        .eq("table_id", tableRow.id);
+      if (cancelled) return;
+      const seated = (seats ?? []).map((m) => m.user_id);
+      const isMember = !seatsError && seated.includes(session!.user.id);
+      const isFull = !seatsError && seated.length >= (tableRow.max_players ?? 2);
+
+      // THE NICKNAME GATE. A NEW seat needs a nickname first: off to the
+      // nickname step, back to this table after. Never a player already
+      // seated (mid-game, a refresh, Rejoin), never a full table (the server
+      // refuses the seat as before), and not when the seats or the profile
+      // can't be read -- someone mid-game must never be locked out by a
+      // failed read. Client-side only (the PRD, 11.6).
+      if (!seatsError && !isMember && !isFull) {
+        const needs = await fetchNeedsNickname(session!.user.id);
+        if (cancelled) return;
+        if (needs === true) {
+          setToNickname(true);
+          router.replace(nicknameStepHref(`/tables/${tableRow.code}`));
+          return;
+        }
+      }
+
       // THE JOINER'S MUGGINS NOTICE. A Muggins table asks a new player to
       // agree before they are seated: not the creator (they agreed when
       // creating), not a player already seated (a refresh, Rejoin), and not
@@ -1087,14 +1119,6 @@ export default function TablePage() {
       // If the seats can't be read, ask anyway -- never seat without
       // agreement.
       if (tableRow.is_muggins && tableRow.created_by !== session!.user.id) {
-        const { data: seats, error: seatsError } = await supabase
-          .from("table_members")
-          .select("user_id")
-          .eq("table_id", tableRow.id);
-        if (cancelled) return;
-        const seated = (seats ?? []).map((m) => m.user_id);
-        const isMember = !seatsError && seated.includes(session!.user.id);
-        const isFull = !seatsError && seated.length >= (tableRow.max_players ?? 2);
         if (!isMember && !isFull) {
           setPendingJoin(tableRow);
           return;
@@ -1109,7 +1133,7 @@ export default function TablePage() {
     return () => {
       cancelled = true;
     };
-  }, [session, code, retryKey, takeSeat]);
+  }, [session, code, retryKey, takeSeat, router]);
 
   // Creating the game and dealing are one atomic server-side action now. The
   // shuffle happens inside Postgres, so no browser ever receives the full deck
@@ -2066,7 +2090,7 @@ export default function TablePage() {
 
   // .table-loading: painted in this device's cached surface from the first
   // paint (app/globals.css), so a refresh doesn't flash Classic.
-  if (loading || !appearance.ready) {
+  if (loading || !appearance.ready || toNickname) {
     return (
       <main className="table-loading flex flex-1 items-center justify-center">
         <p>Loading...</p>

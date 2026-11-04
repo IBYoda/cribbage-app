@@ -9,6 +9,8 @@ import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { TableOptions } from "@/components/brand/TableOptions";
 import { newTableFields, type FourPlayerMode } from "@/lib/newTable";
+import { nicknameStepHref } from "@/lib/nickname";
+import { fetchNeedsNickname } from "@/lib/profileNickname";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -44,12 +46,24 @@ export default function NewTablePage() {
   // and never with Self-Scoring, which has no Team/Solo (newTableFields).
   const [fourPlayerMode, setFourPlayerMode] = useState<FourPlayerMode>("teams");
 
+  // The nickname gate: a player without a nickname picks one first and
+  // comes back here (the page stays "Loading..." meanwhile).
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    let cancelled = false;
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (cancelled) return;
+      if (data.session && (await fetchNeedsNickname(data.session.user.id)) === true) {
+        if (!cancelled) router.replace(nicknameStepHref("/tables/new"));
+        return;
+      }
+      if (cancelled) return;
       setSession(data.session);
       setLoading(false);
     });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function handleCreateTable() {
     if (!session) return;
