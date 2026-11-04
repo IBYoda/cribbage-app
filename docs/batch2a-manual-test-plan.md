@@ -122,7 +122,9 @@ the crib automatic at step 2; no Show Hand / Show Crib buttons)._
 2. **Count hands.**
    - Both four-card hands are face-up on both screens: my own at full size
      in my hand row, the opponent's at hand size in the middle. The
-     opponent's strip at the top shows only their name and the dealer chip.
+     opponent's strip at the top shows only their name (plus the dealer
+     chip on the classic table, `?layout=classic`; the square counting
+     screen, now the default, has no dealer chip).
    - The crib is a face-down pile; the starter is face-up beside it.
    - The pone's screen reads **"Counting: your hand"**, with a small
      **Counting** marker over their hand row and **Confirm Count** enabled.

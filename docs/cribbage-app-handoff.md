@@ -41,7 +41,12 @@ A full 2-player match now plays end to end: New Game → hands (deal, discard, p
 
 All SQL lives in `docs/sql/` for history; there is **no Supabase CLI or migrations setup**. The user runs every file by hand in the Supabase SQL Editor. Where a function was redefined across slices, the **last file to define it is the live version**.
 
-Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`.
+Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`, plus four added since Phase 2:
+
+- `user_appearance` — each player's card back and table surface, readable and writable by its owner only (`appearance-settings.sql`).
+- `computer_accounts` — the computer opponents, one auth user per level (easy, medium, hard); RLS on with no policies and no client privileges, read only by `security definer` functions (`computer-c2-engine.sql`).
+- `game_results` — every player's score, position and won flag, saved by a trigger on `games` when a game is won; the leaderboard's skunks come from it (`leaderboard-l1-game-results.sql`).
+- `leaderboard_hidden` — test accounts kept off the leaderboard; every game such an account played counts for nobody (`leaderboard-l3-hidden-accounts.sql`).
 
 Functions, with the file holding the current definition:
 
@@ -91,19 +96,19 @@ Functions, with the file holding the current definition:
 
 ### In the repo
 
-- `app/` — `login`, `signup`, `profile`, `admin`, `tables/new`, `tables/join`, `tables/[code]` (the main table page, ~1100 lines, one Realtime channel per table)
-- `components/` — `PlayingCard.tsx`, `PlayArea.tsx`, `CutForDealView.tsx`
-- `lib/` — `supabase.ts`, `cards.ts` (`cardPlayValue`, `cardRankValue`, `sortHand`, rank/suit parsing), `scoring.ts`
-- `scripts/` — `test-scoring.ts`, `ts-resolve.mjs`
-- `docs/` — this file, `cribbage-app-prd.md`, `batch1-manual-test-plan.md`, `batch2a-manual-test-plan.md`, `batch2b-manual-test-plan.md`, `CribbageBasics.pdf`, `images/`, `sql/`
+- `app/` — the home page (`page.tsx`: the landing page signed out, the main menu signed in), `login`, `signup`, `forgot-password`, `reset-password`, `nickname`, `profile`, `leaderboard`, `admin`, `single-player`, `tables/new`, `tables/join`, `tables/[code]` (the main table page, ~4,220 lines, one Realtime channel per table), plus `layout.tsx`, `not-found.tsx`, `globals.css` and the icons. `app/dev/` holds local layout mocks and is never committed.
+- `components/` — `PlayingCard.tsx`, `PlayArea.tsx`, `CutForDealView.tsx`, `Avatar.tsx`, `MugginsTag.tsx`, `AppearanceProvider.tsx`, `AppearanceSettings.tsx`, and two folders:
+  - `components/brand/` (20 files) — the card-room screens: landing and home menu, sign-up and log-in pieces, the page frame, Start a Table options, the opponent chooser, the leaderboard, the admin rows, the nickname step.
+  - `components/table/` (21 files) — the table: `TableShell` (the classic table), `SquareTable` (the square table) and `SquareRing` (its 3- and 4-player seats), `CribbageBoard`, `ScoreStrip`, `PileRow`, `HandRow`, `CountStage`, `WaitingRoom`, `DealAnimation`, the Muggins plates and win bar, `useComputerDriver`, and more.
+- `lib/` — 24 files: `supabase.ts`, `cards.ts` (`cardPlayValue`, `cardRankValue`, `sortHand`, rank/suit parsing), `scoring.ts`, and the pure helpers behind the screens (`tableLayout.ts`, `phase3.ts`, `boardLayout.ts`, `boardSkins.ts`, `appearance.ts`, `tableSync.ts`, `nickname.ts`, `authFlow.ts` and others); `lib/computer/` (4 files) is the computer opponent's brain, levels and rules.
+- `scripts/` — `test-scoring.ts`, `test-phase3.ts`, `test-computer.ts`, `test-computer-next.ts`, `sim-computer.ts`, `ts-resolve.mjs` (the `npm run` entries are in `package.json`)
+- `docs/` — this file, `cribbage-app-prd.md`, `batch1-manual-test-plan.md`, `batch2a-manual-test-plan.md`, `batch2b-manual-test-plan.md`, `CribbageBasics.pdf`, `images/`, `mockups/`, `sql/`
 
 **`lib/scoring.ts`** mirrors both SQL scorers in TypeScript. It is **display-only**: the authoritative scorers stay in the database, so the client can never supply or influence a point value. Batch 2's Confirm Count must follow the same rule.
 
 ## What's next
 
-1. **Finish Batch 2b.** Browser-test it (`docs/batch2b-manual-test-plan.md`, including Part 5, the 2a checks that still need two people), then merge.
-2. **UI polish pass** (PRD Section 11.5): play-area layout, crib positioning, played cards in front of each player, auto-join on create, and showing the starter under the win banner.
-3. **Phase 3:** 3- and 4-player games. Note that `next_hand`'s "player after the dealer" uses `players`, which is in join order, not seating order.
+~~1. Finish Batch 2b. 2. UI polish pass. 3. Phase 3.~~ All three are done and live (from the polish pass, played cards in front of each player was dropped by decision, and the landscape layout is still open; PRD Section 11.5), as are the computer opponent and Self-Scoring (Muggins) tables; the leaderboard is built (PRD Section 9). What is current is the **Open** list in PRD Section 11.6 (Hardening): broad read access to the game tables, presence tracking (a closed tab still counts as seated), request volume (the per-action full refresh), the parked server-side nickname check, the classic-layout dealer chip, and the old verification suites to refresh. PRD Sections 11.5 and 11.6 are the place to look; this file does not track them.
 
 The double-award trap still applies: his heels is awarded only in `discard_to_crib` and never in `score_hand`, so a jack starter is worth 2 in total, not 4. `next_hand` clears `starter_card`, so each hand gets exactly one fresh cut.
 
@@ -163,9 +168,6 @@ Current status: **PASS, 124 assertions.** The exhaustive stage checks `lib/scori
 - **Possible repeated `GO` rows for one stuck player — UNVERIFIED.** If a player is stuck for several consecutive plays while the other keeps playing, `play_card` may log a go event each time, so the history could show several `GO` chips in one segment where one would read better. Never observed; noticed by reading the code. Worth a look before polishing the play area.
 - **UI polish, not blocking:**
   - ~~Remove the "said go" message under the played cards~~ — **done in Batch 1** (the inline `GO` chip already said it, and it was the wrong place to explain a point).
-  - Play area layout — several segments stack up on a phone.
-  - Crib positioning — the crib has no visual home on the table yet.
-  - Auto-join on create table — the creator currently has to join their own table.
 - **Client grants that shouldn't exist.** `card_rank_value` and `shuffled_deck` are executable by the client in the live database, contrary to the function table. Low exposure (see the note under the table), but worth a deliberate `revoke` in a later slice. `rls_auto_enable` is also granted; it isn't defined by this project and appears to be Supabase's own.
 
 ## Slice numbering
