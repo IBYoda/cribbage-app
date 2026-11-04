@@ -28,14 +28,11 @@ A real-time multiplayer cribbage companion app for 2-4 players, playing remotely
 
 ## Current state
 
-- **Phase 1:** complete.
-- **Phase 2, Batch 1** (the scoring engines): merged to `main` as PR #16.
-- **Phase 2, Batch 2a** (counting, crib scoring, win at 121): merged to `main` as PR #17.
-- **Phase 2, Batch 2b** (next hand, match loop, New Game as a new match): built on branch `feature/next-hand-and-match-loop`, **not yet merged**.
-  - **SQL:** `phase2-batch2b-next-hand.sql` and then `phase2-batch2b-ready-gate.sql` (both players must tap Next Hand) are applied. `phase2-batch2b-verification.sql` queries 1, 2, 4 (29 checks, with the ready gate) and 5 pass.
-  - **UI:** the Next Hand button, the new-hand reset and the New Game handling pass typecheck, lint and build, but have **not been browser-tested**. `docs/batch2b-manual-test-plan.md` is the plan.
+**Version 2.0 (Nov 4, 2026): stable and good, live at https://cribbage-app.vercel.app.** Phases 1, 2 and 3 are done, as are the computer opponents, Self-Scoring (Muggins) tables on every size, the leaderboard and the nickname gate. The PRD's "Version 2.0" section (near its top) lists what v2.0 includes.
 
-A full 2-player match now plays end to end: New Game → hands (deal, discard, pegging, counting, Next Hand) until someone reaches 121 → win banner → New Game, where the loser deals.
+From here, new work exists only under the rule recorded in the PRD's **Backlog (frozen at v2.0)** section: bug and security items only. Everything else is in its **Ideas (not work)** section.
+
+*History:* Phase 2 was built as Batch 1 (the scoring engines, PR #16), Batch 2a (counting, crib scoring, win at 121, PR #17) and Batch 2b (next hand, the match loop, New Game as a new match). The sections below keep that era's detail where it is still true.
 
 ### In the database
 
