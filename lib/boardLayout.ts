@@ -223,8 +223,6 @@ export function boardPatternFor(pattern: BoardPattern, lanes: 3 | 4): BoardPatte
 // three lanes, positions 0 .. 121.
 export type BoardPattern = "straight" | "s" | "snake";
 
-export const BOARD_PATTERNS: readonly BoardPattern[] = ["straight", "s", "snake"];
-
 // THE S BOARD (our own drawing): one continuous lane per player, not out and
 // back -- a start hole, holes 1-120 in groups of five, and a game hole. Drawn
 // in "view units" on a board 1000 wide, then scaled to the strip.

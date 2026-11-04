@@ -159,8 +159,10 @@ type Game = {
   // creation now, so the server deals to this rather than to whoever happens to
   // be at the table at deal time.
   players: string[] | null;
-  // Null for the whole 'cutting' phase -- nothing about the dealer is known
-  // until a round completes with a unique lowest card.
+  // Null while the cut is undecided. Set as soon as a round completes with a
+  // unique lowest card (draw_cut_card), while the game is still 'cutting' --
+  // the cut's result screen, before everyone taps Deal cards, already has it.
+  // A tied round leaves it null.
   dealer_id: string | null;
   // Who has discarded -- never WHAT they discarded. The crib's contents live in
   // game_cribs, which nobody can read yet.

@@ -9,10 +9,10 @@ import { SiteFooter } from "@/components/brand/SiteFooter";
 // button, and the footer. Styling only -- each page keeps its own logic.
 //
 // followDeviceScheme: leave off data-scheme="dark", so the dark: variant
-// follows the device as on a plain page. The Profile page needs it: its
-// Appearance preview and swatches must look exactly as they always have
-// (Classic follows the device), and data-scheme="dark" on an ancestor would
-// force them dark.
+// follows the device as on a plain page. No real page passes it any more:
+// the Profile page used it until Green Felt became the default surface
+// (October 31, 2026), and has drawn its frame dark like the other pages
+// since. Only a dev mock (app/dev) still sets it.
 export function CardRoomFrame({
   title,
   children,
