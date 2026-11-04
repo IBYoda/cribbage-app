@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { AuthCard } from "@/components/brand/AuthCard";
+import { CheckEmailPanel } from "@/components/brand/CheckEmailPanel";
 
 // How long "Taking you in..." shows before going home.
 const REDIRECT_DELAY_MS = 1000;
@@ -17,6 +18,9 @@ export default function SignUpPage() {
   const [message, setMessage] = useState<string | null>(null);
   // Signed in straight away (email confirmation is off): show the way home.
   const [signedIn, setSignedIn] = useState(false);
+  // No session came back (email confirmation is on): the Check-your-email
+  // panel for this address, its Resend countdown starting from the sign-up.
+  const [checkEmail, setCheckEmail] = useState<{ email: string; sentAt: number } | null>(null);
   const redirectTimer = useRef<number | null>(null);
 
   // No redirect after the page is gone.
@@ -31,7 +35,15 @@ export default function SignUpPage() {
     setStatus("loading");
     setMessage(null);
 
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    // The confirmation link (when Supabase sends one) comes back to this
+    // site's home page, which signs the player in from it -- this origin, so
+    // a sign-up on localhost comes back to localhost (both are on the
+    // Supabase redirect list).
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: `${window.location.origin}/` },
+    });
 
     if (error) {
       setStatus("error");
@@ -41,7 +53,9 @@ export default function SignUpPage() {
 
     // A session means the account is already logged in (email confirmation
     // is off in Supabase): straight home after a beat. No session means a
-    // confirmation email is on its way.
+    // confirmation email is on its way -- or, for an address that already
+    // has an account, nothing at all (Supabase answers both the same), so
+    // the panel never says the account is new.
     if (data.session) {
       setStatus("success");
       setSignedIn(true);
@@ -51,8 +65,19 @@ export default function SignUpPage() {
     }
 
     setStatus("success");
-    setMessage(
-      "Account created. Check your email for a confirmation link before logging in."
+    setCheckEmail({ email, sentAt: Date.now() });
+  }
+
+  if (checkEmail) {
+    return (
+      <AuthCard
+        title="Sign Up"
+        switchPrompt="Already have an account?"
+        switchHref="/login"
+        switchLabel="Log in"
+      >
+        <CheckEmailPanel email={checkEmail.email} sentAt={checkEmail.sentAt} />
+      </AuthCard>
     );
   }
 

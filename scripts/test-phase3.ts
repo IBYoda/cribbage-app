@@ -14,6 +14,7 @@ import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
 import { hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
+import { isEmailNotConfirmed, readAuthHashError, RESEND_COOLDOWN_S, resendSecondsLeft } from "../lib/authFlow";
 import {
   pollIntervalMs,
   profilesToFetch,
@@ -2407,6 +2408,40 @@ check("table sync: the won board is kept only for the same game read in full", (
   strictEqual(wonBoardReusable(shown("g1", false), "g1"), false); // an earlier read failed
   strictEqual(wonBoardReusable(shown("g1"), "g1"), false); // built from the screen at the win
   strictEqual(wonBoardReusable(null, "g1"), false); // nothing on screen: a reload, a rejoin
+});
+
+// CONFIRM EMAIL (lib/authFlow.ts).
+check("auth: email-not-confirmed by its code or its message; nothing else matches", () => {
+  strictEqual(isEmailNotConfirmed({ code: "email_not_confirmed", message: "whatever" }), true);
+  strictEqual(isEmailNotConfirmed({ message: "Email not confirmed" }), true);
+  strictEqual(isEmailNotConfirmed({ code: null, message: "EMAIL NOT CONFIRMED" }), true);
+  strictEqual(isEmailNotConfirmed({ code: "invalid_credentials", message: "Invalid login credentials" }), false);
+  strictEqual(isEmailNotConfirmed({ message: "Email rate limit exceeded" }), false);
+  strictEqual(isEmailNotConfirmed({}), false);
+  strictEqual(isEmailNotConfirmed(null), false);
+});
+check("auth: an error in the link's hash is read; tokens or nothing are not errors", () => {
+  deepStrictEqual(
+    readAuthHashError("#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired"),
+    { error: "access_denied", code: "otp_expired", description: "Email link is invalid or has expired" }
+  );
+  // Without the "#", and with a code only.
+  deepStrictEqual(readAuthHashError("error_code=otp_expired"), { error: "otp_expired", code: "otp_expired", description: null });
+  // A good link: tokens, no error.
+  strictEqual(readAuthHashError("#access_token=abc&expires_in=3600&refresh_token=def&token_type=bearer&type=signup"), null);
+  strictEqual(readAuthHashError(""), null);
+  strictEqual(readAuthHashError("#"), null);
+});
+check("auth: Resend waits 60 s after each send, counting down in whole seconds", () => {
+  strictEqual(RESEND_COOLDOWN_S, 60);
+  const sent = 1_000_000;
+  strictEqual(resendSecondsLeft(null, sent), 0); // never sent
+  strictEqual(resendSecondsLeft(sent, sent), 60); // just sent
+  strictEqual(resendSecondsLeft(sent, sent + 30_000), 30);
+  strictEqual(resendSecondsLeft(sent, sent + 30_400), 30); // whole seconds
+  strictEqual(resendSecondsLeft(sent, sent + 60_000), 0);
+  strictEqual(resendSecondsLeft(sent, sent + 90_000), 0);
+  strictEqual(resendSecondsLeft(sent, sent - 5_000), 60); // a clock that went back: never above 60
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
