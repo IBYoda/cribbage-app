@@ -16,6 +16,14 @@ import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_
 import { hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
 import { isEmailNotConfirmed, readAuthHashError, RESEND_COOLDOWN_S, resendSecondsLeft } from "../lib/authFlow";
 import {
+  NICKNAME_MAX_LENGTH,
+  needsNickname,
+  nicknameProblem,
+  nicknameSaveErrorMessage,
+  nicknameStepHref,
+  safeReturnPath,
+} from "../lib/nickname";
+import {
   pollIntervalMs,
   profilesToFetch,
   SAFETY_POLL_CONNECTED_MS,
@@ -2442,6 +2450,68 @@ check("auth: Resend waits 60 s after each send, counting down in whole seconds",
   strictEqual(resendSecondsLeft(sent, sent + 60_000), 0);
   strictEqual(resendSecondsLeft(sent, sent + 90_000), 0);
   strictEqual(resendSecondsLeft(sent, sent - 5_000), 60); // a clock that went back: never above 60
+});
+
+// THE NICKNAME GATE (lib/nickname.ts).
+check("nickname: no row, no nickname, empty or spaces needs one; a real name doesn't", () => {
+  strictEqual(needsNickname(null), true); // no profile row
+  strictEqual(needsNickname(undefined), true);
+  strictEqual(needsNickname({}), true);
+  strictEqual(needsNickname({ nickname: null }), true);
+  strictEqual(needsNickname({ nickname: "" }), true);
+  strictEqual(needsNickname({ nickname: "   \t " }), true);
+  strictEqual(needsNickname({ nickname: "Walt" }), false);
+  strictEqual(needsNickname({ nickname: "  Walt " }), false);
+});
+check("nickname: the save's rules and messages are the Profile page's", () => {
+  strictEqual(NICKNAME_MAX_LENGTH, 30);
+  strictEqual(nicknameProblem(""), "Please enter a nickname.");
+  strictEqual(nicknameProblem("   "), "Please enter a nickname.");
+  strictEqual(nicknameProblem(" Walt "), null);
+  strictEqual(nicknameProblem("x".repeat(30)), null);
+  strictEqual(nicknameProblem(` ${"x".repeat(30)} `), null); // trimmed first
+  strictEqual(nicknameProblem("x".repeat(31)), "Nicknames are at most 30 characters.");
+  strictEqual(nicknameSaveErrorMessage({ code: "23505", message: "duplicate key value" }), "That nickname is taken.");
+  strictEqual(nicknameSaveErrorMessage({ code: "42501", message: "permission denied" }), "permission denied");
+  strictEqual(nicknameSaveErrorMessage({ message: "Failed to fetch" }), "Failed to fetch");
+});
+check("nickname: the return path is a same-site path or the home page", () => {
+  // Fine.
+  strictEqual(safeReturnPath("/tables/1234"), "/tables/1234");
+  strictEqual(safeReturnPath("/tables/new"), "/tables/new");
+  strictEqual(safeReturnPath("/single-player"), "/single-player");
+  strictEqual(safeReturnPath("/tables/1234?layout=classic"), "/tables/1234?layout=classic");
+  strictEqual(safeReturnPath("/"), "/");
+  // Open-redirect attempts, and nothing at all: home.
+  for (const bad of [
+    "//evil.com",
+    "https://evil.com",
+    "http://evil.com/tables/1234",
+    "/\\evil.com",
+    "\\\\evil.com",
+    "/\t/evil.com",
+    "/\n/evil.com",
+    " /tables/1234",
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "tables/1234",
+    "",
+    null,
+    undefined,
+    "/" + "x".repeat(600),
+  ]) {
+    strictEqual(safeReturnPath(bad), "/", JSON.stringify(bad));
+  }
+});
+check("nickname: the step's address carries only a safe return path", () => {
+  strictEqual(nicknameStepHref("/tables/1234"), "/nickname?next=%2Ftables%2F1234");
+  strictEqual(nicknameStepHref("/tables/new"), "/nickname?next=%2Ftables%2Fnew");
+  strictEqual(nicknameStepHref("/"), "/nickname");
+  strictEqual(nicknameStepHref("//evil.com"), "/nickname");
+  // And back again, as the step reads it.
+  strictEqual(safeReturnPath(new URLSearchParams("next=%2Ftables%2F1234").get("next")), "/tables/1234");
+  strictEqual(safeReturnPath(new URLSearchParams("next=%2F%2Fevil.com").get("next")), "/");
+  strictEqual(safeReturnPath(new URLSearchParams("other=1").get("next")), "/");
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

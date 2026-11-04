@@ -5,6 +5,9 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { loadJoinableTables, loadMyTables, type JoinableTable, type MyTable } from "@/lib/openTables";
 import { HomeMenu, type OpenTablesState } from "@/components/brand/HomeMenu";
+import { LandingView } from "@/components/brand/LandingView";
+import { NicknameStep } from "@/components/brand/NicknameStep";
+import { needsNickname } from "@/lib/nickname";
 
 // How often Open Tables re-reads while the tab is visible (was 15 s; 45 s
 // to cut request volume -- the Refresh button reads at once).
@@ -12,7 +15,9 @@ const REFRESH_MS = 45_000;
 
 // THE SIGNED-IN HOME: reads what the main menu shows, then renders HomeMenu.
 // Read-only, through the existing RLS, and each part can fail on its own:
-//   * the profile (nickname, avatar) -- falls back to the email's name;
+//   * the profile (nickname, avatar) -- falls back to the email's name; no
+//     profile row or a blank nickname shows the Pick-a-nickname step
+//     (NicknameStep) instead of the menu, straight to the menu once saved;
 //   * admin_users, the player's own row only -- the Admin link shows only if
 //     that read succeeds and finds the row;
 //   * "Open Tables" (lib/openTables.ts): the open tables the player is
@@ -26,6 +31,11 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
   const [nickname, setNickname] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // The nickname gate: "pending" until the profile read answers, "needs"
+  // for no profile row or a blank nickname (the Pick-a-nickname step shows
+  // instead of the menu), "ok" otherwise -- a failed read included, so a
+  // player is never stuck behind a read that didn't work.
+  const [gate, setGate] = useState<"pending" | "needs" | "ok">("pending");
 
   useEffect(() => {
     let cancelled = false;
@@ -35,11 +45,22 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
       .select("nickname, avatar_url")
       .eq("id", userId)
       .maybeSingle()
-      .then(({ data }) => {
-        if (cancelled || !data) return;
-        setNickname(data.nickname?.trim() || null);
-        setAvatarUrl(data.avatar_url ?? null);
-      });
+      .then(
+        ({ data, error }) => {
+          if (cancelled) return;
+          if (error) {
+            setGate("ok");
+            return;
+          }
+          setGate(needsNickname(data) ? "needs" : "ok");
+          if (!data) return;
+          setNickname(data.nickname?.trim() || null);
+          setAvatarUrl(data.avatar_url ?? null);
+        },
+        () => {
+          if (!cancelled) setGate("ok");
+        }
+      );
 
     supabase
       .from("admin_users")
@@ -56,6 +77,24 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
   }, [userId]);
 
   const openTables = useOpenTables(userId);
+
+  // Until the profile read answers: the card room as it was while the
+  // session was read (LandingView, buttons held back), so a player without
+  // a nickname never sees the menu flash past on the way to the step.
+  if (gate === "pending") return <LandingView signedOut={false} />;
+
+  if (gate === "needs") {
+    return (
+      <NicknameStep
+        userId={userId}
+        onSaved={(saved) => {
+          setNickname(saved);
+          setGate("ok");
+        }}
+        onLogout={onLogout}
+      />
+    );
+  }
 
   return (
     <HomeMenu

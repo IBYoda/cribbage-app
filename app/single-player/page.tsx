@@ -8,6 +8,8 @@ import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { OpponentChooser } from "@/components/brand/OpponentChooser";
 import { LEVEL_INFO, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
+import { nicknameStepHref } from "@/lib/nickname";
+import { fetchNeedsNickname } from "@/lib/profileNickname";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -35,12 +37,24 @@ export default function SinglePlayerPage() {
   const [status, setStatus] = useState<"idle" | "creating" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
 
+  // The nickname gate: a player without a nickname picks one first and
+  // comes back here (the page stays "Loading..." meanwhile).
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    let cancelled = false;
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (cancelled) return;
+      if (data.session && (await fetchNeedsNickname(data.session.user.id)) === true) {
+        if (!cancelled) router.replace(nicknameStepHref("/single-player"));
+        return;
+      }
+      if (cancelled) return;
       setSession(data.session);
       setLoading(false);
     });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   useEffect(() => {
     if (!session) return;

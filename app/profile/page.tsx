@@ -7,8 +7,9 @@ import { supabase } from "@/lib/supabase";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
+import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
+import { saveNickname } from "@/lib/profileNickname";
 
-const NICKNAME_MAX_LENGTH = 30;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
 
 export default function ProfilePage() {
@@ -72,11 +73,12 @@ export default function ProfilePage() {
     if (!session) return;
 
     // Saved trimmed. Nicknames are unique in the database (case-insensitive,
-    // trimmed), so a taken one is refused there (23505, below).
-    const trimmedNickname = nickname.trim();
-    if (!trimmedNickname) {
+    // trimmed), so a taken one is refused there. The rules and messages are
+    // shared with the Pick-a-nickname step (lib/nickname.ts).
+    const problem = nicknameProblem(nickname);
+    if (problem) {
       setStatus("error");
-      setMessage("Please enter a nickname.");
+      setMessage(problem);
       return;
     }
 
@@ -86,16 +88,14 @@ export default function ProfilePage() {
     // 1. The profile row first, with the CURRENT picture: a refused nickname
     // stops here, before anything is uploaded, so the picture never changes
     // and the chosen file and preview stay on the page.
-    const { error: upsertError } = await supabase
-      .from("profiles")
-      .upsert({ id: session.user.id, nickname: trimmedNickname, avatar_url: avatarUrl });
+    const saved = await saveNickname(session.user.id, nickname, { avatar_url: avatarUrl });
 
-    if (upsertError) {
+    if (!saved.ok) {
       setStatus("error");
-      setMessage(upsertError.code === "23505" ? "That nickname is taken." : upsertError.message);
+      setMessage(saved.message);
       return;
     }
-    setNickname(trimmedNickname);
+    setNickname(saved.nickname);
 
     // 2. Then a new picture, if one was chosen: upload it, then point the
     // (now existing) row at it. If either fails the nickname has still
