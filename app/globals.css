@@ -127,6 +127,7 @@ body {
 }
 
 .splash-zero,
+.splash-image,
 .splash-go {
   animation-name: splash-pop;
   animation-timing-function: ease-out;
@@ -136,8 +137,26 @@ body {
     0 0 0.4em rgb(0 0 0 / 0.5);
 }
 
-.splash-zero {
+.splash-zero,
+.splash-image {
   animation-duration: 2s;
+}
+
+/* God's 0: the image alone, in a fixed square at most 40% of the screen tall,
+   so it fits 375x667 and nothing jumps while it loads. contain keeps a
+   non-square image's shape, and its transparency shows the table behind. No
+   animation here: the wrapper's animationend is what clears the splash. */
+.splash-image__img {
+  --splash-image-size: min(84vw, 40vh, 420px);
+  display: block;
+  width: var(--splash-image-size);
+  height: var(--splash-image-size);
+  object-fit: contain;
+}
+@supports (height: 1dvh) {
+  .splash-image__img {
+    --splash-image-size: min(84dvw, 40dvh, 420px);
+  }
 }
 
 .splash-zero > :first-child {
@@ -151,6 +170,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .splash-zero,
+  .splash-image,
   .splash-go {
     animation-name: splash-fade;
   }

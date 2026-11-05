@@ -16,6 +16,14 @@ import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_
 import { hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
 import { isEmailNotConfirmed, readAuthHashError, RESEND_COOLDOWN_S, resendSecondsLeft } from "../lib/authFlow";
 import {
+  GOD_ZERO_SPLASH_IMAGE,
+  GOD_ZERO_SPLASH_PHRASES,
+  isGodLevel,
+  ZERO_SPLASH_PHRASES,
+  zeroSplashKind,
+  zeroSplashPhrases,
+} from "../lib/splashPhrases";
+import {
   NICKNAME_MAX_LENGTH,
   needsNickname,
   nicknameProblem,
@@ -2512,6 +2520,29 @@ check("nickname: the step's address carries only a safe return path", () => {
   strictEqual(safeReturnPath(new URLSearchParams("next=%2Ftables%2F1234").get("next")), "/tables/1234");
   strictEqual(safeReturnPath(new URLSearchParams("next=%2F%2Fevil.com").get("next")), "/");
   strictEqual(safeReturnPath(new URLSearchParams("other=1").get("next")), "/");
+});
+
+// GOD-TABLE ZERO SPLASHES (lib/splashPhrases.ts).
+check("splash: only the hard level is God", () => {
+  strictEqual(isGodLevel("hard"), true);
+  for (const level of ["easy", "medium", "Hard", "", null, undefined]) strictEqual(isGodLevel(level), false, String(level));
+});
+check("splash: a God table gets God's phrases, any other the normal ones, never mixed", () => {
+  deepStrictEqual(zeroSplashPhrases(false), ["THAT'S A SHOT BITCH!", "DRINK UP SUCKA!", "SHOT!"]);
+  strictEqual(zeroSplashPhrases(false), ZERO_SPLASH_PHRASES);
+  deepStrictEqual(zeroSplashPhrases(true), ["THAT'S A SHOT MY CHILD", "DRINK UP MY CHILD", "SHOT! MY CHILD"]);
+  strictEqual(zeroSplashPhrases(true), GOD_ZERO_SPLASH_PHRASES);
+  for (const phrase of GOD_ZERO_SPLASH_PHRASES) {
+    strictEqual(ZERO_SPLASH_PHRASES.includes(phrase), false, phrase);
+    strictEqual(phrase, phrase.toUpperCase(), phrase);
+  }
+});
+check("splash: only God's own 0 at a God table is the image", () => {
+  strictEqual(zeroSplashKind(true, false), "image");
+  strictEqual(zeroSplashKind(true, true), "phrase");
+  strictEqual(zeroSplashKind(false, true), "phrase");
+  strictEqual(zeroSplashKind(false, false), "phrase"); // a human opponent, or a lower computer level
+  strictEqual(GOD_ZERO_SPLASH_IMAGE, "/splashes/god-shot.webp");
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
