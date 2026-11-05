@@ -593,7 +593,10 @@ export default function TablePage() {
   const errorRef = useRef<string | null>(null);
   // THE SPLASHES ("19" and GO), fired from the realtime handlers only -- see
   // components/table/Splash.tsx.
-  const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({ noZero: hideCountNumbers });
+  const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({
+    noZero: hideCountNumbers,
+    computerLevel: table?.computer_level,
+  });
   // ?layout= (see THE LAYOUT PARAM above). Drawing only.
   const layoutParam = useSyncExternalStore(subscribeToLocation, layoutParamFromUrl, layoutParamOnServer);
   // The dealing animation's off switches: the Profile setting (this device)
@@ -1553,7 +1556,9 @@ export default function TablePage() {
             showZero(
               `zero:${updated.user_id}:${Date.parse(updated.last_awarded_at)}`,
               displayName(shown),
-              updated.last_reason!.startsWith("crib:")
+              updated.last_reason!.startsWith("crib:"),
+              // A computer table's one human is its creator.
+              updated.user_id === table.created_by
             );
           }
 

@@ -1,11 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ZERO_SPLASH_PHRASES } from "@/lib/splashPhrases";
+import {
+  GOD_ZERO_SPLASH_IMAGE,
+  isGodLevel,
+  zeroSplashKind,
+  zeroSplashPhrases,
+} from "@/lib/splashPhrases";
 
 // THE TABLE SPLASHES: a big centred overlay for two live moments.
 //   * "19" -- a counted hand or crib scored 0: a random phrase from
-//     lib/splashPhrases.ts, and "<name> scored 0" under it (~2s).
+//     lib/splashPhrases.ts, and "<name> scored 0" under it (~2s). At a table
+//     against God the human's 0 uses God's phrases, and God's own 0 shows
+//     only an image, with the same pop and fade.
 //   * GO -- a player said Go (or was auto-gone): a giant "GO" (~1.2s). The
 //     small amber Go label by the seat stays as it is.
 //
@@ -24,18 +31,33 @@ import { ZERO_SPLASH_PHRASES } from "@/lib/splashPhrases";
 
 export type SplashEvent =
   | { id: number; kind: "zero"; phrase: string; sub: string }
+  | { id: number; kind: "image" }
   | { id: number; kind: "go" };
 
 // noZero: the count numbers are hidden on this screen (Hide counts, or a
-// Muggins table) -- the "19" splash says 0, so it never fires.
-export function useSplash({ noZero }: { noZero: boolean }) {
+// Muggins table) -- the "19" splash says 0, so it never fires, and neither
+// does God's image, which says the same thing.
+// computerLevel: tables.computer_level; "hard" is a table against God.
+export function useSplash({ noZero, computerLevel }: { noZero: boolean; computerLevel?: string | null }) {
+  const godTable = isGodLevel(computerLevel);
   const [splash, setSplash] = useState<SplashEvent | null>(null);
   const handledRef = useRef(new Set<string>());
   const nextIdRef = useRef(0);
   const noZeroRef = useRef(noZero);
+  const godTableRef = useRef(godTable);
+  const preloadRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
     noZeroRef.current = noZero;
   }, [noZero]);
+  useEffect(() => {
+    godTableRef.current = godTable;
+    // Fetched when the table opens: the splash lasts only 2 seconds, too
+    // short to wait for it. Once per page, and never at any other table.
+    if (godTable && !preloadRef.current) {
+      preloadRef.current = new Image();
+      preloadRef.current.src = GOD_ZERO_SPLASH_IMAGE;
+    }
+  }, [godTable]);
 
   // True if this key is new (and marks it handled).
   const claim = useCallback((key: string) => {
@@ -44,10 +66,17 @@ export function useSplash({ noZero }: { noZero: boolean }) {
     return true;
   }, []);
 
+  // humanScored: whose 0 it was. Only a God table looks at it.
   const showZero = useCallback(
-    (key: string, name: string, isCrib: boolean) => {
+    (key: string, name: string, isCrib: boolean, humanScored = true) => {
       if (!claim(key) || noZeroRef.current) return;
-      const phrase = ZERO_SPLASH_PHRASES[Math.floor(Math.random() * ZERO_SPLASH_PHRASES.length)] ?? "";
+      const godTableNow = godTableRef.current;
+      if (zeroSplashKind(godTableNow, humanScored) === "image") {
+        setSplash({ id: ++nextIdRef.current, kind: "image" });
+        return;
+      }
+      const phrases = zeroSplashPhrases(godTableNow);
+      const phrase = phrases[Math.floor(Math.random() * phrases.length)] ?? "";
       const sub = isCrib ? `${name}'s crib scored 0` : `${name} scored 0`;
       setSplash({ id: ++nextIdRef.current, kind: "zero", phrase, sub });
     },
@@ -86,6 +115,14 @@ export function Splash({ splash, onDone }: { splash: SplashEvent | null; onDone:
         >
           GO
         </span>
+      ) : splash.kind === "image" ? (
+        // The wrapper animates and clears the splash. The image itself must
+        // never animate: its animation events would bubble up here and clear
+        // the splash early.
+        <div key={splash.id} onAnimationEnd={() => onDone(splash.id)} className="splash-image select-none">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={GOD_ZERO_SPLASH_IMAGE} alt="God scored 0" width={420} height={420} className="splash-image__img" />
+        </div>
       ) : (
         <div
           key={splash.id}
