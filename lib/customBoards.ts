@@ -1,8 +1,10 @@
 // CUSTOM BOARDS: complete boards, each with its own look, as opposed to a
 // pattern in a skin's colours (lib/boardSkins.ts). The Profile's "Custom"
-// pattern lists them. Adding a board means adding one entry to CUSTOM_BOARDS
-// (and, for new art or a new peg, one drawing in
-// components/table/CribbageBoard.tsx). Display only: nothing here reaches the
+// pattern lists them. A new LOOK on an existing track is one entry in
+// CUSTOM_BOARDS (and, for new art or a new peg, one drawing in
+// components/table/CribbageBoard.tsx). A new TRACK is more: its own geometry
+// and component, as The Derby has (lib/derbyTrack.ts,
+// components/table/DerbyBoard.tsx). Display only: nothing here reaches the
 // server, the scores or the other players. Pure, no React; tested by
 // scripts/test-phase3.ts.
 
@@ -12,7 +14,8 @@ import { CLASSIC_WOOD, type BoardSkin } from "@/lib/boardSkins";
 // The Pattern row's fourth tile. One line to rename it.
 export const CUSTOM_PATTERN_LABEL = "Custom";
 
-export type CustomBoard = {
+// A board on one of the patterns' tracks.
+export type PatternCustomBoard = {
   id: string;
   name: string;
   // The track it uses (lib/boardLayout.ts).
@@ -27,6 +30,20 @@ export type CustomBoard = {
   // peg is ignored. shape: which peg is drawn.
   peg: { pegs: 1 | 2; shape: "round" | "football" };
 };
+
+// A board that's a picture with its own track: drawn by its own component.
+export type TrackBoard = {
+  id: string;
+  name: string;
+  layout: "track";
+  // The picture, under public/.
+  image: string;
+  // Lane colours for the pegs and rings, and the self-scoring banner's look.
+  skin: BoardSkin;
+  peg: { pegs: 1; shape: "horse" };
+};
+
+export type CustomBoard = PatternCustomBoard | TrackBoard;
 
 // The field's colours. It draws no holes or lane lines (a board with `art`
 // never does), so only the lanes' peg and ring colours show: Classic Pine's,
@@ -43,6 +60,17 @@ const FOOTBALL_FIELD: BoardSkin = {
   fourthLane: { color: "#f0b429", peg: "#f0b429", paint: "#f0b429" },
 };
 
+// The Football's lane colours, so the rings are the same; the rest is only for
+// a Self-Scoring table, where there's no track: the infield's green and the
+// dirt's brown, with cream text.
+const DERBY_TRACK: BoardSkin = {
+  ...FOOTBALL_FIELD,
+  id: "derby",
+  name: "The Derby",
+  wood: { top: "#2f5a2c", bottom: "#284d26", grain: null, grainOpacity: 0 },
+  rim: { edge: "#4a2a14", highlight: "#b98a58" },
+};
+
 export const CUSTOM_BOARDS: readonly CustomBoard[] = [
   {
     id: "football",
@@ -51,6 +79,14 @@ export const CUSTOM_BOARDS: readonly CustomBoard[] = [
     art: "football",
     skin: FOOTBALL_FIELD,
     peg: { pegs: 1, shape: "football" },
+  },
+  {
+    id: "derby",
+    name: "The Derby",
+    layout: "track",
+    image: "/boards/derby.webp",
+    skin: DERBY_TRACK,
+    peg: { pegs: 1, shape: "horse" },
   },
 ];
 

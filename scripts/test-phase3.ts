@@ -10,6 +10,7 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
+import { existsSync } from "node:fs";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
@@ -121,6 +122,23 @@ import {
   sRibbonFill,
   sPlateColors,
 } from "../lib/boardSkins";
+import {
+  DERBY_ART,
+  DERBY_FINISH_X,
+  DERBY_MAX_SLIDE,
+  DERBY_MAX_TILT,
+  DERBY_START_X,
+  derbyDistance,
+  derbyHorseScale,
+  derbyHorseTransform,
+  derbyLaneCount,
+  derbyLaneLength,
+  derbyLaneOffset,
+  derbyPointAt,
+  derbyPose,
+  derbySlideFrames,
+  type DerbyLaneCount,
+} from "../lib/derbyTrack";
 import {
   CUSTOM_BOARD_KEY,
   CUSTOM_BOARDS,
@@ -2690,6 +2708,196 @@ check("custom boards: this device only, and leaving Custom restores the saved pa
   } finally {
     delete g.localStorage;
   }
+});
+
+// THE DERBY (lib/derbyTrack.ts).
+const DERBY_SIZES = [[375, 67], [390, 84], [502, 108], [896, 86], [896, 96], [896, 130]] as const;
+// The art's y of the near and far straights, for a lane: below and above the middle.
+const DERBY_MIDDLE = 201.5;
+const artAt = (count: DerbyLaneCount, lane: number, score: number) => {
+  const offset = derbyLaneOffset(count, lane);
+  return derbyPointAt(offset, derbyDistance(offset, score));
+};
+const close = (a: number, b: number, what: string) => strictEqual(Math.abs(a - b) < 1e-6, true, `${what}: ${a} vs ${b}`);
+check("derby: the registry has it after The Football, with its picture on disk", () => {
+  strictEqual(new Set(CUSTOM_BOARDS.map((b) => b.id)).size, CUSTOM_BOARDS.length);
+  deepStrictEqual(CUSTOM_BOARDS.map((b) => b.id), ["football", "derby"]);
+  const derby = customBoardById("derby")!;
+  strictEqual(derby.name, "The Derby");
+  strictEqual(derby.layout, "track");
+  if (derby.layout !== "track") return;
+  deepStrictEqual(derby.peg, { pegs: 1, shape: "horse" });
+  strictEqual(existsSync(`public${derby.image}`), true);
+  deepStrictEqual(derby.skin.lanes.map((l) => l.peg), FOOTBALL.skin.lanes.map((l) => l.peg));
+  strictEqual(derby.skin.fourthLane.peg, FOOTBALL.skin.fourthLane.peg);
+  strictEqual(bannerTextColor(derby.skin), "#f5efe3"); // cream
+  strictEqual(contrastRatio(bannerTextColor(derby.skin), derby.skin.wood.top) >= 4.5, true);
+});
+check("derby: score 0 on the start mark, just past the finish in travel order, on every lane", () => {
+  strictEqual(DERBY_START_X > DERBY_FINISH_X, true); // the near straight runs left to right
+  for (const count of [2, 3, 4] as const) {
+    for (let lane = 0; lane < count; lane++) {
+      const p = artAt(count, lane, 0);
+      close(p.x, DERBY_START_X, "x");
+      strictEqual(p.y > DERBY_MIDDLE, true); // the near straight
+      deepStrictEqual([p.dx, p.dy], [1, 0]);
+    }
+  }
+});
+check("derby: 121 exactly on the finish line, 120 one step short, over 121 clamps", () => {
+  for (const count of [2, 3, 4] as const) {
+    for (let lane = 0; lane < count; lane++) {
+      const end = artAt(count, lane, 121);
+      close(end.x, DERBY_FINISH_X, "121");
+      strictEqual(end.y > DERBY_MIDDLE, true);
+      const last = artAt(count, lane, 120);
+      strictEqual(last.x < DERBY_FINISH_X, true); // before the line, running right
+      strictEqual(last.x > DERBY_FINISH_X - 40, true); // and only a step short
+      close(artAt(count, lane, 140).x, end.x, "140");
+      close(artAt(count, lane, -3).x, DERBY_START_X, "-3");
+      close(artAt(count, lane, NaN).x, DERBY_START_X, "NaN");
+    }
+  }
+});
+check("derby: positions increase along the lane, one lap, in equal steps", () => {
+  for (const count of [2, 3, 4] as const) {
+    for (let lane = 0; lane < count; lane++) {
+      const offset = derbyLaneOffset(count, lane);
+      const step = derbyDistance(offset, 1) - derbyDistance(offset, 0);
+      for (let s = 0; s < 121; s++) close(derbyDistance(offset, s + 1) - derbyDistance(offset, s), step, "step");
+      close(derbyDistance(offset, 121) - derbyDistance(offset, 0), derbyLaneLength(offset) - (DERBY_START_X - DERBY_FINISH_X), "lap");
+    }
+  }
+});
+check("derby: the track runs counter-clockwise: right along the near straight, up the right, left along the far", () => {
+  const offset = 0;
+  const lap = derbyLaneLength(offset);
+  const at = (part: number) => derbyPointAt(offset, part * lap);
+  deepStrictEqual([at(0.1).dx, at(0.1).dy], [1, 0]); // the near straight
+  strictEqual(at(0.1).y > DERBY_MIDDLE, true);
+  deepStrictEqual([at(0.6).dx, at(0.6).dy], [-1, 0]); // the far straight
+  strictEqual(at(0.6).y < DERBY_MIDDLE, true);
+  const rightEnd = derbyPointAt(offset, 1036 + Math.PI * 124.5 * 0.5); // the top of the right end's half turn
+  strictEqual(rightEnd.dy, -1); // going up
+  strictEqual(rightEnd.x > 1400, true);
+  const leftEnd = derbyPointAt(offset, 2 * 1036 + Math.PI * 124.5 * 1.5);
+  strictEqual(leftEnd.dy, 1); // going down
+  strictEqual(leftEnd.x < 130, true);
+});
+check("derby: lane 0 is outermost and the last lane innermost, on both straights, and all are distinct", () => {
+  for (const count of [2, 3, 4] as const) {
+    const near = Array.from({ length: count }, (_, lane) => artAt(count, lane, 5).y); // near straight
+    const far = Array.from({ length: count }, (_, lane) => derbyPointAt(derbyLaneOffset(count, lane), 0.6 * derbyLaneLength(derbyLaneOffset(count, lane))).y);
+    for (let lane = 1; lane < count; lane++) {
+      strictEqual(near[lane] < near[lane - 1], true); // lower on screen is further out
+      strictEqual(far[lane] > far[lane - 1], true); // higher on screen is further out
+    }
+    strictEqual(new Set(near).size, count);
+  }
+  deepStrictEqual([0, 1, 2, 3].map((lane) => derbyLaneOffset(4, lane)), [33, 11, -11, -33]);
+  deepStrictEqual([0, 1, 2].map((lane) => derbyLaneOffset(3, lane)), [26, 0, -26]);
+  deepStrictEqual([0, 1].map((lane) => derbyLaneOffset(2, lane)), [13, -13]);
+});
+check("derby: lane counts -- 2 players and Teams 2, 3 players 3, 4-player Solo 4", () => {
+  strictEqual(derbyLaneCount(3, [0, 1]), 2);
+  strictEqual(derbyLaneCount(3, [0, 1, 2]), 3);
+  strictEqual(derbyLaneCount(4, [0, 1, 2, 3]), 4);
+  strictEqual(derbyLaneCount(3, []), 2);
+  // The lower lane's player has left: the third-lane player stays in a real lane.
+  strictEqual(derbyLaneCount(3, [0, 2]), 3);
+  strictEqual(derbyLaneCount(4, [0]), 4);
+});
+check("derby: every point of every lane is inside the strip, at every size", () => {
+  for (const [w, h] of DERBY_SIZES) {
+    for (const count of [2, 3, 4] as const) {
+      for (let lane = 0; lane < count; lane++) {
+        for (let score = 0; score <= 121; score++) {
+          const p = derbyPose(w, h, count, lane, score);
+          strictEqual(p.x > 0 && p.x < w && p.y > 0 && p.y < h, true, `${w}x${h} ${count}/${lane} ${score}`);
+        }
+      }
+    }
+  }
+  const art = derbyPointAt(0, 0);
+  strictEqual(art.x < DERBY_ART.width && art.y < DERBY_ART.height, true);
+});
+check("derby: a horse faces its way: right on the near straight, flipped on the far, level on both", () => {
+  for (const [w, h] of DERBY_SIZES) {
+    for (const count of [2, 3, 4] as const) {
+      const near = derbyPose(w, h, count, 0, 3);
+      strictEqual(near.flip, 1);
+      strictEqual(near.tilt, 0);
+      // Halfway round is on the far straight.
+      const far = derbyPose(w, h, count, 0, 60);
+      strictEqual(far.flip, -1);
+      strictEqual(Math.abs(far.tilt), 0);
+    }
+  }
+});
+check("derby: tilt never over 26 degrees; it leans up the right end and down the left", () => {
+  strictEqual(DERBY_MAX_TILT, 26);
+  let leaned = 0;
+  for (const [w, h] of DERBY_SIZES) {
+    for (const count of [2, 3, 4] as const) {
+      for (let lane = 0; lane < count; lane++) {
+        for (let score = 0; score <= 121; score++) {
+          const pose = derbyPose(w, h, count, lane, score);
+          strictEqual(Math.abs(pose.tilt) <= DERBY_MAX_TILT, true);
+          if (pose.tilt !== 0) leaned++;
+        }
+      }
+    }
+  }
+  strictEqual(leaned > 0, true);
+  // Climbing either way the nose lifts, descending it drops: on screen the nose
+  // leads, so a right-facing horse climbing and a left-facing one descending
+  // lean anticlockwise (negative), and the other two clockwise.
+  for (let score = 0; score <= 121; score++) {
+    const p = artAt(3, 0, score);
+    if (p.dx === 0 || p.dy === 0) continue;
+    const pose = derbyPose(896, 96, 3, 0, score);
+    strictEqual(pose.flip, p.dx > 0 ? 1 : -1, `facing at ${score}`);
+    strictEqual(pose.tilt < 0, p.dx > 0 === p.dy < 0, `lean at ${score}`);
+  }
+});
+check("derby: a slide follows the track in frames about 6 art px apart, with facing and tilt in each", () => {
+  // From the near straight round the right end to the far straight.
+  const frames = derbySlideFrames(896, 96, 4, 0, 20, 70)!;
+  strictEqual(frames.length > 3 && frames.length <= 121, true);
+  deepStrictEqual(
+    [frames[0].x, frames[0].y, frames[frames.length - 1].x, frames[frames.length - 1].y],
+    [derbyPose(896, 96, 4, 0, 20).x, derbyPose(896, 96, 4, 0, 20).y, derbyPose(896, 96, 4, 0, 70).x, derbyPose(896, 96, 4, 0, 70).y]
+  );
+  strictEqual(frames[0].flip, 1);
+  strictEqual(frames[frames.length - 1].flip, -1);
+  strictEqual(frames.some((f) => f.tilt !== 0), true);
+  // On the track: every frame is on the lane, never cutting across the infield.
+  const inInfield = (f: { x: number; y: number }) => f.y > 96 * (DERBY_MIDDLE - 70) / 427 && f.y < 96 * (DERBY_MIDDLE + 70) / 427 && f.x < 896 * 1280 / 1525 && f.x > 896 * 250 / 1525;
+  strictEqual(frames.some(inInfield), false);
+  // No big jumps between frames.
+  for (let i = 1; i < frames.length; i++) {
+    strictEqual(Math.hypot(frames[i].x - frames[i - 1].x, frames[i].y - frames[i - 1].y) < 12, true);
+  }
+  strictEqual(derbySlideFrames(375, 67, 2, 1, 0, 1)!.length >= 2, true);
+});
+check("derby: going backward, or over 60 points, snaps; 60 points forward slides", () => {
+  strictEqual(DERBY_MAX_SLIDE, 60);
+  strictEqual(derbySlideFrames(896, 96, 3, 0, 121, 0), null); // a New Game's reset
+  strictEqual(derbySlideFrames(896, 96, 3, 0, 50, 49), null);
+  strictEqual(derbySlideFrames(896, 96, 3, 0, 30, 30), null);
+  strictEqual(derbySlideFrames(896, 96, 3, 0, 0, 61), null);
+  strictEqual(derbySlideFrames(896, 96, 3, 0, 0, 60) !== null, true);
+  // Never more than about 120 frames, even for the longest slide.
+  strictEqual(derbySlideFrames(896, 96, 4, 0, 0, 60)!.length <= 121, true);
+});
+check("derby: the horse is 2.4% of the strip's width, 2.1% with four lanes, and never stretched", () => {
+  close(derbyHorseScale(375, 3) * 117, 9, "375");
+  close(derbyHorseScale(1000, 2) * 117, 24, "1000");
+  close(derbyHorseScale(1000, 4) * 117, 21, "1000 four");
+  const right = derbyHorseTransform({ x: 10, y: 20, flip: 1, tilt: 5 }, 0.5);
+  strictEqual(right, "translate(10px, 20px) rotate(5deg) scale(0.5, 0.5) translate(-55px, -60px)");
+  const left = derbyHorseTransform({ x: 10, y: 20, flip: -1, tilt: -5 }, 0.5);
+  strictEqual(left, "translate(10px, 20px) rotate(-5deg) scale(-0.5, 0.5) translate(-55px, -60px)");
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

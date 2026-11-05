@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { preload } from "react-dom";
 import {
   BOARD_LANES,
   S_PLATE_FONT_MIN,
@@ -49,7 +50,9 @@ import {
   yardNumberPx,
   yardNumberRows,
   type CustomBoard,
+  type PatternCustomBoard,
 } from "@/lib/customBoards";
+import { DerbyBoard } from "@/components/table/DerbyBoard";
 
 // THE BOARD STRIP (PRD item 31): a 3-lane cribbage board, drawn in SVG at the
 // strip's own size (lib/boardLayout.ts), its look from a skin
@@ -86,14 +89,7 @@ export type BoardPlayer = {
   lastPoints: number | null;
 };
 
-export function CribbageBoard({
-  players,
-  skin: chosenSkin = DEFAULT_BOARD_SKIN,
-  pattern: chosenPattern = DEFAULT_BOARD_PATTERN,
-  lanes = BOARD_LANES,
-  fixedSize,
-  custom,
-}: {
+type CribbageBoardProps = {
   players: BoardPlayer[];
   skin?: BoardSkin;
   pattern?: BoardPattern;
@@ -102,9 +98,27 @@ export function CribbageBoard({
   // whatever the pattern (boardPatternFor); the player's pick is untouched.
   lanes?: 3 | 4;
   fixedSize?: { w: number; h: number };
-}) {
+};
+
+// Which board: a track board (The Derby) is its own component; every other
+// board is drawn below.
+export function CribbageBoard({ custom, ...props }: CribbageBoardProps) {
   const chosenCustom = useCustomBoard();
   const board = custom === undefined ? chosenCustom : custom;
+  if (board?.layout === "track") {
+    return <DerbyBoard board={board} players={props.players} lanes={props.lanes ?? BOARD_LANES} fixedSize={props.fixedSize} />;
+  }
+  return <PatternBoard {...props} board={board} />;
+}
+
+function PatternBoard({
+  players,
+  skin: chosenSkin = DEFAULT_BOARD_SKIN,
+  pattern: chosenPattern = DEFAULT_BOARD_PATTERN,
+  lanes = BOARD_LANES,
+  fixedSize,
+  board,
+}: Omit<CribbageBoardProps, "custom"> & { board: PatternCustomBoard | null }) {
   const skin = board?.skin ?? chosenSkin;
   const onePeg = board?.peg.pegs === 1;
   const uid = useId().replace(/:/g, "");
@@ -407,7 +421,14 @@ export function setCustomBoard(id: string | null) {
 // the active custom board's, else this player's own.
 export function useTableBoardSkin(): BoardSkin {
   const skin = useBoardSkin();
-  return useCustomBoard()?.skin ?? skin;
+  const custom = useCustomBoard();
+  // A board that's a picture is fetched as the table opens, ahead of the
+  // first deal, so it doesn't pop in.
+  const image = custom?.layout === "track" ? custom.image : null;
+  useEffect(() => {
+    if (image) preload(image, { as: "image" });
+  }, [image]);
+  return custom?.skin ?? skin;
 }
 
 // THE SELF-SCORING BANNER (a Muggins table): in the board strip's own slot
@@ -605,7 +626,7 @@ const BoardWood = memo(function BoardWood({
   g: BoardGeometry;
   skin: BoardSkin;
   uid: string;
-  art?: CustomBoard["art"];
+  art?: PatternCustomBoard["art"];
 }) {
   const holes = boardHoles(g);
   const lastX = g.columnX[g.columnX.length - 1];
