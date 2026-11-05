@@ -8,12 +8,15 @@ import {
   CribbageBoard,
   setBoardPattern,
   setBoardSkin,
+  setCustomBoard,
   useBoardPattern,
   useBoardSkin,
+  useCustomBoard,
   type BoardPlayer,
 } from "@/components/table/CribbageBoard";
 import type { BoardPattern } from "@/lib/boardLayout";
 import { BOARD_SKIN_LIST } from "@/lib/boardSkins";
+import { CUSTOM_BOARDS, CUSTOM_PATTERN_LABEL } from "@/lib/customBoards";
 import {
   CARD_BACKS,
   TABLE_SURFACES,
@@ -50,6 +53,7 @@ export function AppearanceSettings() {
   const dealAnimationOn = useDealAnimationOn();
   const boardSkin = useBoardSkin();
   const boardPattern = useBoardPattern();
+  const customBoard = useCustomBoard();
   const saved: Appearance = {
     surface: appearance.surface,
     back: appearance.back,
@@ -223,20 +227,25 @@ export function AppearanceSettings() {
           six skins), listed one board a row and previewed in the chosen
           pattern. Each preview is the real board, drawn at a phone's strip
           size (375 x 67) and scaled to its box, so its pegs and lanes read as
-          on the table. */}
+          on the table. The Pattern row's Custom tile swaps Colors for the
+          Custom Boards list: a custom board carries its own look, and neither
+          the saved pattern nor the saved colours change while it's on. */}
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-2 text-sm font-medium">Board</legend>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-1 text-xs font-medium">Pattern</legend>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {BOARD_PATTERN_CHOICES.map((choice) => (
               <label key={choice.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
                 <input
                   type="radio"
                   name="board-pattern"
                   value={choice.id}
-                  checked={boardPattern === choice.id}
-                  onChange={() => setBoardPattern(choice.id)}
+                  checked={!customBoard && boardPattern === choice.id}
+                  onChange={() => {
+                    setCustomBoard(null);
+                    setBoardPattern(choice.id);
+                  }}
                   className="peer sr-only"
                 />
                 <span
@@ -248,38 +257,93 @@ export function AppearanceSettings() {
                     pattern={choice.id}
                     players={PREVIEW_PLAYERS}
                     fixedSize={PREVIEW_SIZE}
+                    custom={null}
                   />
                 </span>
                 <span className="text-xs leading-tight peer-checked:font-semibold">{choice.label}</span>
               </label>
             ))}
-          </div>
-          <p className="text-xs">S and Snake are 3-lane boards: 4-player Solo games use Straight.</p>
-        </fieldset>
-        <fieldset className="flex flex-col gap-2">
-          <legend className="mb-1 text-xs font-medium">Colors</legend>
-          <div className="flex flex-col gap-3">
-          {BOARD_SKIN_LIST.map((skin) => (
-            <label key={skin.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
+            <label className="flex cursor-pointer flex-col items-center gap-1 text-center">
               <input
                 type="radio"
-                name="board-skin"
-                value={skin.id}
-                checked={boardSkin.id === skin.id}
-                onChange={() => setBoardSkin(skin.id)}
+                name="board-pattern"
+                value="custom"
+                checked={!!customBoard}
+                onChange={() => setCustomBoard(CUSTOM_BOARDS[0].id)}
                 className="peer sr-only"
               />
               <span
                 className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
                 aria-hidden="true"
               >
-                <CribbageBoard skin={skin} pattern={boardPattern} players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} />
+                <CribbageBoard
+                  players={PREVIEW_PLAYERS}
+                  fixedSize={PREVIEW_SIZE}
+                  custom={customBoard ?? CUSTOM_BOARDS[0]}
+                />
               </span>
-              <span className="text-xs leading-tight peer-checked:font-semibold">{skin.name}</span>
+              <span className="text-xs leading-tight peer-checked:font-semibold">{CUSTOM_PATTERN_LABEL}</span>
             </label>
-          ))}
           </div>
+          <p className="text-xs">S and Snake are 3-lane boards: 4-player Solo games use Straight.</p>
         </fieldset>
+        {customBoard ? (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 text-xs font-medium">Custom Boards</legend>
+            <div className="flex flex-col gap-3">
+              {CUSTOM_BOARDS.map((board) => (
+                <label key={board.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
+                  <input
+                    type="radio"
+                    name="board-custom"
+                    value={board.id}
+                    checked={customBoard.id === board.id}
+                    onChange={() => setCustomBoard(board.id)}
+                    className="peer sr-only"
+                  />
+                  <span
+                    className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
+                    aria-hidden="true"
+                  >
+                    <CribbageBoard players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} custom={board} />
+                  </span>
+                  <span className="text-xs leading-tight peer-checked:font-semibold">{board.name}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ) : (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 text-xs font-medium">Colors</legend>
+            <div className="flex flex-col gap-3">
+              {BOARD_SKIN_LIST.map((skin) => (
+                <label key={skin.id} className="flex cursor-pointer flex-col items-center gap-1 text-center">
+                  <input
+                    type="radio"
+                    name="board-skin"
+                    value={skin.id}
+                    checked={boardSkin.id === skin.id}
+                    onChange={() => setBoardSkin(skin.id)}
+                    className="peer sr-only"
+                  />
+                  <span
+                    className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
+                    aria-hidden="true"
+                  >
+                    <CribbageBoard
+                      skin={skin}
+                      pattern={boardPattern}
+                      players={PREVIEW_PLAYERS}
+                      fixedSize={PREVIEW_SIZE}
+                      custom={null}
+                    />
+                  </span>
+                  <span className="text-xs leading-tight peer-checked:font-semibold">{skin.name}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
         <p className="text-sm">
           The board on your table -- only you see it. Saved on this device only, at once.
         </p>

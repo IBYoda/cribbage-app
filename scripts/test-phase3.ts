@@ -77,6 +77,7 @@ import {
   holePosition,
   holeSpot,
   laneOf,
+  frontPegScore,
   nextPegs,
   PEG_MIN_R,
   S_VARIANTS,
@@ -120,6 +121,21 @@ import {
   sRibbonFill,
   sPlateColors,
 } from "../lib/boardSkins";
+import {
+  CUSTOM_BOARD_KEY,
+  CUSTOM_BOARDS,
+  customBoardById,
+  FOOTBALL_PEG_RX,
+  FOOTBALL_PEG_RY,
+  fieldLogoPx,
+  fieldYardLines,
+  readCustomBoardId,
+  writeCustomBoardId,
+  YARD_NUMBER_MIN_PX,
+  YARD_NUMBERS,
+  yardNumberPx,
+  yardNumberRows,
+} from "../lib/customBoards";
 import {
   DEAL_CARD_MS,
   DEAL_CARD_MS_FOUR,
@@ -2577,6 +2593,103 @@ check("God loss: each result has its own alt text", () => {
   strictEqual(godLossAlt("skunk"), "God was skunked");
   strictEqual(godLossAlt("double-skunk"), "God was double skunked");
   strictEqual(godLossAlt("stinkhole"), "God was stink holed");
+});
+
+// CUSTOM BOARDS (lib/customBoards.ts).
+const FOOTBALL = customBoardById("football")!;
+check("custom boards: ids unique, an unknown id is no custom board, separate from the skins", () => {
+  strictEqual(new Set(CUSTOM_BOARDS.map((b) => b.id)).size, CUSTOM_BOARDS.length);
+  strictEqual(CUSTOM_BOARDS.length >= 1, true);
+  for (const id of ["nope", "espresso", "", null, undefined]) strictEqual(customBoardById(id), null, String(id));
+  strictEqual(BOARD_SKIN_LIST.length, 6);
+  for (const b of CUSTOM_BOARDS) strictEqual(BOARD_SKIN_LIST.some((s) => s.id === b.id), false, b.id);
+});
+check("custom boards: The Football is the Straight layout with one football peg", () => {
+  strictEqual(FOOTBALL.name, "The Football");
+  strictEqual(FOOTBALL.layout, "straight");
+  deepStrictEqual(FOOTBALL.peg, { pegs: 1, shape: "football" });
+  strictEqual(FOOTBALL.art, "football"); // a board with art draws no holes or lane lines
+  deepStrictEqual(FOOTBALL.skin.lanes.map((l) => l.peg), CLASSIC_WOOD.lanes.map((l) => l.peg));
+  strictEqual(FOOTBALL.skin.fourthLane.peg, FOOTBALL.skin.fourthLane.color); // the amber
+  strictEqual(contrastRatio("#ffffff", FOOTBALL.skin.wood.top) >= PEG_CONTRAST_MIN, true); // the peg's white edge
+});
+check("football field: 11 lines from goal to goal, each in a gap between groups of holes", () => {
+  const g = boardGeometry(375, 67);
+  const lines = fieldYardLines(g);
+  strictEqual(lines.length, 11);
+  strictEqual(YARD_NUMBERS.length, 9); // on the lines between the goal lines
+  deepStrictEqual([...YARD_NUMBERS], [10, 20, 30, 40, 50, 40, 30, 20, 10]);
+  strictEqual(lines[0] > g.columnX[4] && lines[0] < g.columnX[5], true);
+  strictEqual(lines[5] > g.columnX[29] && lines[5] < g.columnX[30], true); // midfield
+  strictEqual(lines[10] > g.columnX[54] && lines[10] < g.columnX[55], true);
+  // The start holes and the game hole are in the left end zone, left of its goal line.
+  for (const x of [...g.startX, g.gameX]) strictEqual(x > g.rim && x < lines[0], true);
+  // And a football at the start holes stays on the board.
+  strictEqual(g.startX[0] - g.pegR * FOOTBALL_PEG_RX > 0, true);
+});
+check("football field: yard numbers only where they reach 9 px, in bands no football covers", () => {
+  strictEqual(YARD_NUMBER_MIN_PX, 9);
+  strictEqual(yardNumberPx(boardGeometry(375, 67)), null); // a short phone: left out
+  strictEqual(yardNumberPx(boardGeometry(375, 67, 4)), null);
+  for (const [w, h] of [[390, 84], [502, 108], [896, 96]] as const) {
+    const g = boardGeometry(w, h);
+    const px = yardNumberPx(g)!;
+    strictEqual(px >= 9, true, `${w}x${h}`);
+    const halfFootball = g.pegR * FOOTBALL_PEG_RY;
+    const [top, bottom] = yardNumberRows(g);
+    strictEqual(top - px / 2 >= g.rows[0].back + halfFootball, true, `${w}x${h} top`);
+    strictEqual(top + px / 2 <= g.rows[1].out - halfFootball, true, `${w}x${h} top`);
+    strictEqual(bottom - px / 2 >= g.rows[1].back + halfFootball, true, `${w}x${h} bottom`);
+    strictEqual(bottom + px / 2 <= g.rows[2].out - halfFootball, true, `${w}x${h} bottom`);
+    // The logo stays clear of the numbers.
+    strictEqual(fieldLogoPx(g) * 0.75 <= bottom - top - px, true, `${w}x${h} logo`);
+  }
+});
+check("custom boards: the self-scoring banner on The Football is cream on green", () => {
+  strictEqual(bannerTextColor(FOOTBALL.skin), "#f5efe3");
+  strictEqual(contrastRatio(bannerTextColor(FOOTBALL.skin), FOOTBALL.skin.wood.top) >= 4.5, true);
+});
+check("custom boards: one peg sits at the score, whatever the pegs did", () => {
+  strictEqual(frontPegScore([0, 0]), 0);
+  strictEqual(frontPegScore([12, 20]), 20);
+  strictEqual(frontPegScore([20, 12]), 20); // after a leapfrog
+  let pair = nextPegs(null, 0, null);
+  for (const [score, last] of [[8, 8], [15, 7], [15, 0], [29, 14], [121, 92]] as const) {
+    pair = nextPegs(pair, score, last);
+    strictEqual(frontPegScore(pair), score);
+  }
+  strictEqual(frontPegScore(nextPegs(null, 140, 3)), 121); // past the game hole
+});
+check("custom boards: this device only, and leaving Custom restores the saved pattern and colours", () => {
+  strictEqual(readCustomBoardId(), null); // no localStorage at all, as here in Node
+  writeCustomBoardId("football"); // and doesn't throw
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  try {
+    writeBoardPattern("snake");
+    writeBoardSkinId("mahogany");
+    const before = JSON.stringify([...store]);
+    writeCustomBoardId("football");
+    strictEqual(store.get(CUSTOM_BOARD_KEY), "football");
+    strictEqual(readCustomBoardId(), "football");
+    strictEqual(readBoardPattern(), "snake");
+    strictEqual(readBoardSkinId(), "mahogany");
+    writeCustomBoardId(null);
+    strictEqual(store.has(CUSTOM_BOARD_KEY), false);
+    strictEqual(JSON.stringify([...store]), before);
+    // A stored id that doesn't exist (a board removed later): the normal board.
+    store.set(CUSTOM_BOARD_KEY, "no-such-board");
+    strictEqual(readCustomBoardId(), null);
+    writeCustomBoardId("no-such-board");
+    strictEqual(store.has(CUSTOM_BOARD_KEY), false);
+  } finally {
+    delete g.localStorage;
+  }
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

@@ -56,7 +56,7 @@ import {
   type SeatPosition,
   type TableScreen,
 } from "@/lib/tableLayout";
-import { CribbageBoard, SelfScoringBanner, useBoardPattern, useBoardSkin } from "@/components/table/CribbageBoard";
+import { CribbageBoard, SelfScoringBanner, useBoardPattern, useTableBoardSkin } from "@/components/table/CribbageBoard";
 import { laneRingColor } from "@/lib/boardSkins";
 import {
   ComputerDiscardClock,
@@ -607,7 +607,7 @@ export default function TablePage() {
   const reducedMotion = usePrefersReducedMotion();
   // The board THIS player picked in Profile (this device only): the square
   // table's board strip, lane rings and self-scoring banner.
-  const boardSkin = useBoardSkin();
+  const boardSkin = useTableBoardSkin();
   // ...and its pattern (Straight or S), likewise this device only.
   const boardPattern = useBoardPattern();
   useEffect(() => {

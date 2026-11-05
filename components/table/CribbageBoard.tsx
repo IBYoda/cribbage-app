@@ -7,6 +7,7 @@ import {
   boardGeometryFor,
   boardHoles,
   boardPatternFor,
+  frontPegScore,
   isSBoard,
   nextPegs,
   pegPosition,
@@ -35,6 +36,20 @@ import {
   writeBoardSkinId,
   type BoardSkin,
 } from "@/lib/boardSkins";
+import { WORDMARK_CLASS, WORDMARK_TEXT } from "@/components/brand/Wordmark";
+import {
+  FOOTBALL_PEG_RX,
+  FOOTBALL_PEG_RY,
+  YARD_NUMBERS,
+  customBoardById,
+  fieldLogoPx,
+  fieldYardLines,
+  readCustomBoardId,
+  writeCustomBoardId,
+  yardNumberPx,
+  yardNumberRows,
+  type CustomBoard,
+} from "@/lib/customBoards";
 
 // THE BOARD STRIP (PRD item 31): a 3-lane cribbage board, drawn in SVG at the
 // strip's own size (lib/boardLayout.ts), its look from a skin
@@ -57,6 +72,11 @@ import {
 // snake are track boards, as big as fits the strip at their own shape,
 // centred, drawn and pegged alike. The pegs and the two layers are the same
 // on every pattern; on the track boards they slide along their lane.
+//
+// custom: a complete board (lib/customBoards.ts) drawn instead of skin and
+// pattern: its layout, colours, art and pegs. Left out: this player's own
+// choice in Profile (useCustomBoard), so every table screen gets it from here.
+// null: never one (the Profile's previews of the normal boards).
 
 export type BoardPlayer = {
   userId: string;
@@ -68,19 +88,25 @@ export type BoardPlayer = {
 
 export function CribbageBoard({
   players,
-  skin = DEFAULT_BOARD_SKIN,
+  skin: chosenSkin = DEFAULT_BOARD_SKIN,
   pattern: chosenPattern = DEFAULT_BOARD_PATTERN,
   lanes = BOARD_LANES,
   fixedSize,
+  custom,
 }: {
   players: BoardPlayer[];
   skin?: BoardSkin;
   pattern?: BoardPattern;
+  custom?: CustomBoard | null;
   // 4: a 4-player Solo game's board -- always the 4-lane straight board,
   // whatever the pattern (boardPatternFor); the player's pick is untouched.
   lanes?: 3 | 4;
   fixedSize?: { w: number; h: number };
 }) {
+  const chosenCustom = useCustomBoard();
+  const board = custom === undefined ? chosenCustom : custom;
+  const skin = board?.skin ?? chosenSkin;
+  const onePeg = board?.peg.pegs === 1;
   const uid = useId().replace(/:/g, "");
   const boxRef = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState<{ w: number; h: number } | null>(null);
@@ -107,7 +133,7 @@ export function CribbageBoard({
   // measure, a resize, a rotation) or a new pattern redraws them in place:
   // they are drawn without a transition until a moment after it settles (a
   // timer, not an animation frame, so a hidden tab catches up too).
-  const pattern = boardPatternFor(chosenPattern, lanes);
+  const pattern = boardPatternFor(board?.layout ?? chosenPattern, lanes);
   const drawKey = size ? `${pattern} ${lanes} ${size.w} ${size.h}` : null;
   const [settledKey, setSettledKey] = useState(drawKey);
   const resizing = settledKey !== drawKey;
@@ -205,7 +231,7 @@ export function CribbageBoard({
           {isSBoard(geometry) ? (
             <SBoardWood g={geometry} skin={skin} uid={uid} />
           ) : (
-            <BoardWood g={geometry} skin={skin} uid={uid} />
+            <BoardWood g={geometry} skin={skin} uid={uid} art={board?.art} />
           )}
           <defs>
             {laneSkins(skin, lanes).map((lane, i) => {
@@ -229,15 +255,16 @@ export function CribbageBoard({
               shown in one, hidden in the other -- and moves in both, so
               when it changes layer it is already in place. Moving a peg's
               element in the DOM instead (to draw it last) would cancel its
-              slide. */}
+              slide. A one-peg board draws peg A alone, always in the front
+              layer, at the score. */}
           {(["back", "front"] as const).map((layer) => (
             <g key={layer}>
               {seated.flatMap((p) =>
-                ([0, 1] as const).map((peg) => {
+                (onePeg ? ([0] as const) : ([0, 1] as const)).map((peg) => {
                   const pair = next[p.userId];
                   const front = pair[1] >= pair[0] ? 1 : 0;
-                  const shown = (peg === front) === (layer === "front");
-                  const at = pegPosition(geometry, p.lane, pair[peg], peg);
+                  const shown = onePeg ? layer === "front" : (peg === front) === (layer === "front");
+                  const at = pegPosition(geometry, p.lane, onePeg ? frontPegScore(pair) : pair[peg], peg);
                   return (
                     <g
                       key={`${p.userId}-${peg}`}
@@ -251,7 +278,11 @@ export function CribbageBoard({
                       className={resizing || isSBoard(geometry) ? "board-peg board-peg--still" : "board-peg"}
                       style={{ transform: `translate(${at.x}px, ${at.y}px)` }}
                     >
-                      <PegShape r={geometry.pegR} fill={`url(#${uid}-peg${p.lane})`} shadow={`url(#${uid}-pegshadow)`} />
+                      {board?.peg.shape === "football" ? (
+                        <FootballPeg r={geometry.pegR} fill={`url(#${uid}-peg${p.lane})`} shadow={`url(#${uid}-pegshadow)`} />
+                      ) : (
+                        <PegShape r={geometry.pegR} fill={`url(#${uid}-peg${p.lane})`} shadow={`url(#${uid}-pegshadow)`} />
+                      )}
                     </g>
                   );
                 })
@@ -296,6 +327,37 @@ function PegShape({ r, fill, shadow }: { r: number; fill: string; shadow: string
   );
 }
 
+// A football peg, centred on (0, 0) and lying along the board: pointed ends,
+// a white edge (the usual dark outline disappears on turf, and red, blue and
+// green are all close to it in brightness) and white laces.
+function FootballPeg({ r, fill, shadow }: { r: number; fill: string; shadow: string }) {
+  const rx = r * FOOTBALL_PEG_RX;
+  const ry = r * FOOTBALL_PEG_RY;
+  const laceX = rx * 0.42;
+  const laceY = ry * 0.42;
+  return (
+    <>
+      <path
+        d={`M${-rx} 0 Q0 ${-ry * 2} ${rx} 0 Q0 ${ry * 2} ${-rx} 0 Z`}
+        fill={fill}
+        stroke="#fff"
+        strokeWidth={1.3}
+        strokeLinejoin="round"
+        filter={shadow}
+      />
+      <path
+        d={`M${-laceX} 0 H${laceX} ${[-1, 0, 1]
+          .map((i) => `M${(i * laceX) / 1.6} ${-laceY} V${laceY}`)
+          .join(" ")}`}
+        fill="none"
+        stroke="#fff"
+        strokeWidth={0.9}
+        strokeLinecap="round"
+      />
+    </>
+  );
+}
+
 // THE PROFILE SETTING "Board" (lib/boardSkins.ts: this device only), read
 // live. A change in another tab arrives as a storage event, one in this tab
 // through setBoardSkin. Before the page is hydrated: Classic Pine.
@@ -328,6 +390,24 @@ export function useBoardPattern(): BoardPattern {
 export function setBoardPattern(pattern: BoardPattern) {
   writeBoardPattern(pattern);
   window.dispatchEvent(new Event(BOARD_SETTING_EVENT));
+}
+
+// THE PROFILE SETTING "Custom" (lib/customBoards.ts: this device only), read
+// live the same way. Before the page is hydrated: none.
+export function useCustomBoard(): CustomBoard | null {
+  return customBoardById(useSyncExternalStore(subscribeBoardSetting, readCustomBoardId, () => null));
+}
+
+export function setCustomBoard(id: string | null) {
+  writeCustomBoardId(id);
+  window.dispatchEvent(new Event(BOARD_SETTING_EVENT));
+}
+
+// The colours a table screen uses (the lane rings, the self-scoring banner):
+// the active custom board's, else this player's own.
+export function useTableBoardSkin(): BoardSkin {
+  const skin = useBoardSkin();
+  return useCustomBoard()?.skin ?? skin;
 }
 
 // THE SELF-SCORING BANNER (a Muggins table): in the board strip's own slot
@@ -516,7 +596,17 @@ function WoodFace({
 
 // The straight board: the board, the lanes and every hole -- drawn once per
 // size and skin, so a score change re-renders only the pegs.
-const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; skin: BoardSkin; uid: string }) {
+const BoardWood = memo(function BoardWood({
+  g,
+  skin,
+  uid,
+  art,
+}: {
+  g: BoardGeometry;
+  skin: BoardSkin;
+  uid: string;
+  art?: CustomBoard["art"];
+}) {
   const holes = boardHoles(g);
   const lastX = g.columnX[g.columnX.length - 1];
   // A lane's panel (not "paint" lanes): round both rows, from the start
@@ -530,9 +620,11 @@ const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; 
     <>
       <WoodDefs skin={skin} uid={uid} height={g.height} lanes={g.rows.length} />
       <WoodFace skin={skin} uid={uid} box={{ x: 0, y: 0, width: g.width, height: g.height }} rim={g.rim} corner={g.corner} />
+      {art === "football" && <FootballField g={g} uid={uid} />}
       {/* Each lane: a painted line between its two rows (Classic Pine), or
-          a panel round both -- filled, outlined or brushed metal. */}
-      {g.rows.map((row, lane) => {
+          a panel round both -- filled, outlined or brushed metal. A board
+          with art has neither lanes nor holes: only the art and the pegs. */}
+      {!art && g.rows.map((row, lane) => {
         const color = skinLane(skin, lane).color;
         const p = panels[lane];
         if (skin.laneStyle === "paint") {
@@ -609,27 +701,150 @@ const BoardWood = memo(function BoardWood({ g, skin, uid }: { g: BoardGeometry; 
       })}
       {/* The holes: dark, with a lighter lip on the lit side (Classic Pine)
           or a thin edge in the lane's colour (outlined lanes). */}
-      <g>
-        {holes.map((h, i) => (
-          <g key={i}>
-            {skin.hole.lip && (
-              <circle cx={h.x} cy={h.y + 0.3} r={g.holeR + 0.35} fill={skin.hole.lip} opacity={0.55} />
-            )}
-            <circle
-              cx={h.x}
-              cy={h.y}
-              r={g.holeR}
-              fill={skin.hole.fill}
-              stroke={skin.hole.laneStroke ? skinLane(skin, h.lane).color : undefined}
-              strokeOpacity={skin.hole.laneStroke ? 0.85 : undefined}
-              strokeWidth={skin.hole.laneStroke ? 0.6 : undefined}
-            />
-          </g>
-        ))}
-      </g>
+      {!art && (
+        <g>
+          {holes.map((h, i) => (
+            <g key={i}>
+              {skin.hole.lip && (
+                <circle cx={h.x} cy={h.y + 0.3} r={g.holeR + 0.35} fill={skin.hole.lip} opacity={0.55} />
+              )}
+              <circle
+                cx={h.x}
+                cy={h.y}
+                r={g.holeR}
+                fill={skin.hole.fill}
+                stroke={skin.hole.laneStroke ? skinLane(skin, h.lane).color : undefined}
+                strokeOpacity={skin.hole.laneStroke ? 0.85 : undefined}
+                strokeWidth={skin.hole.laneStroke ? 0.6 : undefined}
+              />
+            </g>
+          ))}
+        </g>
+      )}
     </>
   );
 });
+
+// THE FOOTBALL FIELD: our own stylised drawing, on the straight board's
+// geometry, with no holes or lane lines: the footballs travel where the holes
+// would be. Two end zones reaching the rim (so the start holes and the game
+// hole, at the far left, sit inside the left one), ten 10-yard sections, hash
+// marks along the rows, yard numbers where they're legible, CRIBBAGE in each
+// end zone and the Nobs! wordmark at midfield. No team or league marks.
+const FOOTBALL_TURF_STRIPES = ["#256f3c", "#1d6332"] as const;
+const FOOTBALL_END_ZONE = "#154a26";
+// Subtle on purpose: a football crossing it must stay clear.
+const FOOTBALL_LOGO_OPACITY = 0.42;
+
+function FootballField({ g, uid }: { g: BoardGeometry; uid: string }) {
+  const top = g.rim;
+  const height = g.height - 2 * g.rim;
+  const left = g.rim;
+  const right = g.width - g.rim;
+  const lines = fieldYardLines(g);
+  const goalLeft = lines[0];
+  const goalRight = lines[lines.length - 1];
+  const zones = [
+    { x: left, width: goalLeft - left, rotate: -90 },
+    { x: goalRight, width: right - goalRight, rotate: 90 },
+  ];
+  const zoneFont = height * 0.165;
+  const yardFont = yardNumberPx(g);
+  const hashes = g.rows
+    .flatMap((row) => [row.out, row.back])
+    .flatMap((y) => g.columnX.slice(5, 55).map((x) => `M${x} ${y - 1}v2`))
+    .join("");
+  return (
+    <g>
+      <clipPath id={`${uid}-field`}>
+        <rect x={left} y={top} width={right - left} height={height} rx={Math.max(g.corner - g.rim, 2)} />
+      </clipPath>
+      <g clipPath={`url(#${uid}-field)`}>
+        {lines.slice(0, -1).map((x, i) => (
+          <rect key={i} x={x} y={top} width={lines[i + 1] - x} height={height} fill={FOOTBALL_TURF_STRIPES[i % 2]} />
+        ))}
+        {zones.map((zone) => (
+          <rect key={zone.x} x={zone.x} y={top} width={zone.width} height={height} fill={FOOTBALL_END_ZONE} />
+        ))}
+        <path d={hashes} stroke="#fff" strokeOpacity={0.3} strokeWidth={0.7} />
+        {lines.map((x, i) => (
+          <path
+            key={i}
+            d={`M${x} ${top} V${top + height}`}
+            stroke="#fff"
+            strokeOpacity={0.75}
+            strokeWidth={i === 0 || i === lines.length - 1 ? 1.6 : 0.9}
+          />
+        ))}
+        <text
+          x={lines[5]}
+          y={g.height / 2}
+          fontSize={fieldLogoPx(g)}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="var(--brass)"
+          opacity={FOOTBALL_LOGO_OPACITY}
+          className={WORDMARK_CLASS}
+          style={{ textShadow: "none" }}
+        >
+          {WORDMARK_TEXT}
+        </text>
+        {zones.map((zone) => {
+          const x = zone.x + zone.width / 2;
+          const y = g.height / 2;
+          return (
+            <text
+              key={zone.x}
+              x={x}
+              y={y}
+              transform={`rotate(${zone.rotate} ${x} ${y})`}
+              fontSize={zoneFont}
+              fontWeight={800}
+              textAnchor="middle"
+              dominantBaseline="central"
+              textLength={height * 0.86}
+              lengthAdjust="spacingAndGlyphs"
+              fill="#fff"
+              fillOpacity={0.8}
+            >
+              CRIBBAGE
+            </text>
+          );
+        })}
+        {yardFont !== null &&
+          yardNumberRows(g).flatMap((y) =>
+            YARD_NUMBERS.map((number, i) => (
+              <text
+                key={`${y}-${i}`}
+                x={lines[i + 1]}
+                y={y}
+                fontSize={yardFont}
+                fontWeight={700}
+                letterSpacing={yardFont * 0.3}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fill="#fff"
+                fillOpacity={0.8}
+              >
+                {number}
+              </text>
+            ))
+          )}
+      </g>
+      <rect
+        x={left}
+        y={top}
+        width={right - left}
+        height={height}
+        rx={Math.max(g.corner - g.rim, 2)}
+        fill="none"
+        stroke="#fff"
+        strokeOpacity={0.75}
+        strokeWidth={0.9}
+      />
+    </g>
+  );
+}
 
 // The S board (lib/boardLayout.ts, sBoardGeometry): the board, each lane as
 // a ribbon along its line, the score plates and every hole -- drawn once per
