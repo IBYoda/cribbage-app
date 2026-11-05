@@ -126,10 +126,13 @@ body {
   }
 }
 
+/* --splash-duration comes from splashDurationMs (lib/splashPhrases.ts), set
+   by Splash on the overlay. */
 .splash-zero,
 .splash-image,
 .splash-go {
   animation-name: splash-pop;
+  animation-duration: var(--splash-duration);
   animation-timing-function: ease-out;
   animation-fill-mode: forwards;
   text-shadow:
@@ -137,12 +140,7 @@ body {
     0 0 0.4em rgb(0 0 0 / 0.5);
 }
 
-.splash-zero,
-.splash-image {
-  animation-duration: 2s;
-}
-
-/* God's 0: the image alone, in a fixed square at most 40% of the screen tall,
+/* God's image: alone, in a fixed square at most 40% of the screen tall,
    so it fits 375x667 and nothing jumps while it loads. contain keeps a
    non-square image's shape, and its transparency shows the table behind. No
    animation here: the wrapper's animationend is what clears the splash. */
@@ -162,10 +160,6 @@ body {
 .splash-zero > :first-child {
   color: #fff;
   -webkit-text-stroke: 0.02em #b91c1c;
-}
-
-.splash-go {
-  animation-duration: 1.2s;
 }
 
 @media (prefers-reduced-motion: reduce) {

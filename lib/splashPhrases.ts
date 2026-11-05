@@ -15,8 +15,18 @@ export const GOD_ZERO_SPLASH_PHRASES = [
   "SHOT! MY CHILD",
 ];
 
-// What God's own 0 shows instead of a phrase: public/splashes/god-shot.webp.
+// What God's own 0 shows instead of a phrase, and what God losing badly shows
+// (godLossSplash, lib/resultScores.ts): public/splashes/god-shot.webp.
 export const GOD_ZERO_SPLASH_IMAGE = "/splashes/god-shot.webp";
+
+// HOW LONG A SPLASH LASTS: the one place. components/table/Splash.tsx hands
+// it to the CSS as --splash-duration.
+export const SPLASH_MS = 3000;
+export const GO_SPLASH_MS = 1200;
+
+export function splashDurationMs(kind: "zero" | "image" | "go"): number {
+  return kind === "go" ? GO_SPLASH_MS : SPLASH_MS;
+}
 
 // The computer level that is God.
 export function isGodLevel(level: string | null | undefined): boolean {
