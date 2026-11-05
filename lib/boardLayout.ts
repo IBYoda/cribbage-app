@@ -200,6 +200,12 @@ export function leapfrog(prev: PegPair | null, front: number, back: number): Peg
   return [back, front];
 }
 
+// A board with one peg a player (lib/customBoards.ts): the front peg alone,
+// which is always the score. The back peg is simply not drawn.
+export function frontPegScore(pair: PegPair): number {
+  return Math.max(pair[0], pair[1]);
+}
+
 // Each player's lane, by the game's seat order (games.players, the same array
 // on every screen): the first seat lane 0, the second lane 1, the third lane
 // 2. Never "me first", so every screen shows the same colours.
