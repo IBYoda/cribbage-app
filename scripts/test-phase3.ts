@@ -13,12 +13,15 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
-import { hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
+import { godLossAlt, godLossSplash, hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
 import { isEmailNotConfirmed, readAuthHashError, RESEND_COOLDOWN_S, resendSecondsLeft } from "../lib/authFlow";
 import {
   GOD_ZERO_SPLASH_IMAGE,
   GOD_ZERO_SPLASH_PHRASES,
+  GO_SPLASH_MS,
   isGodLevel,
+  SPLASH_MS,
+  splashDurationMs,
   ZERO_SPLASH_PHRASES,
   zeroSplashKind,
   zeroSplashPhrases,
@@ -2543,6 +2546,37 @@ check("splash: only God's own 0 at a God table is the image", () => {
   strictEqual(zeroSplashKind(false, true), "phrase");
   strictEqual(zeroSplashKind(false, false), "phrase"); // a human opponent, or a lower computer level
   strictEqual(GOD_ZERO_SPLASH_IMAGE, "/splashes/god-shot.webp");
+});
+check("splash: GO lasts 1.2 s, every other splash 3 s", () => {
+  strictEqual(SPLASH_MS, 3000);
+  strictEqual(GO_SPLASH_MS, 1200);
+  strictEqual(splashDurationMs("go"), 1200);
+  strictEqual(splashDurationMs("zero"), 3000);
+  strictEqual(splashDurationMs("image"), 3000);
+});
+check("God loss: the boundaries on God's final score", () => {
+  strictEqual(godLossSplash("hard", true, 120), "stinkhole");
+  strictEqual(godLossSplash("hard", true, 119), null);
+  strictEqual(godLossSplash("hard", true, 91), null);
+  strictEqual(godLossSplash("hard", true, 90), "skunk");
+  strictEqual(godLossSplash("hard", true, 61), "skunk");
+  strictEqual(godLossSplash("hard", true, 60), "double-skunk");
+  strictEqual(godLossSplash("hard", true, 0), "double-skunk");
+});
+check("God loss: nothing when God wins, at any other table, or with no score", () => {
+  for (const score of [120, 90, 60, 0]) {
+    strictEqual(godLossSplash("hard", false, score), null, `God won, ${score}`);
+    for (const level of ["easy", "medium", null, undefined]) {
+      strictEqual(godLossSplash(level, true, score), null, `${level}, ${score}`);
+    }
+  }
+  strictEqual(godLossSplash("hard", true, null), null);
+  strictEqual(godLossSplash("hard", true, undefined), null);
+});
+check("God loss: each result has its own alt text", () => {
+  strictEqual(godLossAlt("skunk"), "God was skunked");
+  strictEqual(godLossAlt("double-skunk"), "God was double skunked");
+  strictEqual(godLossAlt("stinkhole"), "God was stink holed");
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

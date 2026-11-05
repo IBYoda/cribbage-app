@@ -24,7 +24,9 @@ import { CountsToggle } from "@/components/table/CountsToggle";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
 import { mugginsPlateStates } from "@/lib/mugginsPlates";
-import { hideRejoinedScores, scoreFromThisGame } from "@/lib/resultScores";
+import { godLossSplash, hideRejoinedScores, scoreFromThisGame } from "@/lib/resultScores";
+import { GAME_HOLE } from "@/lib/boardLayout";
+import { isGodLevel } from "@/lib/splashPhrases";
 import { pollIntervalMs, profilesToFetch, wonBoardReusable } from "@/lib/tableSync";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
@@ -593,7 +595,7 @@ export default function TablePage() {
   const errorRef = useRef<string | null>(null);
   // THE SPLASHES ("19" and GO), fired from the realtime handlers only -- see
   // components/table/Splash.tsx.
-  const { splash, showZero, showGo, dismiss: dismissSplash } = useSplash({
+  const { splash, showZero, showGo, showGodLoss, dismiss: dismissSplash } = useSplash({
     noZero: hideCountNumbers,
     computerLevel: table?.computer_level,
   });
@@ -1771,6 +1773,38 @@ export default function TablePage() {
             win_claim_by: string | null;
             win_confirmed_by?: string[] | null;
           };
+          // GOD LOSING BADLY: the moment the game becomes won, live. Before
+          // the checks below, because the read after my own winning tap can
+          // land first and make this game "not on screen". Live by nature:
+          // this event only arrives while subscribed. ready_by is empty only
+          // on the win itself -- later updates of the won game are New Game
+          // taps, so the computer's tap after a reload can't fire this. The
+          // key stops a repeat. God's score comes from a fresh read, not the
+          // roster on screen, in case an event is still on its way; the
+          // human's 121 in that same read proves it isn't a New Game's reset.
+          if (
+            updatedGame.ended_reason === "won" &&
+            !LIVE_GAME_STATUSES.includes(updatedGame.status) &&
+            (updatedGame.ready_by ?? []).length === 0 &&
+            updatedGame.winner_id === table.created_by &&
+            isGodLevel(table.computer_level)
+          ) {
+            const wonGameId = updatedGame.id;
+            const level = table.computer_level;
+            const humanId = table.created_by;
+            supabase
+              .from("table_members")
+              .select("user_id, score")
+              .eq("table_id", table.id)
+              .then(({ data, error }) => {
+                if (error || data?.length !== 2) return;
+                const human = data.find((m) => m.user_id === humanId);
+                const god = data.find((m) => m.user_id !== humanId);
+                if (human?.score !== GAME_HOLE) return;
+                const loss = godLossSplash(level, true, god?.score);
+                if (loss) showGodLoss(`godloss:${wonGameId}`, loss);
+              });
+          }
           // THE WON GAME ON SCREEN: its only change after it ends is a New
           // Game tap (ready_by). Merge that and nothing else -- a union, so an
           // event and a re-read can land in either order. Everything else
@@ -1960,7 +1994,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo]);
+  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo, showGodLoss]);
 
   // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
   // comes back online -- the same full refresh as on subscribe. A hidden tab
