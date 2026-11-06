@@ -127,6 +127,7 @@ import {
   DERBY_FINISH_X,
   DERBY_MAX_SLIDE,
   DERBY_MAX_TILT,
+  DERBY_RUN_UP,
   DERBY_START_X,
   derbyDistance,
   derbyHorseScale,
@@ -2733,8 +2734,9 @@ check("derby: the registry has it after The Football, with its picture on disk",
   strictEqual(bannerTextColor(derby.skin), "#f5efe3"); // cream
   strictEqual(contrastRatio(bannerTextColor(derby.skin), derby.skin.wood.top) >= 4.5, true);
 });
-check("derby: score 0 on the start mark, just past the finish in travel order, on every lane", () => {
-  strictEqual(DERBY_START_X > DERBY_FINISH_X, true); // the near straight runs left to right
+check("derby: score 0 on the start mark, 45 art px behind the line in travel order, on every lane", () => {
+  strictEqual(DERBY_RUN_UP, 45);
+  strictEqual(DERBY_START_X, DERBY_FINISH_X - 45); // the near straight runs left to right
   for (const count of [2, 3, 4] as const) {
     for (let lane = 0; lane < count; lane++) {
       const p = artAt(count, lane, 0);
@@ -2765,7 +2767,26 @@ check("derby: positions increase along the lane, one lap, in equal steps", () =>
       const offset = derbyLaneOffset(count, lane);
       const step = derbyDistance(offset, 1) - derbyDistance(offset, 0);
       for (let s = 0; s < 121; s++) close(derbyDistance(offset, s + 1) - derbyDistance(offset, s), step, "step");
-      close(derbyDistance(offset, 121) - derbyDistance(offset, 0), derbyLaneLength(offset) - (DERBY_START_X - DERBY_FINISH_X), "lap");
+      close(derbyDistance(offset, 121) - derbyDistance(offset, 0), derbyLaneLength(offset) + DERBY_RUN_UP, "the run-up and a lap");
+    }
+  }
+});
+check("derby: the first points cross the line, and 121 is the second crossing", () => {
+  for (const count of [2, 3, 4] as const) {
+    const offset = derbyLaneOffset(count, 0);
+    strictEqual(artAt(count, 0, 1).x < DERBY_FINISH_X, true); // still behind it
+    strictEqual(artAt(count, 0, 3).x > DERBY_FINISH_X, true); // over it
+    close(derbyDistance(offset, 121), DERBY_FINISH_X - 246 + derbyLaneLength(offset), "one lap past the first crossing");
+  }
+});
+check("derby: from 0 over the line the horse faces right and stays level, in every frame", () => {
+  for (const [w, h] of DERBY_SIZES) {
+    for (const count of [2, 3, 4] as const) {
+      for (let lane = 0; lane < count; lane++) {
+        const frames = derbySlideFrames(w, h, count, lane, 0, 6)!;
+        strictEqual(frames.every((f) => f.flip === 1 && f.tilt === 0), true, `${w}x${h} ${count}/${lane}`);
+        strictEqual(new Set(frames.map((f) => f.y)).size, 1, "a straight line");
+      }
     }
   }
 });
@@ -2890,10 +2911,10 @@ check("derby: going backward, or over 60 points, snaps; 60 points forward slides
   // Never more than about 120 frames, even for the longest slide.
   strictEqual(derbySlideFrames(896, 96, 4, 0, 0, 60)!.length <= 121, true);
 });
-check("derby: the horse is 2.4% of the strip's width, 2.1% with four lanes, and never stretched", () => {
-  close(derbyHorseScale(375, 3) * 117, 9, "375");
-  close(derbyHorseScale(1000, 2) * 117, 24, "1000");
-  close(derbyHorseScale(1000, 4) * 117, 21, "1000 four");
+check("derby: the horse is 3.2% of the strip's width, 2.8% with four lanes, and never stretched", () => {
+  close(derbyHorseScale(375, 3) * 117, 12, "375");
+  close(derbyHorseScale(1000, 2) * 117, 32, "1000");
+  close(derbyHorseScale(1000, 4) * 117, 28, "1000 four");
   const right = derbyHorseTransform({ x: 10, y: 20, flip: 1, tilt: 5 }, 0.5);
   strictEqual(right, "translate(10px, 20px) rotate(5deg) scale(0.5, 0.5) translate(-55px, -60px)");
   const left = derbyHorseTransform({ x: 10, y: 20, flip: -1, tilt: -5 }, 0.5);

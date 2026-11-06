@@ -23,11 +23,12 @@ const MID_Y = 201.5;
 const RADIUS = 124.5;
 const STRAIGHT = RIGHT_X - LEFT_X;
 
-// The white finish line on the near straight, and the start mark just past it
-// in the direction of travel. Score 0 is on the start mark, 121 on the finish.
+// The white finish line on the near straight, and the start mark just behind
+// it: the horses stand a short run-up before the line, on the side they
+// approach it from. Score 0 is on the start mark, 121 on the line.
 export const DERBY_FINISH_X = 717;
-export const DERBY_START_X = 792;
-const START_TO_FINISH_GAP = DERBY_START_X - DERBY_FINISH_X;
+export const DERBY_RUN_UP = 45;
+export const DERBY_START_X = DERBY_FINISH_X - DERBY_RUN_UP;
 
 // How far each lane is from the centre line, outermost first (positive is
 // outward). Lane 0 is the outermost, as lane 0 is the top lane on the other
@@ -60,10 +61,11 @@ export function derbyLaneLength(offset: number): number {
 }
 
 // How far along a lane a score is, from the near straight's left end, in art
-// px. May be over a lap: derbyPointAt wraps it.
+// px. The race is the run-up plus one full lap: the first points cross the
+// white line, and 121 is the second crossing. Over a lap: derbyPointAt wraps it.
 export function derbyDistance(offset: number, score: number): number {
-  const lap = derbyLaneLength(offset) - START_TO_FINISH_GAP;
-  return DERBY_START_X - LEFT_X + (clampScore(score) / GAME_HOLE) * lap;
+  const race = derbyLaneLength(offset) + DERBY_RUN_UP;
+  return DERBY_START_X - LEFT_X + (clampScore(score) / GAME_HOLE) * race;
 }
 
 // A point on a lane, in art px, and the direction of travel there.
@@ -110,12 +112,14 @@ export function derbyPose(width: number, height: number, laneCount: DerbyLaneCou
   return poseAt(width, height, offset, derbyDistance(offset, score));
 }
 
-// The horse's scale: the art is HORSE_WIDTH wide, drawn at 2.4% of the strip's
-// width, or 2.1% with four lanes.
+// The horse's scale: the art is HORSE_WIDTH wide, drawn at this share of the
+// strip's width. Horses may overlap a little: real racing is crowded.
 const HORSE_WIDTH = 117;
+const HORSE_SHARE = 0.032;
+const HORSE_SHARE_FOUR_LANES = 0.028;
 
 export function derbyHorseScale(width: number, laneCount: DerbyLaneCount): number {
-  return (width * (laneCount === 4 ? 0.021 : 0.024)) / HORSE_WIDTH;
+  return (width * (laneCount === 4 ? HORSE_SHARE_FOUR_LANES : HORSE_SHARE)) / HORSE_WIDTH;
 }
 
 // The art's ground point (between the hooves): what sits on the lane.
