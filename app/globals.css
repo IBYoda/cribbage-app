@@ -862,6 +862,12 @@ body {
   height: var(--sq-board-h);
   margin-inline: calc(-1 * max(env(safe-area-inset-left), var(--gutter)));
 }
+/* A board that replaces the score plates (the Beer Board): the strip takes the
+   plates' row, 48px and its 2px margin, so the rows above it stay put. Never
+   on a self-scoring table, so the banner's --sq-board-h is untouched. */
+.sq-board--tall {
+  height: calc(var(--sq-board-h) + 50px);
+}
 /* THE SELF-SCORING BANNER (a Muggins table; SelfScoringBanner in
    components/table/CribbageBoard.tsx): fills the board strip exactly (the
    same .sq-board wrapper, height and margins), with the board's corner

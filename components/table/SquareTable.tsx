@@ -18,7 +18,9 @@ import type { ScreenSide } from "@/lib/tableLayout";
 // whole card backs overlapped; the middle (played cards, count and pill);
 // the pile row (crib, Sort, deck -- only when I deal); my hand; the board
 // strip (CribbageBoard); the score plates. No dealer "D" anywhere: the
-// dealer is shown only by where the crib and the deck are.
+// dealer is shown only by where the crib and the deck are. A board that
+// replaces the plates (platesReplaced, lib/beerBoard.ts) leaves `scores` null
+// and takes their row with boardTall, so nothing above it moves.
 
 export function SquareTableShell({
   header,
@@ -27,6 +29,7 @@ export function SquareTableShell({
   piles,
   hand,
   board,
+  boardTall = false,
   scores,
   surface = "green-felt",
   back = "classic",
@@ -41,6 +44,8 @@ export function SquareTableShell({
   // The board strip (CribbageBoard), full width, --sq-board-h tall. Its
   // space is kept even without one, so nothing above it moves.
   board?: ReactNode;
+  // The strip takes the plates' 50px as well (.sq-board--tall).
+  boardTall?: boolean;
   scores: ReactNode;
   surface?: TableSurface;
   back?: CardBack;
@@ -62,7 +67,7 @@ export function SquareTableShell({
       <div className="min-w-0">{piles}</div>
       <div className="min-w-0">{hand}</div>
       {/* THE BOARD STRIP (PRD item 31, step 1b). */}
-      <div className="sq-board" data-sq="board">
+      <div className={boardTall ? "sq-board sq-board--tall" : "sq-board"} data-sq="board">
         {board}
       </div>
       <div className="min-w-0">{scores}</div>

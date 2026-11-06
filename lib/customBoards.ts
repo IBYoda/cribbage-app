@@ -4,9 +4,11 @@
 // CUSTOM_BOARDS (and, for new art or a new peg, one drawing in
 // components/table/CribbageBoard.tsx). A new TRACK is more: its own geometry
 // and component, as The Derby has (lib/derbyTrack.ts,
-// components/table/DerbyBoard.tsx). Display only: nothing here reaches the
-// server, the scores or the other players. Pure, no React; tested by
-// scripts/test-phase3.ts.
+// components/table/DerbyBoard.tsx). A board can go further still and replace
+// the score plates as well, as the Beer Board does (lib/beerBoard.ts,
+// components/table/BeerBoard.tsx): replacesPlates. Display only: nothing here
+// reaches the server, the scores or the other players. Pure, no React; tested
+// by scripts/test-phase3.ts.
 
 import type { BoardGeometry, BoardPattern } from "@/lib/boardLayout";
 import { CLASSIC_WOOD, type BoardSkin } from "@/lib/boardSkins";
@@ -43,7 +45,18 @@ export type TrackBoard = {
   peg: { pegs: 1; shape: "horse" };
 };
 
-export type CustomBoard = PatternCustomBoard | TrackBoard;
+// A board that draws the scores themselves, in layers (lib/beerBoard.ts), and
+// so takes the score plates' place too: platesReplaced says when. It has no
+// pegs. Its skin is only the lane rings and the self-scoring banner.
+export type MugBoard = {
+  id: string;
+  name: string;
+  layout: "mugs";
+  skin: BoardSkin;
+  replacesPlates: true;
+};
+
+export type CustomBoard = PatternCustomBoard | TrackBoard | MugBoard;
 
 // The field's colours. It draws no holes or lane lines (a board with `art`
 // never does), so only the lanes' peg and ring colours show: Classic Pine's,
@@ -71,6 +84,16 @@ const DERBY_TRACK: BoardSkin = {
   rim: { edge: "#4a2a14", highlight: "#b98a58" },
 };
 
+// The same lane colours again; the rest is the mugs' shelf, for a Self-Scoring
+// table, where no mugs are drawn: dark wood with cream text.
+const BEER_SHELF: BoardSkin = {
+  ...FOOTBALL_FIELD,
+  id: "beer",
+  name: "Beer Board",
+  wood: { top: "#4a2d1a", bottom: "#2e1b0f", grain: null, grainOpacity: 0 },
+  rim: { edge: "#1c100a", highlight: "#b07a48" },
+};
+
 export const CUSTOM_BOARDS: readonly CustomBoard[] = [
   {
     id: "football",
@@ -87,6 +110,13 @@ export const CUSTOM_BOARDS: readonly CustomBoard[] = [
     image: "/boards/derby.webp",
     skin: DERBY_TRACK,
     peg: { pegs: 1, shape: "horse" },
+  },
+  {
+    id: "beer",
+    name: "Beer Board",
+    layout: "mugs",
+    skin: BEER_SHELF,
+    replacesPlates: true,
   },
 ];
 

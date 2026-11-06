@@ -12,11 +12,14 @@
 //        /dev/table-mock?players=3&state=pegging 1024x767
 //        /dev/table-mock?players=4&state=pegging 1024x767
 //        /dev/table-mock?players=4&solo=1&state=pegging 1024x767
-//      On a table-mock page, run it twice: once as it is, and once after
-//      localStorage.setItem("nobs:board-custom", "football") and a reload
-//      (remove the key afterwards).
+//      On a table-mock page, run it once as it is, and once for each custom
+//      board after localStorage.setItem("nobs:board-custom", id) and a reload:
+//      football, derby and beer (remove the key afterwards).
 //   2. After your change, do the same, and compare key by key. Every key from
 //      before must have the same value; a new board only adds keys.
+//
+// plates: how many score-plate rows the page shows. 1 on every board but one
+// that replaces them (beer: 0, and its viewBox is 50px taller).
 //
 // /dev/appearance clicks through the picker, then puts the saved pattern,
 // colours and custom board back as they were.
@@ -29,7 +32,7 @@
   };
   // Every board's ids start with its own useId value: take that out.
   const normal = (svg) => {
-    const id = svg.outerHTML.match(/id="([^"]+?)-(?:wood|peg0|track)"/);
+    const id = svg.outerHTML.match(/id="([^"]+?)-(?:wood|peg0|track|beerstrip)"/);
     return id ? svg.outerHTML.split(id[1]).join("U") : svg.outerHTML;
   };
   const print = (svg) => (svg ? hash(normal(svg)) : "none");
@@ -44,6 +47,7 @@
       custom,
       viewBox: document.querySelector(".sq-board svg")?.getAttribute("viewBox") ?? null,
       board: print(document.querySelector(".sq-board svg")),
+      plates: document.querySelectorAll(".sq-plates").length,
     };
   }
 

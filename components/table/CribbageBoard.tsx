@@ -52,7 +52,10 @@ import {
   type CustomBoard,
   type PatternCustomBoard,
 } from "@/lib/customBoards";
+import { beerLayerUrls } from "@/lib/beerBoard";
+import { BeerBoard } from "@/components/table/BeerBoard";
 import { DerbyBoard } from "@/components/table/DerbyBoard";
+import type { ScorePlate } from "@/components/table/ScoreStrip";
 
 // THE BOARD STRIP (PRD item 31): a 3-lane cribbage board, drawn in SVG at the
 // strip's own size (lib/boardLayout.ts), its look from a skin
@@ -80,6 +83,10 @@ import { DerbyBoard } from "@/components/table/DerbyBoard";
 // pattern: its layout, colours, art and pegs. Left out: this player's own
 // choice in Profile (useCustomBoard), so every table screen gets it from here.
 // null: never one (the Profile's previews of the normal boards).
+//
+// plates: the lane-coloured score plates, for a board that replaces them (the
+// Beer Board, which draws from them and never from players). Every other board
+// ignores them.
 
 export type BoardPlayer = {
   userId: string;
@@ -98,15 +105,19 @@ type CribbageBoardProps = {
   // whatever the pattern (boardPatternFor); the player's pick is untouched.
   lanes?: 3 | 4;
   fixedSize?: { w: number; h: number };
+  plates?: ScorePlate[];
 };
 
-// Which board: a track board (The Derby) is its own component; every other
-// board is drawn below.
+// Which board: a track board (The Derby) and a mug board (the Beer Board) are
+// their own components; every other board is drawn below.
 export function CribbageBoard({ custom, ...props }: CribbageBoardProps) {
   const chosenCustom = useCustomBoard();
   const board = custom === undefined ? chosenCustom : custom;
   if (board?.layout === "track") {
     return <DerbyBoard board={board} players={props.players} lanes={props.lanes ?? BOARD_LANES} fixedSize={props.fixedSize} />;
+  }
+  if (board?.layout === "mugs") {
+    return <BeerBoard plates={props.plates ?? []} fixedSize={props.fixedSize} />;
   }
   return <PatternBoard {...props} board={board} />;
 }
@@ -419,15 +430,18 @@ export function setCustomBoard(id: string | null) {
 
 // The colours a table screen uses (the lane rings, the self-scoring banner):
 // the active custom board's, else this player's own.
-export function useTableBoardSkin(): BoardSkin {
+// playerCount: which mugs a mug board will draw.
+export function useTableBoardSkin(playerCount = 2): BoardSkin {
   const skin = useBoardSkin();
   const custom = useCustomBoard();
-  // A board that's a picture is fetched as the table opens, ahead of the
-  // first deal, so it doesn't pop in.
-  const image = custom?.layout === "track" ? custom.image : null;
+  // A board that's pictures is fetched as the table opens, ahead of the first
+  // deal, so it doesn't pop in. Joined into one string, so a re-render with the
+  // same pictures fetches nothing.
+  const images =
+    custom?.layout === "track" ? custom.image : custom?.layout === "mugs" ? beerLayerUrls(playerCount).join(" ") : null;
   useEffect(() => {
-    if (image) preload(image, { as: "image" });
-  }, [image]);
+    for (const image of images?.split(" ") ?? []) preload(image, { as: "image" });
+  }, [images]);
   return custom?.skin ?? skin;
 }
 
