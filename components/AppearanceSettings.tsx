@@ -15,8 +15,9 @@ import {
   type BoardPlayer,
 } from "@/components/table/CribbageBoard";
 import type { BoardPattern } from "@/lib/boardLayout";
+import { BEER_PREVIEW_SIZE, beerPreviewPlates } from "@/lib/beerBoard";
 import { BOARD_SKIN_LIST } from "@/lib/boardSkins";
-import { CUSTOM_BOARDS, CUSTOM_PATTERN_LABEL } from "@/lib/customBoards";
+import { CUSTOM_BOARDS, CUSTOM_PATTERN_LABEL, type CustomBoard } from "@/lib/customBoards";
 import {
   CARD_BACKS,
   TABLE_SURFACES,
@@ -47,6 +48,16 @@ const BOARD_PATTERN_CHOICES: { id: BoardPattern; label: string }[] = [
   { id: "s", label: "S" },
   { id: "snake", label: "Snake" },
 ];
+
+// A custom board's preview. A mug board is drawn at its own taller strip, from
+// sample plates: it shows no real plates, and no players' scores.
+function CustomBoardPreview({ board }: { board: CustomBoard }) {
+  return board.layout === "mugs" ? (
+    <CribbageBoard players={PREVIEW_PLAYERS} fixedSize={BEER_PREVIEW_SIZE} custom={board} plates={beerPreviewPlates(board.skin)} />
+  ) : (
+    <CribbageBoard players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} custom={board} />
+  );
+}
 
 export function AppearanceSettings() {
   const appearance = useAppearance();
@@ -276,11 +287,7 @@ export function AppearanceSettings() {
                 className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
                 aria-hidden="true"
               >
-                <CribbageBoard
-                  players={PREVIEW_PLAYERS}
-                  fixedSize={PREVIEW_SIZE}
-                  custom={customBoard ?? CUSTOM_BOARDS[0]}
-                />
+                <CustomBoardPreview board={customBoard ?? CUSTOM_BOARDS[0]} />
               </span>
               <span className="text-xs leading-tight peer-checked:font-semibold">{CUSTOM_PATTERN_LABEL}</span>
             </label>
@@ -305,7 +312,7 @@ export function AppearanceSettings() {
                     className="block w-full rounded-md p-0.5 ring-offset-2 ring-offset-transparent peer-checked:ring-2 peer-checked:ring-[var(--cream)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[var(--brass-light)]"
                     aria-hidden="true"
                   >
-                    <CribbageBoard players={PREVIEW_PLAYERS} fixedSize={PREVIEW_SIZE} custom={board} />
+                    <CustomBoardPreview board={board} />
                   </span>
                   <span className="text-xs leading-tight peer-checked:font-semibold">{board.name}</span>
                 </label>

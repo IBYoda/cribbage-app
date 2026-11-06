@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
@@ -56,7 +57,8 @@ import {
   type SeatPosition,
   type TableScreen,
 } from "@/lib/tableLayout";
-import { CribbageBoard, SelfScoringBanner, useBoardPattern, useTableBoardSkin } from "@/components/table/CribbageBoard";
+import { CribbageBoard, SelfScoringBanner, useBoardPattern, useCustomBoard, useTableBoardSkin } from "@/components/table/CribbageBoard";
+import { platesReplaced } from "@/lib/beerBoard";
 import { laneRingColor } from "@/lib/boardSkins";
 import {
   ComputerDiscardClock,
@@ -607,9 +609,11 @@ export default function TablePage() {
   const reducedMotion = usePrefersReducedMotion();
   // The board THIS player picked in Profile (this device only): the square
   // table's board strip, lane rings and self-scoring banner.
-  const boardSkin = useTableBoardSkin();
+  const boardSkin = useTableBoardSkin(table?.max_players ?? 2);
   // ...and its pattern (Straight or S), likewise this device only.
   const boardPattern = useBoardPattern();
+  // ...and a custom board, if any: one may replace the score plates.
+  const customBoard = useCustomBoard();
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -3352,6 +3356,9 @@ export default function TablePage() {
   // team total, and the newest award, the scorer's, for the back peg).
   // 4-player Solo: a lane per player on the 4-lane straight board
   // (boardLanesFor), four plates of one player each.
+  // A board that replaces the plates (the Beer Board) is given them, ringed,
+  // and draws its scores and avatars from them; `plates` itself stays whole,
+  // for the score flash and the Teams board.
   const squareBoardFor = (seatOrder: string[], teams = false) => {
     const skin = boardSkin;
     // A self-scoring (Muggins) table (2, 3 or 4 players): no board, pegs or
@@ -3383,6 +3390,11 @@ export default function TablePage() {
           score: m.score,
           lastPoints: m.last_points,
         }));
+    const lanePlates = plates.map((p) => ({
+      ...p,
+      hasDealer: false,
+      laneColor: p.members.length === 1 || teams ? laneColorOf(p.members[0].userId) : undefined,
+    }));
     return {
       laneColorOf,
       // 4-player Solo: the 4-lane straight board, whatever the pattern.
@@ -3392,15 +3404,17 @@ export default function TablePage() {
           pattern={boardPattern}
           lanes={boardLanesFor(seatOrder.length, teams)}
           players={boardPlayers}
+          plates={lanePlates}
         />
       ),
-      plates: plates.map((p) => ({
-        ...p,
-        hasDealer: false,
-        laneColor: p.members.length === 1 || teams ? laneColorOf(p.members[0].userId) : undefined,
-      })),
+      plates: lanePlates,
     };
   };
+  // The square table's plates row -- or, on a board that replaces the plates,
+  // no row at all, and the strip takes its room (boardTall). The classic table
+  // has no board, so it always keeps its plates.
+  const noPlates = platesReplaced(customBoard, isMuggins);
+  const squarePlates = (row: ReactNode) => (noPlates ? null : <div className="sq-plates">{row}</div>);
   const squareScreen: TableScreen = !isActive
     ? "other"
     : phase === "discard"
@@ -3679,13 +3693,12 @@ export default function TablePage() {
           }
           hand={<div className="sq-hand-row">{hand}</div>}
           board={ringScores.board}
+          boardTall={noPlates}
           // A self-scoring (Muggins) table: the plates are the win controls
           // (mugginsPlatesFor).
-          scores={
-            <div className="sq-plates">
-              {isMuggins ? (mugginsControls ?? <div className="h-12" aria-hidden />) : <ScoreStrip plates={ringScores.plates} />}
-            </div>
-          }
+          scores={squarePlates(
+            isMuggins ? (mugginsControls ?? <div className="h-12" aria-hidden />) : <ScoreStrip plates={ringScores.plates} />
+          )}
           surface={appearance.surface}
           back={appearance.back}
         />
@@ -3845,13 +3858,12 @@ export default function TablePage() {
             </div>
           }
           board={ringScores.board}
+          boardTall={noPlates}
           // A self-scoring (Muggins) table: the plates, "Won" on the
           // winner's.
-          scores={
-            <div className="sq-plates">
-              {isMuggins ? mugginsPlatesFor(players, finalBoard.winner_id) : <ScoreStrip plates={ringScores.plates} />}
-            </div>
-          }
+          scores={squarePlates(
+            isMuggins ? mugginsPlatesFor(players, finalBoard.winner_id) : <ScoreStrip plates={ringScores.plates} />
+          )}
           surface={appearance.surface}
           back={appearance.back}
         />
@@ -4021,13 +4033,10 @@ export default function TablePage() {
           }
           hand={<div className="sq-hand-row">{hand}</div>}
           board={squareScores.board}
+          boardTall={noPlates}
           // A self-scoring (Muggins) table: the win bar in the plates' place,
           // exactly as the classic table shows it in its strip's.
-          scores={
-            <div className="sq-plates">
-              {isMuggins ? mugginsWinBar : <ScoreStrip plates={squareScores.plates} />}
-            </div>
-          }
+          scores={squarePlates(isMuggins ? mugginsWinBar : <ScoreStrip plates={squareScores.plates} />)}
           surface={appearance.surface}
           back={appearance.back}
         />
@@ -4194,14 +4203,11 @@ export default function TablePage() {
             </div>
           }
           board={squareScores.board}
+          boardTall={noPlates}
           // A self-scoring (Muggins) table shows no score: after the match
           // there's nothing to claim either, so the plates' row stays empty
           // (its height kept, so the banner sits where it did).
-          scores={
-            <div className="sq-plates">
-              {isMuggins ? <div className="h-12" aria-hidden /> : <ScoreStrip plates={squareScores.plates} />}
-            </div>
-          }
+          scores={squarePlates(isMuggins ? <div className="h-12" aria-hidden /> : <ScoreStrip plates={squareScores.plates} />)}
           surface={appearance.surface}
           back={appearance.back}
         />

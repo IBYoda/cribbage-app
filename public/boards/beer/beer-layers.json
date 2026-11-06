@@ -1,0 +1,86 @@
+{
+ "3-0": {
+  "w": 271,
+  "h": 340,
+  "rim": 67.01,
+  "bt": 109.85,
+  "bb": 290.02,
+  "glassX0": 16.48,
+  "glassX1": 201.03,
+  "bandTop": 67.01,
+  "bandBottom": 110.95,
+  "crownBottom": 65.91
+ },
+ "3-1": {
+  "w": 272,
+  "h": 340,
+  "rim": 67.01,
+  "bt": 109.85,
+  "bb": 290.02,
+  "glassX0": 18.68,
+  "glassX1": 201.58,
+  "bandTop": 67.01,
+  "bandBottom": 110.95,
+  "crownBottom": 65.91
+ },
+ "3-2": {
+  "w": 258,
+  "h": 340,
+  "rim": 67.01,
+  "bt": 109.85,
+  "bb": 290.02,
+  "glassX0": 18.13,
+  "glassX1": 197.19,
+  "bandTop": 67.01,
+  "bandBottom": 110.95,
+  "crownBottom": 65.91
+ },
+ "4-0": {
+  "w": 267,
+  "h": 340,
+  "rim": 67.71,
+  "bt": 112.62,
+  "bb": 292.24,
+  "glassX0": 11.4,
+  "glassX1": 206.71,
+  "bandTop": 67.71,
+  "bandBottom": 114.05,
+  "crownBottom": 66.29
+ },
+ "4-1": {
+  "w": 267,
+  "h": 340,
+  "rim": 67.71,
+  "bt": 112.62,
+  "bb": 292.24,
+  "glassX0": 11.4,
+  "glassX1": 205.28,
+  "bandTop": 67.71,
+  "bandBottom": 114.05,
+  "crownBottom": 66.29
+ },
+ "4-2": {
+  "w": 267,
+  "h": 340,
+  "rim": 67.71,
+  "bt": 112.62,
+  "bb": 292.24,
+  "glassX0": 12.83,
+  "glassX1": 206.0,
+  "bandTop": 67.71,
+  "bandBottom": 114.05,
+  "crownBottom": 66.29
+ },
+ "4-3": {
+  "w": 266,
+  "h": 340,
+  "rim": 67.71,
+  "bt": 112.62,
+  "bb": 292.24,
+  "glassX0": 51.32,
+  "glassX1": 238.07,
+  "bandTop": 67.71,
+  "bandBottom": 114.05,
+  "crownBottom": 66.29
+ }
+}

@@ -10,7 +10,7 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
@@ -140,6 +140,29 @@ import {
   derbySlideFrames,
   type DerbyLaneCount,
 } from "../lib/derbyTrack";
+import {
+  BEER_LAYERS,
+  BEER_MAX_DRAIN,
+  BEER_MUGS,
+  BEER_PREVIEW_SIZE,
+  beerAriaLabel,
+  beerDrains,
+  beerDrawing,
+  beerEase,
+  beerFoamCap,
+  beerLayerUrl,
+  beerLayerUrls,
+  beerLayoutFor,
+  beerLevel,
+  beerLevelY,
+  beerMugIdsFor,
+  beerPreviewPlates,
+  beerScene,
+  beerSlots,
+  platesReplaced,
+  type BeerMugId,
+} from "../lib/beerBoard";
+import type { ScorePlate } from "../components/table/ScoreStrip";
 import {
   CUSTOM_BOARD_KEY,
   CUSTOM_BOARDS,
@@ -2722,7 +2745,7 @@ const artAt = (count: DerbyLaneCount, lane: number, score: number) => {
 const close = (a: number, b: number, what: string) => strictEqual(Math.abs(a - b) < 1e-6, true, `${what}: ${a} vs ${b}`);
 check("derby: the registry has it after The Football, with its picture on disk", () => {
   strictEqual(new Set(CUSTOM_BOARDS.map((b) => b.id)).size, CUSTOM_BOARDS.length);
-  deepStrictEqual(CUSTOM_BOARDS.map((b) => b.id), ["football", "derby"]);
+  deepStrictEqual(CUSTOM_BOARDS.map((b) => b.id), ["football", "derby", "beer"]);
   const derby = customBoardById("derby")!;
   strictEqual(derby.name, "The Derby");
   strictEqual(derby.layout, "track");
@@ -2919,6 +2942,319 @@ check("derby: the horse is 3.2% of the strip's width, 2.8% with four lanes, and 
   strictEqual(right, "translate(10px, 20px) rotate(5deg) scale(0.5, 0.5) translate(-55px, -60px)");
   const left = derbyHorseTransform({ x: 10, y: 20, flip: -1, tilt: -5 }, 0.5);
   strictEqual(left, "translate(10px, 20px) rotate(-5deg) scale(-0.5, 0.5) translate(-55px, -60px)");
+});
+
+// THE BEER BOARD (lib/beerBoard.ts).
+const BEER = customBoardById("beer")!;
+const beerPlate = (key: string, names: string[], score: number, extra: Partial<ScorePlate> = {}): ScorePlate => ({
+  key,
+  members: names.map((name, i) => ({ userId: `${key}${i}`, name, avatarUrl: null })),
+  score,
+  isMine: false,
+  hasDealer: false,
+  lastPoints: null,
+  lastReason: null,
+  lastAwardedAt: null,
+  ...extra,
+});
+const BEER_TWO = [beerPlate("a", ["Walt"], 94, { isMine: true }), beerPlate("b", ["Normie"], 71)];
+const BEER_THREE = [...BEER_TWO, beerPlate("c", ["Buddy"], 38)];
+const BEER_FOUR = [...BEER_THREE, beerPlate("d", ["Kim"], 7)];
+const BEER_TEAMS = [
+  beerPlate("team-2", ["Walt", "Buddy"], 94, { isMine: true }),
+  beerPlate("team-1", ["Normie", "Kim"], 71),
+];
+const BEER_STRIPS: [number, number][] = [[375, 117], [390, 134], [896, 142], [502, 158]];
+
+check("beer: the registry entry, replacing the plates, with every layer on disk", () => {
+  strictEqual(BEER.name, "Beer Board");
+  strictEqual(BEER.layout, "mugs");
+  for (const id of Object.keys(BEER_MUGS) as BeerMugId[]) {
+    for (const layer of BEER_LAYERS) strictEqual(existsSync(`public${beerLayerUrl(id, layer)}`), true, `${id} ${layer}`);
+  }
+});
+check("beer: the measurements are the json's, except 4-3's glass, which is corrected", () => {
+  const json = JSON.parse(readFileSync("public/boards/beer/beer-layers.json", "utf8"));
+  deepStrictEqual(Object.keys(BEER_MUGS).sort(), Object.keys(json).sort());
+  for (const id of Object.keys(BEER_MUGS) as BeerMugId[]) {
+    const expected = id === "4-3" ? { ...json[id], glassX0: 12, glassX1: 205.5 } : json[id];
+    deepStrictEqual({ ...BEER_MUGS[id] }, expected, id);
+  }
+  // The correction is the point: without it the cap reaches the handle.
+  strictEqual(json["4-3"].glassX1 - json["4-0"].glassX1 > 30, true);
+  const glass = (id: BeerMugId) => BEER_MUGS[id].glassX1 - BEER_MUGS[id].glassX0;
+  strictEqual(Math.abs(glass("4-3") - glass("4-0")) < 3, true);
+});
+check("beer: every layer image is the width the json says, and the full ones 340 tall", () => {
+  // A webp's size, from its VP8X header (every layer is VP8X).
+  const sizeOf = (path: string) => {
+    const b = readFileSync(path);
+    strictEqual(b.toString("ascii", 12, 16), "VP8X", path);
+    return { w: 1 + b.readUIntLE(24, 3), h: 1 + b.readUIntLE(27, 3) };
+  };
+  for (const id of Object.keys(BEER_MUGS) as BeerMugId[]) {
+    const art = BEER_MUGS[id];
+    for (const layer of BEER_LAYERS) {
+      const size = sizeOf(`public${beerLayerUrl(id, layer)}`);
+      strictEqual(size.w, art.w, `${id} ${layer}`);
+      strictEqual(size.h, layer === "band" ? Math.round(art.bandBottom - art.bandTop) : art.h, `${id} ${layer}`);
+    }
+  }
+});
+check("beer: the 3-* mugs only for 3 players, the 4-* for everything else; the preload lists them", () => {
+  deepStrictEqual(beerMugIdsFor(3), ["3-0", "3-1", "3-2"]);
+  for (const n of [2, 4]) deepStrictEqual(beerMugIdsFor(n), ["4-0", "4-1", "4-2", "4-3"]);
+  strictEqual(beerLayerUrls(3).length, 15);
+  strictEqual(beerLayerUrls(2).length, 20);
+  strictEqual(beerLayerUrls(3).every((u) => u.startsWith("/boards/beer/3-")), true);
+  strictEqual(beerLayerUrls(4).every((u) => u.startsWith("/boards/beer/4-")), true);
+  strictEqual([...beerLayerUrls(2), ...beerLayerUrls(3)].every((u) => !/beer-[34]/.test(u)), true);
+});
+check("beer: plates go only with a board that replaces them, never on a Muggins table", () => {
+  strictEqual(platesReplaced(BEER, false), true);
+  strictEqual(platesReplaced(BEER, true), false);
+  for (const board of [FOOTBALL, customBoardById("derby")!, null, undefined]) {
+    strictEqual(platesReplaced(board, false), false);
+    strictEqual(platesReplaced(board, true), false);
+  }
+});
+check("beer: the drain -- one mug over the game, or two split at 60", () => {
+  const scores = [0, 30, 60, 61, 91, 121];
+  const levels = (lo: number, hi: number) => scores.map((s) => beerLevel(s, lo, hi));
+  const near = (a: number[], b: number[], what: string) => a.forEach((v, i) => close(v, b[i], `${what} ${scores[i]}`));
+  near(levels(0, 121), scores.map((s) => 1 - s / 121), "solo");
+  near(levels(0, 60), [1, 0.5, 0, 0, 0, 0], "first");
+  near(levels(60, 121), [1, 1, 1, 1 - 1 / 61, 1 - 31 / 61, 0], "second");
+  strictEqual(beerLevel(60, 0, 60), 0); // the first mug is empty exactly at 60
+  strictEqual(beerLevel(121, 60, 121), 0); // the second exactly at 121
+  strictEqual(beerLevel(121, 0, 121), 0);
+  strictEqual(beerLevel(0, 0, 121), 1);
+  // Past either end stays in 0 .. 1.
+  strictEqual(beerLevel(130, 0, 121), 0);
+  strictEqual(beerLevel(-5, 0, 121), 1);
+});
+check("beer: the layout comes from the plates' shape, with the right mugs and points", () => {
+  strictEqual(beerLayoutFor(BEER_TWO), "pairs");
+  strictEqual(beerLayoutFor(BEER_THREE), "three");
+  strictEqual(beerLayoutFor(BEER_FOUR), "four");
+  strictEqual(beerLayoutFor(BEER_TEAMS), "teams");
+  // A partner who has gone is still a team: the other partner's plate has two.
+  strictEqual(beerLayoutFor([BEER_TEAMS[0], beerPlate("team-1", ["Normie"], 71)]), "teams");
+  deepStrictEqual(beerSlots("three").map((s) => [s.id, s.plate, s.lo, s.hi]), [["3-0", 0, 0, 121], ["3-1", 1, 0, 121], ["3-2", 2, 0, 121]]);
+  deepStrictEqual(beerSlots("four").map((s) => [s.id, s.plate]), [["4-0", 0], ["4-1", 1], ["4-2", 2], ["4-3", 3]]);
+  for (const layout of ["pairs", "teams"] as const) {
+    deepStrictEqual(beerSlots(layout).map((s) => [s.id, s.plate, s.lo, s.hi]), [
+      ["4-0", 0, 0, 60],
+      ["4-1", 0, 60, 121],
+      ["4-2", 1, 0, 60],
+      ["4-3", 1, 60, 121],
+    ]);
+  }
+  deepStrictEqual(beerSlots("teams").map((s) => s.member), [0, 1, 0, 1]);
+  deepStrictEqual(beerSlots("pairs").map((s) => s.member), [null, null, null, null]);
+});
+check("beer: mug centres, height and foot; every mug's glass stays on the strip", () => {
+  for (const [w, h] of BEER_STRIPS) {
+    for (const plates of [BEER_TWO, BEER_THREE, BEER_FOUR, BEER_TEAMS]) {
+      for (const m of beerScene(w, h, plates).mugs) {
+        close(m.scale * 340, 0.9 * h, "height");
+        close(m.y + m.scale * 340, 0.935 * h, "foot");
+        strictEqual(m.x + m.art.glassX0 * m.scale >= 2 - 1e-9, true, `${w}x${h} ${m.id} left`);
+        strictEqual(m.x + m.art.w * m.scale <= w, true, `${w}x${h} ${m.id} right`);
+      }
+    }
+  }
+  // The clamp moves only a first mug that would leave the strip, and keeps it
+  // clear of its neighbour.
+  const clamped = beerScene(390, 134, BEER_TWO).mugs;
+  strictEqual(clamped[0].x + clamped[0].art.w * clamped[0].scale < clamped[1].x + clamped[1].art.glassX0 * clamped[1].scale, true);
+  for (const [w, h] of [[375, 117], [896, 142]]) {
+    const middle = (m: ReturnType<typeof beerScene>["mugs"][number]) => m.x + (m.art.w * m.scale) / 2 + 0.04 * h;
+    beerScene(w, h, BEER_THREE).mugs.forEach((m, k) => close(middle(m), (w * (2 * k + 1)) / 6, `three ${k}`));
+    beerScene(w, h, BEER_FOUR).mugs.forEach((m, k) => close(middle(m), (w * (2 * k + 1)) / 8, `four ${k}`));
+    for (const plates of [BEER_TWO, BEER_TEAMS]) {
+      const { mugs } = beerScene(w, h, plates);
+      for (const pair of [0, 1]) {
+        const [a, b] = mugs.filter((m) => m.plate === pair);
+        const mw = a.art.w * a.scale + 0.05 * h;
+        close(middle(a), w * (pair === 0 ? 0.25 : 0.75) - 0.5 * mw, "pair left");
+        close(middle(b), w * (pair === 0 ? 0.25 : 0.75) + 0.5 * (b.art.w * b.scale + 0.05 * h), "pair right");
+      }
+    }
+  }
+});
+check("beer: 3 and 4 solo -- the number and avatar on each mug, the 3-digit size smaller", () => {
+  const [w, h] = [375, 117];
+  const scale = (h * 0.9) / 340;
+  const top = 0.035 * h;
+  const scene = beerScene(w, h, BEER_THREE);
+  scene.scores.forEach((s, k) => {
+    const mug = scene.mugs[k];
+    close(s.x, mug.x + (mug.art.w * scale) / 2, "score x");
+    close(s.y, top + 172 * scale, "score y");
+    close(s.fontSize, 83 * scale, "two digits");
+  });
+  scene.avatars.forEach((a, k) => {
+    close(a.x, scene.scores[k].x, "avatar x");
+    close(a.y, top + 272 * scale, "avatar y");
+    close(a.r, 45 * scale, "avatar r");
+  });
+  const big = beerScene(w, h, [beerPlate("a", ["A"], 100), beerPlate("b", ["B"], 99), beerPlate("c", ["C"], 121)]);
+  deepStrictEqual(big.scores.map((s) => Math.round(s.fontSize / scale)), [71, 83, 71]);
+});
+check("beer: 2 players -- number and avatar on the pair's centre, sized up, the score the plate's", () => {
+  const [w, h] = [375, 117];
+  const scale = (h * 0.9) / 340;
+  const top = 0.035 * h;
+  const scene = beerScene(w, h, BEER_TWO);
+  deepStrictEqual(scene.scores.map((s) => s.text), ["94", "71"]);
+  scene.scores.forEach((s, i) => {
+    close(s.x, w * (i === 0 ? 0.25 : 0.75) - 0.04 * h, "pair x");
+    close(s.y, top + (172 - 0.05 * 47) * scale, "pair y");
+    close(s.fontSize, 95 * scale, "pair size");
+    close(scene.avatars[i].x, s.x, "avatar x");
+    close(scene.avatars[i].y, top + (272 + 0.15 * 47) * scale, "avatar y");
+    close(scene.avatars[i].r, 47 * scale, "avatar r");
+  });
+  strictEqual(beerScene(w, h, [beerPlate("a", ["A"], 100), beerPlate("b", ["B"], 0)]).scores[0].fontSize, 82 * scale);
+  // The pair drains in turn: at 94, the first mug is dry and the second going.
+  deepStrictEqual(scene.mugs.slice(0, 2).map((m) => m.level), [0, 1 - 34 / 61]);
+});
+check("beer: Teams -- one score across the pair, each teammate's avatar on their own mug", () => {
+  const [w, h] = [375, 117];
+  const scene = beerScene(w, h, BEER_TEAMS);
+  deepStrictEqual(scene.scores.map((s) => s.text), ["94", "71"]);
+  deepStrictEqual(scene.avatars.map((a) => a.name), ["Walt", "Buddy", "Normie", "Kim"]);
+  scene.avatars.forEach((a, i) => close(a.x, scene.mugs[i].x + (scene.mugs[i].art.w * scene.mugs[i].scale) / 2, "on its mug"));
+  // Only the first of my team is me (buildPlates puts me first on my plate).
+  deepStrictEqual(scene.avatars.map((a) => a.mine), [true, false, false, false]);
+  strictEqual(new Set(scene.avatars.map((a) => a.key)).size, 4);
+});
+check("beer: the gold ring is mine alone; rings are the lane's, letters and photos as given", () => {
+  const plates = [
+    beerPlate("a", ["walt"], 10, { isMine: true, laneColor: "#ff0000", members: [{ userId: "a", name: "walt", avatarUrl: "/w.png" }] }),
+    beerPlate("b", ["Normie"], 20, { laneColor: "#0000ff" }),
+    beerPlate("c", ["Buddy"], 30),
+  ];
+  const { avatars } = beerScene(375, 117, plates);
+  deepStrictEqual(avatars.map((a) => a.mine), [true, false, false]);
+  deepStrictEqual(avatars.map((a) => a.url), ["/w.png", null, null]);
+  deepStrictEqual(avatars.map((a) => a.letter), ["W", "N", "B"]);
+  deepStrictEqual(avatars.slice(0, 2).map((a) => a.ringColor), ["#ff0000", "#0000ff"]);
+  strictEqual(avatars[2].ringColor.length, 7); // never missing
+});
+check("beer: a hidden score shows no number and a full mug, whatever the seat's score", () => {
+  const hidden = beerPlate("b", ["Walt"], 0, { scoreHidden: true });
+  for (const plates of [
+    [BEER_TWO[0], hidden],
+    [BEER_TWO[0], hidden, BEER_THREE[2]],
+    [BEER_TWO[0], hidden, BEER_THREE[2], BEER_FOUR[3]],
+  ]) {
+    const scene = beerScene(375, 117, plates);
+    strictEqual(scene.scores.some((s) => s.key === "b"), false);
+    strictEqual(scene.scores.length, plates.length - 1);
+    const mugs = scene.mugs.filter((m) => m.plate === 1);
+    strictEqual(mugs.length >= 1, true);
+    for (const m of mugs) {
+      strictEqual(m.level, 1);
+      strictEqual(m.score, null);
+    }
+    strictEqual(scene.avatars.length, plates.length); // the avatar stays
+  }
+  // A real 121, hidden: still full, no number.
+  const teams = beerScene(375, 117, [BEER_TEAMS[0], { ...BEER_TEAMS[1], score: 121, scoreHidden: true }]);
+  deepStrictEqual(teams.scores.map((s) => s.key), ["team-2"]);
+  deepStrictEqual(teams.mugs.filter((m) => m.plate === 1).map((m) => m.level), [1, 1]);
+});
+check("beer: the drawing -- surface, foam and crown by the level", () => {
+  for (const id of Object.keys(BEER_MUGS) as BeerMugId[]) {
+    const art = BEER_MUGS[id];
+    close(beerLevelY(art, 1), art.bt, "full");
+    close(beerLevelY(art, 0), art.h + 5, "empty");
+    // Just above empty, the surface is the glass's floor.
+    strictEqual(Math.abs(beerLevelY(art, 1e-9) - art.bb) < 1e-6, true);
+    const empty = beerDrawing(id, 0);
+    deepStrictEqual(
+      [empty.levelY, empty.cap.opacity, empty.band.height, empty.band.opacity, empty.crown.opacity],
+      [art.h + 5, 0, 0, 0, 0]
+    );
+    const half = beerDrawing(id, 0.5);
+    const bh = art.bandBottom - art.bandTop;
+    close(half.band.height, Math.round(bh * 0.75 * 100) / 100, "band");
+    strictEqual(Math.abs(half.band.y + half.band.height - half.levelY) < 0.02, true);
+    strictEqual(half.band.opacity, 1);
+    strictEqual(half.crown.opacity, 0);
+    // The foam fades in over the last 8% of the beer, the crown over the top 12%.
+    strictEqual(beerDrawing(id, 0.04).band.opacity, 0.5);
+    strictEqual(beerDrawing(id, 0.94).crown.opacity, 0.5);
+    strictEqual(beerDrawing(id, 1).crown.opacity, 1);
+    strictEqual(beerDrawing(id, 1).crown.y, 0);
+    strictEqual(beerDrawing(id, 0.94).crown.y, Math.round(0.03 * (art.bb - art.bt) * 100) / 100);
+    // The band never collapses, however low.
+    strictEqual(beerDrawing(id, 0.001).band.height >= 2, true);
+  }
+});
+check("beer: the foam cap is deterministic, differs by mug, and only shows when it should", () => {
+  for (const id of Object.keys(BEER_MUGS) as BeerMugId[]) {
+    for (const level of [0.1, 0.5, 0.9]) deepStrictEqual(beerFoamCap(id, level), beerFoamCap(id, level));
+    strictEqual(beerFoamCap(id, 0), null);
+    strictEqual(beerFoamCap(id, 0.985), null);
+    strictEqual(beerFoamCap(id, 1), null);
+    strictEqual(beerDrawing(id, 1).cap.d, "");
+    strictEqual(beerFoamCap(id, 0.984) !== null, true);
+  }
+  strictEqual(beerFoamCap("4-0", 0.5)!.d !== beerFoamCap("4-1", 0.5)!.d, true);
+  strictEqual(beerFoamCap("4-0", 0.5)!.d !== beerFoamCap("4-0", 0.7)!.d, true);
+  // The level is taken to the nearest 2%: a slow drain doesn't reshuffle the
+  // bubbles every frame (only their y moves).
+  const bubbles = (level: number) => beerFoamCap("4-0", level)!.d.match(/a/g)!.length;
+  strictEqual(bubbles(0.501), bubbles(0.5));
+  const radii = (level: number) => beerFoamCap("4-0", level)!.d.match(/a[\d.]+/g)!.map((r) => Number(r.slice(1)));
+  radii(0.501).forEach((r, i) => strictEqual(Math.abs(r - radii(0.5)[i]) <= 0.02, true, `bubble ${i}`));
+  const cap = beerFoamCap("4-2", 0.5)!;
+  const art = BEER_MUGS["4-2"];
+  close(cap.x0, art.glassX0 - 3, "clip left");
+  close(cap.x1, art.glassX1 + 4, "clip right");
+  const f = 0.75;
+  const nh = (art.bandBottom - art.bandTop) * f;
+  strictEqual(Math.abs(cap.y - (beerLevelY(art, 0.5) - nh + 1)) < 0.01, true);
+});
+check("beer: a drain follows The Derby's rule", () => {
+  strictEqual(beerDrains(10, 12), true);
+  strictEqual(beerDrains(0, BEER_MAX_DRAIN), true);
+  strictEqual(beerDrains(0, BEER_MAX_DRAIN + 1), false); // too long
+  strictEqual(beerDrains(50, 49), false); // backward
+  strictEqual(beerDrains(121, 0), false); // a New Game's reset
+  strictEqual(beerDrains(30, 30), false);
+  strictEqual(beerDrains(null, 30), false); // hidden on either side
+  strictEqual(beerDrains(30, null), false);
+  strictEqual(beerEase(0), 0);
+  strictEqual(beerEase(1), 1);
+  strictEqual(beerEase(0.5) > 0.5, true); // ease-out: most of it early
+});
+check("beer: the label says who has what, teams by team, hidden scores as hidden", () => {
+  strictEqual(beerAriaLabel(BEER_THREE), "Walt 94, Normie 71, Buddy 38");
+  strictEqual(beerAriaLabel(BEER_TEAMS), "Team 2 (Walt and Buddy) 94, Team 1 (Normie and Kim) 71");
+  strictEqual(
+    beerAriaLabel([BEER_TWO[0], { ...BEER_TWO[1], scoreHidden: true }]),
+    "Walt 94, Normie score hidden"
+  );
+  strictEqual(beerAriaLabel([{ ...BEER_TEAMS[0], scoreHidden: true }]), "Team 2 (Walt and Buddy) score hidden");
+});
+check("beer: the Profile's preview -- the tall strip, three players, letters, lane rings", () => {
+  deepStrictEqual(BEER_PREVIEW_SIZE, { w: 375, h: 117 });
+  const plates = beerPreviewPlates(BEER.skin);
+  strictEqual(beerLayoutFor(plates), "three");
+  strictEqual(plates.every((p) => p.members[0].avatarUrl === null), true);
+  strictEqual(new Set(plates.map((p) => p.laneColor)).size, 3);
+  const scene = beerScene(BEER_PREVIEW_SIZE.w, BEER_PREVIEW_SIZE.h, plates);
+  strictEqual(scene.avatars.every((a) => a.url === null && !a.mine), true);
+});
+check("beer: the self-scoring banner reads, and the lanes match the other custom boards", () => {
+  strictEqual(bannerTextColor(BEER.skin), "#f5efe3");
+  for (const wood of [BEER.skin.wood.top, BEER.skin.wood.bottom]) strictEqual(contrastRatio(bannerTextColor(BEER.skin), wood) >= 4.5, true);
+  deepStrictEqual(BEER.skin.lanes.map((l) => l.peg), FOOTBALL.skin.lanes.map((l) => l.peg));
+  strictEqual(BEER.skin.fourthLane.peg, FOOTBALL.skin.fourthLane.peg);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
