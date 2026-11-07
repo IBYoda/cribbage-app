@@ -9,6 +9,7 @@ import {
   badgeSize,
   emberUrl,
   flamesForPointer,
+  hasFlames,
   readWingsOn,
   wingsBox,
   wingsOverhang,
@@ -75,14 +76,15 @@ function artBox(size: number, scale: number): CSSProperties {
   return { width, height, left, top };
 }
 
-// At a table black wings only breathe: the ember layer's slow pulse.
+// At a table burning wings (black, the creator's) only breathe: the ember
+// layer's slow pulse.
 function MiniArt({ tier }: { tier: WingsTier }) {
   const motion = useAmbientMotion();
   return (
     <>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={wingsUrl(tier, "mini")} alt="" className="wings-img" />
-      {tier === "black" && (
+      {hasFlames(tier) && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={emberUrl("mini")} alt="" className={`wings-img wings-ember ${motion ? "wings-ember--on" : ""}`} />
       )}
@@ -91,7 +93,7 @@ function MiniArt({ tier }: { tier: WingsTier }) {
 }
 
 function FullArt({ tier }: { tier: WingsTier }) {
-  if (tier === "black") return <BlackWingsFx />;
+  if (hasFlames(tier)) return <FlamingWingsFx tier={tier} />;
   return (
     <>
       <span className="wings-halo" style={{ "--wings-halo": WINGS_HALO[tier] } as CSSProperties} />
@@ -101,7 +103,8 @@ function FullArt({ tier }: { tier: WingsTier }) {
   );
 }
 
-// THE BLACK TIER AT FULL SIZE: Profile and the milestone only, because it is
+// BURNING WINGS AT FULL SIZE (the black tier, and the creator's green wings
+// with the same flames): Profile and the milestone only, because it is
 // about 160 moving shapes (about 100 on a touch screen). Fetched rather than bundled, so a table never carries
 // the flames it doesn't draw. Until they arrive, or if they don't, it is the
 // wings and their glow. Motion off: the same picture, still.
@@ -143,7 +146,7 @@ function useCoarsePointer(): boolean {
   );
 }
 
-function BlackWingsFx() {
+function FlamingWingsFx({ tier }: { tier: WingsTier }) {
   const uid = useId();
   const motion = useAmbientMotion();
   const coarse = useCoarsePointer();
@@ -171,7 +174,7 @@ function BlackWingsFx() {
   );
   return (
     <>
-      <span className="wings-halo" style={{ "--wings-halo": WINGS_HALO.black } as CSSProperties} />
+      <span className="wings-halo" style={{ "--wings-halo": WINGS_HALO[tier] } as CSSProperties} />
       <svg
         viewBox="0 0 1075 695"
         className={`wings-fx ${motion ? "wings-fx--on" : ""}`}
@@ -197,7 +200,7 @@ function BlackWingsFx() {
             {flames.back.map(flame)}
           </g>
         )}
-        <image href={wingsUrl("black", "full")} width={1075} height={695} />
+        <image href={wingsUrl(tier, "full")} width={1075} height={695} />
         <image href={emberUrl("full")} width={1075} height={695} className="wings-glow" />
         {shown && (
           <g>
@@ -229,7 +232,7 @@ export function preloadFullWings(tier: WingsTier): Promise<unknown> {
     return image.decode().catch(() => {});
   };
   const ready = Promise.all(
-    tier === "black" ? [load(wingsUrl(tier, "full")), load(emberUrl("full")), readFlames()] : [load(wingsUrl(tier, "full"))]
+    hasFlames(tier) ? [load(wingsUrl(tier, "full")), load(emberUrl("full")), readFlames()] : [load(wingsUrl(tier, "full"))]
   );
   return Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 1500))]);
 }

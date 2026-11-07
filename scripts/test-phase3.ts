@@ -19,9 +19,15 @@ import {
   WINGS_SETTING_KEY,
   WINGS_SPLASH,
   WINGS_TIERS,
+  ALL_WINGS_TIERS,
+  CREATOR_USER_IDS,
   badgeSize,
+  displayTier,
   flamesForPointer,
+  hasFlames,
   idBatches,
+  isCreator,
+  wingsUrl,
   initSeenTier,
   isMilestone,
   nextTier,
@@ -3951,8 +3957,8 @@ check("wings: the art's place -- mini 2.0 x and full 2.62 x, centred, the avatar
   near(full.top + full.height * (475 / 695), 48);
   near(full.height, full.width * (695 / 1075));
 });
-check("wings: the badge -- the four colours, 11px on a 28px avatar", () => {
-  deepStrictEqual(WINGS_BADGE, { white: "#ffffff", silver: "#cfe0ff", gold: "#ffd24a", black: "#ff5a14" });
+check("wings: the badge -- the five colours, 11px on a 28px avatar", () => {
+  deepStrictEqual(WINGS_BADGE, { white: "#ffffff", silver: "#cfe0ff", gold: "#ffd24a", black: "#ff5a14", creator: "#2ee07a" });
   strictEqual(badgeSize(28), 11);
   strictEqual(badgeSize(24), 9);
   strictEqual(badgeSize(48), 19);
@@ -3990,6 +3996,49 @@ check("wings: a touch screen gets half the front flames and 12 embers; desktop g
   thin.front.forEach((f, i) => strictEqual(f.grad, i % 2 ? "fl2" : "fl"));
   strictEqual(flames.back.length + thin.front.length + thin.embers.length, 104);
   deepStrictEqual(flamesForPointer({ front: [], embers: [] }, true), { front: [], embers: [] });
+});
+check("wings: the creator -- creator wings at any count, or none to read", () => {
+  const walt = "f190b27b-a23b-4464-8445-023edbee28b2";
+  deepStrictEqual([...CREATOR_USER_IDS], [walt]);
+  strictEqual(isCreator(walt), true);
+  for (const earned of [null, undefined, tierForCount(0), tierForCount(9), tierForCount(100), tierForCount(250)]) {
+    strictEqual(displayTier(walt, earned), "creator");
+  }
+  strictEqual(displayTier(walt, "black"), "creator"); // wins over any God-win tier
+});
+check("wings: the creator -- everyone else is exactly as before", () => {
+  for (const id of ["a", "00000000-0000-0000-0000-000000000000", "F190B27B-A23B-4464-8445-023EDBEE28B2"]) {
+    strictEqual(isCreator(id), false, id);
+    strictEqual(displayTier(id, null), null);
+    strictEqual(displayTier(id, "gold"), "gold");
+  }
+  strictEqual(isCreator(null), false);
+  strictEqual(isCreator(undefined), false);
+  strictEqual(displayTier(null, "white"), "white");
+});
+check("wings: the creator -- a count never earns it, and the milestone rules don't change", () => {
+  for (let n = 0; n <= 250; n++) strictEqual(tierForCount(n) === ("creator" as unknown), false);
+  deepStrictEqual(WINGS_TIERS.map((t) => t.tier), ["white", "silver", "gold", "black"]);
+  for (const count of [10, 25, 50, 100]) strictEqual(isMilestone(count), true);
+  strictEqual(shouldCelebrate(10, "none"), true);
+  strictEqual(shouldCelebrate(100, "gold"), true);
+  strictEqual(shouldCelebrate(10, "white"), false);
+});
+check("wings: the creator -- green art, black's flames and glow, an emerald dot", () => {
+  strictEqual(wingsUrl("creator", "full"), "/wings/full-green.webp");
+  strictEqual(wingsUrl("creator", "mini"), "/wings/mini-green.webp");
+  strictEqual(wingsUrl("black", "full"), "/wings/full-black.webp"); // unchanged
+  strictEqual(wingsAssets().includes("/wings/full-green.webp"), true);
+  strictEqual(wingsAssets().includes("/wings/mini-green.webp"), true);
+  strictEqual(existsSync("public/wings/full-green.webp"), true);
+  strictEqual(existsSync("public/wings/mini-green.webp"), true);
+  strictEqual(WINGS_BADGE.creator, "#2ee07a");
+  strictEqual(hasFlames("creator"), true);
+  strictEqual(hasFlames("black"), true);
+  for (const t of ["white", "silver", "gold"] as const) strictEqual(hasFlames(t), false);
+  deepStrictEqual([...ALL_WINGS_TIERS], ["white", "silver", "gold", "black", "creator"]);
+  // The creator takes no splash words: WINGS_SPLASH is the earned tiers only.
+  strictEqual("creator" in WINGS_SPLASH, false);
 });
 check("wings: every tier has its splash words", () => {
   for (const t of WINGS_TIERS) strictEqual(WINGS_SPLASH[t.tier].length > 0, true, t.tier);
