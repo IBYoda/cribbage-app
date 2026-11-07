@@ -10,13 +10,13 @@
 // for the game table (a ring in the page background, a grey fill) -- the two
 // looks the app already had.
 //
-// WINGS: tier and wings (the mode, from placementFor in lib/wings.ts) draw a
-// player's wings or badge round it (components/Wings.tsx). No tier: exactly the
-// avatar, with nothing round it. The Profile's own image uses WingsFrame directly,
-// and the Beer Board its SVG (BeerBoard.tsx).
+// WINGS: tier and wings (the spot's placement, from placementFor in
+// lib/wings.ts) draw a player's wings or badge round it (components/Wings.tsx).
+// No tier: exactly the avatar, with nothing round it. The Profile's own image
+// uses WingsFrame directly, and the Beer Board its SVG (BeerBoard.tsx).
 
 import { WingsFrame } from "@/components/Wings";
-import type { WingsMode, WingsTier } from "@/lib/wings";
+import type { WingsPlacement, WingsTier } from "@/lib/wings";
 
 export type AvatarSize = "xs" | "sm" | "md" | "lg";
 
@@ -27,7 +27,9 @@ const SIZES: Record<AvatarSize, string> = {
   lg: "h-14 w-14 text-xl", // 56px: the opponent chooser
 };
 
-const DIAMETERS: Record<AvatarSize, number> = { xs: 24, sm: 28, md: 48, lg: 56 };
+export const AVATAR_DIAMETERS: Record<AvatarSize, number> = { xs: 24, sm: 28, md: 48, lg: 56 };
+
+const NO_WINGS: WingsPlacement = { mode: "none", scale: 1 };
 
 const TONES = {
   felt: { ring: "border-2 border-[var(--brass)]", fill: "bg-[#2a6a44]" },
@@ -38,6 +40,7 @@ const TONES = {
 // colour (lib/boardSkins.ts), the same 2px border, with a 1px light hairline
 // outside it so a blue or green ring still reads on the blue and green felt.
 // It takes no extra room. Unset: the tone's ring, as always.
+// flush and lift: a Teams pair (WingsFrame).
 export function Avatar({
   name,
   url,
@@ -45,7 +48,9 @@ export function Avatar({
   tone = "felt",
   ringColor,
   tier,
-  wings = "none",
+  wings = NO_WINGS,
+  flush,
+  lift,
 }: {
   name: string;
   url: string | null | undefined;
@@ -53,7 +58,9 @@ export function Avatar({
   tone?: keyof typeof TONES;
   ringColor?: string;
   tier?: WingsTier | null;
-  wings?: WingsMode;
+  wings?: WingsPlacement;
+  flush?: boolean;
+  lift?: boolean;
 }) {
   const box = `${SIZES[size]} shrink-0 rounded-full ${TONES[tone].ring}`;
   const ring = ringColor
@@ -73,7 +80,7 @@ export function Avatar({
     </span>
   );
   return (
-    <WingsFrame tier={tier} mode={wings} size={DIAMETERS[size]}>
+    <WingsFrame tier={tier} placement={wings} size={AVATAR_DIAMETERS[size]} flush={flush} lift={lift}>
       {avatar}
     </WingsFrame>
   );

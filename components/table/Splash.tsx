@@ -10,7 +10,7 @@ import {
 } from "@/lib/splashPhrases";
 import { godLossAlt, type GodLoss } from "@/lib/resultScores";
 import { WingsFrame } from "@/components/Wings";
-import { WINGS_SPLASH, wingsSplashSub, type WingsTier } from "@/lib/wings";
+import { WINGS_SPLASH, placementFor, wingsSplashSub, type WingsTier } from "@/lib/wings";
 
 // THE TABLE SPLASHES: a big centred overlay for four live moments.
 //   * "19" -- a counted hand or crib scored 0: a random phrase from
@@ -175,7 +175,7 @@ export function Splash({ splash, onDone }: { splash: SplashEvent | null; onDone:
           }}
           className="splash-wings flex max-w-full select-none flex-col items-center gap-4 text-center"
         >
-          <WingsFrame tier={splash.tier} mode="full" size={120}>
+          <WingsFrame tier={splash.tier} placement={placementFor("milestone")} size={120}>
             {splash.url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={splash.url} alt="" className="splash-wings__avatar" />

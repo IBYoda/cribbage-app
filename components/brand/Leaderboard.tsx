@@ -1,8 +1,8 @@
 "use client";
 
-import { Avatar } from "@/components/Avatar";
+import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
 import { useWingsOn } from "@/components/Wings";
-import { placementFor, tierForCount } from "@/lib/wings";
+import { placementFor, tierForCount, wingsOverhang } from "@/lib/wings";
 
 // THE LEADERBOARD's content (app/leaderboard): plain props, so the page
 // reads the data and a dev preview can draw the same thing with made-up
@@ -47,6 +47,7 @@ export function LeaderboardPanel({
   god,
   refreshing,
   onRefresh,
+  wingsLayout = "reserve",
 }: {
   status: LeaderboardStatus;
   rows: LeaderboardRow[];
@@ -54,8 +55,19 @@ export function LeaderboardPanel({
   god: GodAvatar;
   refreshing: boolean;
   onRefresh: () => void;
+  // WINGS ON THE ROWS (2.2 x): "reserve" keeps the same room beside every
+  // avatar once anyone shown has wings, so the avatars stay in one column;
+  // "indent" moves only the winged rows over. With no wings shown, neither
+  // changes anything.
+  wingsLayout?: "reserve" | "indent";
 }) {
   const since = rows[0]?.skunk_tracking_since ?? null;
+  const wingsOn = useWingsOn();
+  const leaderboardWings = placementFor("leaderboard");
+  const anyWinged =
+    wingsOn && ranked(rows).slice(0, SHOWN_LIMIT).some(({ row }) => tierForCount(row.beat_god) !== null);
+  const reserve =
+    wingsLayout === "reserve" && anyWinged ? wingsOverhang(AVATAR_DIAMETERS.md, leaderboardWings.scale) : 0;
 
   return (
     <>
@@ -97,7 +109,15 @@ export function LeaderboardPanel({
             {ranked(rows)
               .slice(0, SHOWN_LIMIT)
               .map(({ row, rank }) => (
-                <LeaderboardCard key={row.user_id} row={row} rank={rank} isMe={row.user_id === meId} god={god} />
+                <LeaderboardCard
+                  key={row.user_id}
+                  row={row}
+                  rank={rank}
+                  isMe={row.user_id === meId}
+                  god={god}
+                  wingsOn={wingsOn}
+                  reserve={reserve}
+                />
               ))}
           </ol>
           {rows.length > SHOWN_LIMIT && (
@@ -117,14 +137,19 @@ function LeaderboardCard({
   rank,
   isMe,
   god,
+  wingsOn,
+  reserve,
 }: {
   row: LeaderboardRow;
   rank: number;
   isMe: boolean;
   god: GodAvatar;
+  wingsOn: boolean;
+  // Room kept beside an avatar with no wings, so every row's avatar lines up.
+  reserve: number;
 }) {
   // The row already has the count: no read of its own.
-  const wingsOn = useWingsOn();
+  const tier = wingsOn ? tierForCount(row.beat_god) : null;
   const chips = [
     { label: "Skunks", value: row.skunks },
     { label: "Double Skunks", value: row.double_skunks },
@@ -136,29 +161,32 @@ function LeaderboardCard({
       className={`leaderboard-card ${isMe ? "leaderboard-card--me" : ""}`}
       aria-current={isMe ? "true" : undefined}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className="w-6 shrink-0 text-center font-display text-lg font-bold tabular-nums text-[var(--brass-light)]">
+      {/* The rank, right-aligned, then the avatar 4px along: its wings use the
+          rank column's spare room and stop short of the number. Then the
+          name on a line of its own, the whole width, and the record under it. */}
+      <div className="flex min-w-0 items-center">
+        <span className="w-6 shrink-0 text-right font-display text-lg font-bold tabular-nums text-[var(--brass-light)]">
           {rank}
         </span>
-        <Avatar
-          name={row.nickname}
-          url={row.avatar_url}
-          tier={wingsOn ? tierForCount(row.beat_god) : null}
-          wings={placementFor("leaderboard")}
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-bold">{row.nickname}</span>
-          {isMe && <span className="block text-xs text-[var(--brass-light)]">You</span>}
+        <span
+          className="ml-1 inline-flex shrink-0"
+          style={!tier && reserve ? { marginLeft: reserve + 4, marginRight: reserve } : undefined}
+        >
+          <Avatar name={row.nickname} url={row.avatar_url} tier={tier} wings={placementFor("leaderboard")} />
         </span>
-        <span className="flex shrink-0 flex-col items-end leading-none">
-          <span
-            className="font-display text-2xl font-bold tabular-nums"
-            aria-label={`${row.wins} ${row.wins === 1 ? "win" : "wins"}, ${row.losses} ${row.losses === 1 ? "loss" : "losses"}`}
-          >
-            {row.wins} - {row.losses}
-          </span>
-          <span aria-hidden="true" className="mt-1 text-[11px] uppercase tracking-[0.18em] text-[var(--brass-light)]">
-            W - L
+        <span className="ml-2 flex min-w-0 flex-1 flex-col">
+          <span className="block truncate font-bold leading-tight">{row.nickname}</span>
+          <span className="flex items-baseline gap-1.5 leading-tight">
+            <span
+              className="font-display text-lg font-bold tabular-nums"
+              aria-label={`${row.wins} ${row.wins === 1 ? "win" : "wins"}, ${row.losses} ${row.losses === 1 ? "loss" : "losses"}`}
+            >
+              {row.wins} - {row.losses}
+            </span>
+            <span aria-hidden="true" className="text-[11px] uppercase tracking-[0.18em] text-[var(--brass-light)]">
+              W - L
+            </span>
+            {isMe && <span className="ml-auto text-xs text-[var(--brass-light)]">You</span>}
           </span>
         </span>
       </div>

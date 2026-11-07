@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { DealerChip } from "@/components/table/OpponentBand";
-import { Avatar } from "@/components/Avatar";
+import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
 import { isCountReason } from "@/components/table/countingView";
-import { placementFor, plateSpot, type WingsTier } from "@/lib/wings";
+import { placementFor, plateSpot, wingsOverhang, type WingsTier } from "@/lib/wings";
+import { stackedPlateRow } from "@/lib/phase3";
 
 export type PlateMember = {
   userId: string;
@@ -49,12 +50,12 @@ const HIDDEN_SCORE = <span className="sr-only">Score not shown: rejoined after t
 // Fits 2, 3 or 4 plates at 375px wide (4 plates are ~90px each: the name
 // truncates, the score doesn't).
 export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
-  // FOUR PLATES (4-player Solo): too narrow for name and score side by side,
-  // so the avatar on the left and, beside it, the name (11px, the smallest
-  // that stays readable) over the score -- the score as big as the plate's
-  // width and height allow (.plate-stack in app/globals.css). Same height.
-  // 2 and 3 plates (and Teams) are drawn exactly as before.
-  if (plates.length === 4) return <StackedScoreStrip plates={plates} />;
+  // THREE OR FOUR PLATES (3 players, 4-player Solo): too narrow for name and
+  // score side by side, so the avatar on the left and, beside it, the name
+  // (11px, the smallest that stays readable) over the score -- the score as big
+  // as the plate's width and height allow (.plate-stack in app/globals.css).
+  // Same height. 2 plates (and Teams) are drawn exactly as before.
+  if (stackedPlateRow(plates.length)) return <StackedScoreStrip plates={plates} />;
   return (
     <div className="relative">
       <div className="flex h-12 gap-1">
@@ -67,20 +68,7 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
                 : "border-zinc-300 dark:border-zinc-700"
             }`}
           >
-            <div className="flex shrink-0 -space-x-2">
-              {plate.members.map((m) => (
-                <Avatar
-                  key={m.userId}
-                  name={m.name}
-                  url={m.avatarUrl}
-                  size="sm"
-                  tone="table"
-                  ringColor={plate.laneColor}
-                  tier={m.wings}
-                  wings={placementFor(plateSpot(plates.length, plate.members.length))}
-                />
-              ))}
-            </div>
+            <PlateAvatars plate={plate} plateCount={plates.length} />
             <div className="flex min-w-0 flex-1 flex-col leading-tight">
               <span className="flex min-w-0 items-center gap-1 text-xs font-medium">
                 {plate.members.length > 1 ? (
@@ -110,6 +98,36 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
   );
 }
 
+// A plate's avatar, or a Teams plate's two, overlapped. A pair's wings all sit
+// behind both faces (WingsFrame's lift), and the room for them goes on the
+// pair's outside edges only: the first avatar's left, the last one's right.
+function PlateAvatars({ plate, plateCount }: { plate: ScorePlate; plateCount: number }) {
+  const placement = placementFor(plateSpot(plateCount, plate.members.length));
+  const pair = plate.members.length > 1;
+  const winged = (m: PlateMember | undefined) => !!m?.wings && placement.mode === "mini";
+  const room = (m: PlateMember | undefined) => (winged(m) ? wingsOverhang(AVATAR_DIAMETERS.sm, placement.scale) : 0);
+  const anyWinged = plate.members.some(winged);
+  const edges = pair && anyWinged ? { marginLeft: room(plate.members[0]), marginRight: room(plate.members.at(-1)) } : undefined;
+  return (
+    <div className="flex shrink-0 -space-x-2" style={edges}>
+      {plate.members.map((m) => (
+        <Avatar
+          key={m.userId}
+          name={m.name}
+          url={m.avatarUrl}
+          size="sm"
+          tone="table"
+          ringColor={plate.laneColor}
+          tier={m.wings}
+          wings={placement}
+          flush={pair}
+          lift={pair && anyWinged}
+        />
+      ))}
+    </div>
+  );
+}
+
 // The four-plate row: one player a plate (see ScoreStrip).
 function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
   return (
@@ -126,20 +144,7 @@ function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
                   : "border-zinc-300 dark:border-zinc-700"
               }`}
             >
-              <div className="flex shrink-0 -space-x-2">
-                {plate.members.map((m) => (
-                  <Avatar
-                    key={m.userId}
-                    name={m.name}
-                    url={m.avatarUrl}
-                    size="sm"
-                    tone="table"
-                    ringColor={plate.laneColor}
-                    tier={m.wings}
-                    wings={placementFor(plateSpot(plates.length, plate.members.length))}
-                  />
-                ))}
-              </div>
+              <PlateAvatars plate={plate} plateCount={plates.length} />
               <div className="plate-stack flex min-w-0 flex-1 flex-col justify-center">
                 <span className="flex min-w-0 items-center gap-1 text-[11px] font-medium leading-tight">
                   <span className="truncate" title={name}>

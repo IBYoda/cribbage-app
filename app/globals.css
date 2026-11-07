@@ -2242,15 +2242,13 @@ section.felt-panel {
 }
 /* WINGS (components/Wings.tsx, sizes from lib/wings.ts). The frame is the
    avatar's own size, so nothing moves; the art hangs off it, behind the
-   avatar, and only mini takes room, its 0.5 x margin. */
+   avatar, and only mini takes room: a margin as wide as the overhang, set
+   inline from wingsOverhang. */
 .wings-frame {
   position: relative;
   display: inline-flex;
   flex-shrink: 0;
   vertical-align: middle;
-}
-.wings-frame--mini {
-  margin-inline: calc(var(--wings-d) * 0.5);
 }
 .wings-art {
   position: absolute;
@@ -2270,8 +2268,12 @@ section.felt-panel {
   height: 100%;
   max-width: none;
 }
-.wings-avatar {
+/* Every avatar above every wing: a Teams pair's wings overlap, and one
+   partner's wing must never cover the other's face. */
+.wings-avatar,
+.wings-lift {
   position: relative;
+  z-index: 1;
   display: inline-flex;
   flex-shrink: 0;
 }

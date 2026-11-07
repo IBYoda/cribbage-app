@@ -11,9 +11,10 @@ import {
   flamesForPointer,
   readWingsOn,
   wingsBox,
+  wingsOverhang,
   wingsUrl,
   writeWingsOn,
-  type WingsMode,
+  type WingsPlacement,
   type WingsTier,
 } from "@/lib/wings";
 
@@ -25,22 +26,35 @@ import {
 //
 // size: the avatar's diameter in px. The Beer Board can't use this (no HTML in
 // its SVG): MugWings, components/table/BeerBoard.tsx, draws the same art there.
+//
+// flush: no margin of its own (a Teams pair: ScoreStrip puts it on the pair's
+// outside edges). lift: an avatar with no wings beside one with them, raised
+// over their art so a partner's wing never hides it. No layout either way.
 export function WingsFrame({
   tier,
-  mode,
+  placement,
   size,
+  flush = false,
+  lift = false,
   children,
 }: {
   tier: WingsTier | null | undefined;
-  mode: WingsMode;
+  placement: WingsPlacement;
   size: number;
+  flush?: boolean;
+  lift?: boolean;
   children: ReactNode;
 }) {
-  if (!tier || mode === "none") return <>{children}</>;
+  const { mode, scale } = placement;
+  if (!tier || mode === "none") return lift ? <span className="wings-lift">{children}</span> : <>{children}</>;
+  const margin = mode === "mini" && !flush ? wingsOverhang(size, scale) : 0;
   return (
-    <span className={`wings-frame wings-frame--${mode}`} style={{ "--wings-d": `${size}px` } as CSSProperties}>
+    <span
+      className={`wings-frame wings-frame--${mode}`}
+      style={{ "--wings-d": `${size}px`, ...(margin ? { marginInline: margin } : {}) } as CSSProperties}
+    >
       {mode !== "badge" && (
-        <span className="wings-art" aria-hidden="true" style={artBox(size, mode)}>
+        <span className="wings-art" aria-hidden="true" style={artBox(size, scale)}>
           {mode === "mini" ? <MiniArt tier={tier} /> : <FullArt tier={tier} />}
         </span>
       )}
@@ -56,8 +70,8 @@ export function WingsFrame({
   );
 }
 
-function artBox(size: number, mode: "full" | "mini"): CSSProperties {
-  const { width, height, left, top } = wingsBox(size, mode);
+function artBox(size: number, scale: number): CSSProperties {
+  const { width, height, left, top } = wingsBox(size, scale);
   return { width, height, left, top };
 }
 
