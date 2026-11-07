@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { useAppearance } from "@/components/AppearanceProvider";
+import { playTestSound, setSoundOn, setSoundVolume, useSoundOn, useSoundVolume } from "@/components/SoundProvider";
 import { setDealAnimationOn, useDealAnimationOn } from "@/components/table/DealAnimation";
 import {
   CribbageBoard,
@@ -18,6 +19,7 @@ import type { BoardPattern } from "@/lib/boardLayout";
 import { BEER_PREVIEW_SIZE, beerPreviewPlates } from "@/lib/beerBoard";
 import { BOARD_SKIN_LIST } from "@/lib/boardSkins";
 import { CUSTOM_BOARDS, CUSTOM_PATTERN_LABEL, type CustomBoard } from "@/lib/customBoards";
+import { CORE_SOUNDS } from "@/lib/sounds";
 import {
   CARD_BACKS,
   TABLE_SURFACES,
@@ -62,6 +64,8 @@ function CustomBoardPreview({ board }: { board: CustomBoard }) {
 export function AppearanceSettings() {
   const appearance = useAppearance();
   const dealAnimationOn = useDealAnimationOn();
+  const soundOn = useSoundOn();
+  const soundVolume = useSoundVolume();
   const boardSkin = useBoardSkin();
   const boardPattern = useBoardPattern();
   const customBoard = useCustomBoard();
@@ -108,7 +112,7 @@ export function AppearanceSettings() {
         Appearance
       </h2>
       <p className="-mt-3 text-sm">
-        Your table and card backs -- only you see them.
+        Your table, cards, sound and board -- just for you.
       </p>
 
       {/* THE PREVIEW: a slice of table in the chosen surface, with a face-down
@@ -228,6 +232,54 @@ export function AppearanceSettings() {
         <p id="deal-animation-hint" className="text-sm">
           Cards fly from the dealer&apos;s deck at the start of each hand, and discards fly to the crib. Saved on
           this device only, at once.
+        </p>
+      </fieldset>
+
+      {/* SOUND: this device only (localStorage, lib/sounds.ts), so it saves at
+          once, like Card animations. The table header's speaker is the same
+          switch. Test sound's tap also unlocks audio. */}
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-medium">Sound</legend>
+        <div className="flex items-center gap-3">
+          <button
+            id="sound-switch"
+            type="button"
+            role="switch"
+            aria-checked={soundOn}
+            aria-describedby="sound-hint"
+            onClick={() => setSoundOn(!soundOn)}
+            className="felt-switch"
+          />
+          <label htmlFor="sound-switch" className="cursor-pointer text-sm">
+            Game sounds
+          </label>
+        </div>
+        <div className="flex items-center gap-3">
+          <label htmlFor="sound-volume" className="text-sm">
+            Volume
+          </label>
+          <input
+            id="sound-volume"
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={soundVolume}
+            disabled={!soundOn}
+            onChange={(event) => setSoundVolume(Number(event.target.value))}
+            className="felt-range"
+          />
+          <button
+            type="button"
+            disabled={!soundOn}
+            onClick={() => void playTestSound(CORE_SOUNDS.card[0])}
+            className="peg-btn peg-btn--ghost peg-btn--small shrink-0 disabled:opacity-60"
+          >
+            Test sound
+          </button>
+        </div>
+        <p id="sound-hint" className="text-sm">
+          Cards, the deal, a 19 hand and the end of a game. Saved on this device only, at once.
         </p>
       </fieldset>
 

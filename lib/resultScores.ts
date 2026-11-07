@@ -7,16 +7,24 @@ import { isGodLevel } from "./splashPhrases";
 // is null: God winning, God losing from 91 to 119, any other table.
 export type GodLoss = "skunk" | "double-skunk" | "stinkhole";
 
+// A loser's final score as a tier, or null for an ordinary loss (91 to 119).
+// The one place these numbers live: God's splash and the game's sounds
+// (endSoundEvent, lib/sounds.ts) both read it. The leaderboard's SQL uses the
+// same skunk lines, and has no stinkhole.
+export function lossTier(score: number): GodLoss | null {
+  if (score === 120) return "stinkhole";
+  if (score < 61) return "double-skunk";
+  if (score <= 90) return "skunk";
+  return null;
+}
+
 export function godLossSplash(
   computerLevel: string | null | undefined,
   humanWon: boolean,
   godScore: number | null | undefined
 ): GodLoss | null {
   if (!isGodLevel(computerLevel) || !humanWon || typeof godScore !== "number") return null;
-  if (godScore === 120) return "stinkhole";
-  if (godScore < 61) return "double-skunk";
-  if (godScore <= 90) return "skunk";
-  return null;
+  return lossTier(godScore);
 }
 
 // The image's alt text, for screen readers.

@@ -905,7 +905,8 @@ body {
    my cards (HandRow's cards, not its label) and the across player's backs
    -- and the overlay's flying cards stand in for them. The overlay covers
    the screen, so a tap anywhere skips and nothing under it can be tapped
-   mid-flight. */
+   mid-flight -- except the header's speaker, above it (.sound-toggle): the
+   deal is the loudest moment, when a player most wants to mute. */
 .sq-dealing .sq-hand-row > div > :not(.absolute),
 .sq-dealing .sq-opp-card {
   visibility: hidden;
@@ -915,6 +916,10 @@ body {
   inset: 0;
   z-index: 60;
   overflow: hidden;
+}
+.sound-toggle {
+  position: relative;
+  z-index: 61;
 }
 /* A discard toss is short and never blocks a tap. */
 .deal-overlay--pass {
@@ -2211,6 +2216,52 @@ section.felt-panel {
   outline-offset: 2px;
 }
 .felt-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* The Sound section's volume: the switch's brass and groove on a slider. The
+   40px tall input is the touch target; the drawn track is 6px. */
+.felt-range {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.felt-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.3);
+  box-shadow: inset 0 0 0 1px var(--brass);
+}
+.felt-range::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.3);
+  box-shadow: inset 0 0 0 1px var(--brass);
+}
+.felt-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border-radius: 9999px;
+  background: var(--brass);
+}
+.felt-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--brass);
+}
+.felt-range:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+.felt-range:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }

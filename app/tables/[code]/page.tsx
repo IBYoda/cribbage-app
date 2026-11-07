@@ -22,6 +22,9 @@ import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
+import { SoundToggle } from "@/components/table/SoundToggle";
+import { useTableSounds } from "@/components/table/useTableSounds";
+import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, discardKeys, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
 import { mugginsPlateStates } from "@/lib/mugginsPlates";
@@ -614,6 +617,29 @@ export default function TablePage() {
   const boardPattern = useBoardPattern();
   // ...and a custom board, if any: one may replace the score plates.
   const customBoard = useCustomBoard();
+  // THE SOUNDS (lib/sounds.ts), fired from the realtime handlers, my cut tap
+  // and the deal's start -- never from a read or a render, the same rule as
+  // the splashes. soundCatchUpRef: a read that catches up is due. Only a games
+  // row says who has cut or discarded, and every UPDATE repeats the whole row,
+  // so what a catch-up finds there is marked heard (heardKeys) rather than
+  // played late by the next event; true until the first read has done that.
+  const tableSound = useTableSounds({
+    open: !!table,
+    isMuggins,
+    hideCounts: appearance.hideCounts,
+    square: isSquareTable({
+      layoutParam,
+      playerCount: table?.max_players ?? 2,
+      isMuggins,
+      teams: table?.team_mode === "teams",
+    }),
+    board: customBoard,
+  });
+  const soundCatchUpRef = useRef(true);
+  // The second half of a catch-up: a zero count is on the roster, not the games
+  // row, so the game read leaves its hand here for the roster read that
+  // follows (heardZeroKeys).
+  const zeroCatchUpRef = useRef<{ id: string; hand_no: number } | null>(null);
   useEffect(() => {
     membersRef.current = members;
     activeGameRef.current = activeGame;
@@ -861,6 +887,11 @@ export default function TablePage() {
       if (membersError) return membersError.message;
 
       const rows = memberRows ?? [];
+      // THE SOUNDS' CATCH-UP, second half (see zeroCatchUpRef).
+      if (zeroCatchUpRef.current) {
+        tableSound.heard(heardZeroKeys(zeroCatchUpRef.current.id, zeroCatchUpRef.current.hand_no, rows));
+        zeroCatchUpRef.current = null;
+      }
       const shownById = new Map(membersRef.current.map((m) => [m.user_id, m]));
       // Players already shown with their name, in the same seat, keep it
       // (profile edits arrive through realtime); a new seat, a rejoin or a
@@ -910,7 +941,7 @@ export default function TablePage() {
       setMembersLoaded(true);
       return null;
     }
-  }, []);
+  }, [tableSound]);
 
   // Fetches the current active game + full roster for a table. Used both for
   // the initial load and to "catch up" after the realtime connection drops
@@ -926,6 +957,16 @@ export default function TablePage() {
       .eq("table_id", tableId)
       .in("status", LIVE_GAME_STATUSES)
       .maybeSingle();
+
+    // THE SOUNDS' CATCH-UP (see soundCatchUpRef). Not behind the read guard
+    // below: an older read still only names things that have happened.
+    if (soundCatchUpRef.current) {
+      soundCatchUpRef.current = false;
+      if (existingGame) {
+        tableSound.heard(heardKeys(existingGame));
+        zeroCatchUpRef.current = { id: existingGame.id, hand_no: existingGame.hand_no };
+      }
+    }
 
     // A read issued later (another refresh, or reconcileGame) has already
     // been applied: this result is older than what's on screen, so it must
@@ -1023,7 +1064,7 @@ export default function TablePage() {
     const membersError = await loadMembers(tableId);
     if (membersError) setError(membersError);
     setTableRead(true);
-  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers]);
+  }, [fetchMyHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers, tableSound]);
 
   // Counted while in flight, so the safety poll waits for it.
   const refreshTableState = useCallback(
@@ -1260,6 +1301,13 @@ export default function TablePage() {
   // returns it. Nothing about the dealer is known beforehand.
   async function handleDrawCutCard(): Promise<string | null> {
     if (!activeGame) return "No active game.";
+
+    // The tap's own card sound. The games row brings this same key back, so
+    // the event stays quiet here and plays on every other screen.
+    if (session) {
+      const round = Math.max((activeGame.deal_cut?.length ?? 1) - 1, 0);
+      tableSound.card(cutKey(activeGame.id, round, session.user.id));
+    }
 
     const { error: rpcError } = await trackAction(
       supabase.rpc("draw_cut_card", {
@@ -1566,6 +1614,14 @@ export default function TablePage() {
               // A computer table's one human is its creator.
               updated.user_id === table.created_by
             );
+            // Its sound: the same moment, with its own key and gate. Not during
+            // a catch-up, which marks it heard instead (see soundCatchUpRef).
+            const zeroGameId = activeGameIdRef.current;
+            if (zeroGameId && !soundCatchUpRef.current && !zeroCatchUpRef.current) {
+              tableSound.zeroHand(
+                zeroKey(zeroGameId, activeGameRef.current?.hand_no, updated.user_id, updated.last_reason!)
+              );
+            }
           }
 
           setMembers((current) =>
@@ -1617,6 +1673,11 @@ export default function TablePage() {
           // as the profiles UPDATE listener: at this scale, letting the client
           // discard what isn't its own is simpler than re-subscribing.
           if (event.game_id !== activeGameIdRef.current) return;
+
+          // A CARD PLAYED, on every screen, mine too.
+          if (event.kind === "play") {
+            tableSound.card(playKey(event.game_id, activeGameRef.current?.hand_no, event.seq));
+          }
 
           // THE GO SPLASH: once per player per run -- a player stuck for
           // several plays logs a go each time, like the one Go label.
@@ -1688,6 +1749,9 @@ export default function TablePage() {
           // slower call is handed the faster one's game -- so this fires once
           // and both screens land in the same game.
           if (LIVE_GAME_STATUSES.includes(newGame.status)) {
+            // THE SHUFFLE as the cut opens. Before the check below, which
+            // returns for the player who started it.
+            if (newGame.status === "cutting") tableSound.shuffle(cutOpenKey(newGame.id));
             // The player who tapped New Game usually has this game already:
             // handleStartNewGame re-reads it straight after the call. The
             // INSERT payload is the row as first created, so applying it now
@@ -1809,6 +1873,34 @@ export default function TablePage() {
                 if (loss) showGodLoss(`godloss:${wonGameId}`, loss);
               });
           }
+          // THE GAME'S END, IN SOUND: the same live moment, for the same
+          // reasons. A win plays now. A loss first reads the final scores for
+          // its tier (a failed read is a plain loss), except at a Muggins
+          // table, which never has one (endSoundEvent).
+          if (
+            updatedGame.ended_reason === "won" &&
+            !LIVE_GAME_STATUSES.includes(updatedGame.status) &&
+            (updatedGame.ready_by ?? []).length === 0
+          ) {
+            const endedKey = endKey(updatedGame.id);
+            const myId = myHandRef.current?.userId ?? null;
+            const players = updatedGame.players ?? [];
+            const winnerId = updatedGame.winner_id;
+            const teams = table.max_players === 4 && table.team_mode === "teams";
+            const outcome = gameOutcome({ players, winnerId, myId, teams });
+            if (outcome === "win" || (outcome === "loss" && table.is_muggins)) {
+              tableSound.end(endedKey, endSoundEvent(outcome, null, { isMuggins: table.is_muggins }));
+            } else if (outcome === "loss" && myId) {
+              supabase
+                .from("table_members")
+                .select("user_id, score")
+                .eq("table_id", table.id)
+                .then(({ data }) => {
+                  const score = loserScore({ rows: data ?? [], players, winnerId, myId, teams, gameHole: GAME_HOLE });
+                  tableSound.end(endedKey, endSoundEvent("loss", score, { isMuggins: false }));
+                });
+            }
+          }
           // THE WON GAME ON SCREEN: its only change after it ends is a New
           // Game tap (ready_by). Merge that and nothing else -- a union, so an
           // event and a re-read can land in either order. Everything else
@@ -1913,6 +2005,20 @@ export default function TablePage() {
             return;
           }
 
+          // A CUT CARD OR A DISCARD, in sound. Neither has an event of its own:
+          // the row just lists who has, and repeats it on every later UPDATE,
+          // so each is keyed by player and heard once. A discard's one list
+          // entry stands for all that player's cards (2, or 1 with 3 or 4
+          // players): one sound each. Not during a catch-up, which marks them
+          // heard instead (see soundCatchUpRef).
+          if (!soundCatchUpRef.current) {
+            for (const key of cutKeys(updatedGame.id, updatedGame.deal_cut)) tableSound.card(key);
+            const cards = sizesFor(updatedGame.players).discard;
+            for (const key of discardKeys(updatedGame.id, updatedGame.hand_no, updatedGame.discarded_by)) {
+              tableSound.card(key, cards);
+            }
+          }
+
           // Otherwise the game is live and something moved: a cut card, an
           // acknowledgement, a discard, the starter, a play, a count, a reveal,
           // a new hand. None of it ever carries a hand or the crib.
@@ -1989,6 +2095,7 @@ export default function TablePage() {
           // the FIRST subscribe, anything between the setup effect's reads
           // and this moment was too (TABLE SYNC, gap A). The read tickets
           // keep this from rolling anything back.
+          soundCatchUpRef.current = true;
           refreshTableState(table.id);
         } else if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
           setRealtimeStatus("disconnected");
@@ -1998,7 +2105,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo, showGodLoss]);
+  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo, showGodLoss, tableSound]);
 
   // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
   // comes back online -- the same full refresh as on subscribe. A hidden tab
@@ -2008,6 +2115,7 @@ export default function TablePage() {
     if (!table) return;
     const catchUp = () => {
       if (document.visibilityState !== "visible" || errorRef.current) return;
+      soundCatchUpRef.current = true;
       refreshTableState(table.id);
     };
     document.addEventListener("visibilitychange", catchUp);
@@ -2433,6 +2541,9 @@ export default function TablePage() {
     if (!discardShow || discardShow.handKey !== handKey || discardShow.fired || discardShow.cancelled) return;
     setDiscardShow((current) => fireDiscardShow(current, handKey));
     writeDiscardShown(handKey);
+    // Its cards' sound, now that they're seen to go. The same key as the real
+    // discard's, which stays quiet when it comes.
+    if (activeGame) tableSound.card(discardKey(activeGame.id, activeGame.hand_no, shownComputerId), sizes.discard);
     // Its two cards thrown to the crib, as a real discard is (animations on).
     if (cardAnimationsOn) {
       const id = `${handKey}:shown`;
@@ -2781,6 +2892,9 @@ export default function TablePage() {
   // The header's controls -- the same in the square view's header.
   const headerRight = (
         <>
+          {/* The quick mute. Not while Leave is asking to confirm, for the
+              same reason as Hide counts. */}
+          {!leaveConfirming && <SoundToggle />}
           {/* Hide counts, saved at once. Not while Leave is asking to
               confirm, so the header's right side never grows past one
               line. On a Muggins table it is locked: nothing to show, so
@@ -3447,7 +3561,11 @@ export default function TablePage() {
           seats={dealSeats.map(dealPositionOf)}
           dealer={dealerPosition}
           faces={displayedHand}
-          onDone={() => setDealDoneKey(dealHandKey)}
+          onStart={() => tableSound.dealStart(dealKey(dealHandKey))}
+          onDone={() => {
+            tableSound.dealEnd();
+            setDealDoneKey(dealHandKey);
+          }}
         />
       ) : dealInFlight && dealHandKey ? (
         <DealStandby key={dealHandKey} onGiveUp={() => setDealDoneKey(dealHandKey)} />

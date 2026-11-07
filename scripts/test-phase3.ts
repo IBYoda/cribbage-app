@@ -10,11 +10,53 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
-import { godLossAlt, godLossSplash, hideRejoinedScores, scoreFromThisGame } from "../lib/resultScores";
+import { godLossAlt, godLossSplash, hideRejoinedScores, lossTier, scoreFromThisGame } from "../lib/resultScores";
+import {
+  BURST_WINDOW_MS,
+  CORE_SOUNDS,
+  DEFAULT_SOUND_VOLUME,
+  SHUFFLE_LEAD_MS,
+  SOUND_CLIP_MAX_BYTES,
+  SOUND_EVENTS,
+  SOUND_KEY,
+  SOUND_PRIORITY,
+  SOUND_SET_MAX_BYTES,
+  SOUND_VOLUME_KEY,
+  audioRepair,
+  clipsFor,
+  cueAllowed,
+  heardZeroKeys,
+  isZeroCount,
+  zeroKey,
+  zeroSoundAllowed,
+  cutKey,
+  cutKeys,
+  cutOpenKey,
+  dealKey,
+  discardKey,
+  discardKeys,
+  endKey,
+  endSoundEvent,
+  gameOutcome,
+  heardKeys,
+  loserScore,
+  pickBurst,
+  pickClip,
+  playKey,
+  readLastClip,
+  readSoundOn,
+  readSoundVolume,
+  soundFor,
+  writeLastClip,
+  writeSoundOn,
+  writeSoundVolume,
+  type SoundCue,
+  type SoundEvent,
+} from "../lib/sounds";
 import { isEmailNotConfirmed, readAuthHashError, RESEND_COOLDOWN_S, resendSecondsLeft } from "../lib/authFlow";
 import {
   GOD_ZERO_SPLASH_IMAGE,
@@ -3255,6 +3297,428 @@ check("beer: the self-scoring banner reads, and the lanes match the other custom
   for (const wood of [BEER.skin.wood.top, BEER.skin.wood.bottom]) strictEqual(contrastRatio(bannerTextColor(BEER.skin), wood) >= 4.5, true);
   deepStrictEqual(BEER.skin.lanes.map((l) => l.peg), FOOTBALL.skin.lanes.map((l) => l.peg));
   strictEqual(BEER.skin.fourthLane.peg, FOOTBALL.skin.fourthLane.peg);
+});
+
+// THE SOUNDS (lib/sounds.ts).
+const onDisk = (url: string) => `public${url}`;
+const SOUND_P2 = ["a", "b"];
+const SOUND_P4 = ["a", "b", "c", "d"];
+const plainTable = { isMuggins: false, square: true };
+const cue = (...events: SoundEvent[]): SoundCue => ({ steps: events.map((event) => ({ event, url: event })), gapMs: null });
+
+check("sounds: every clip the spec lists is registered, in its event", () => {
+  deepStrictEqual(CORE_SOUNDS.card, ["/sounds/card.mp3"]);
+  deepStrictEqual(CORE_SOUNDS.shuffle, ["/sounds/shuffle.mp3"]);
+  deepStrictEqual(CORE_SOUNDS.deal, ["/sounds/deal.mp3"]);
+  deepStrictEqual(SOUND_EVENTS.map((e) => CORE_SOUNDS[e].length), [1, 1, 1, 1, 4, 2, 3, 2, 2]);
+  strictEqual(CORE_SOUNDS.win.every((c) => c.startsWith("/sounds/win-")), true);
+  strictEqual(CORE_SOUNDS.loss.every((c) => c.startsWith("/sounds/loss-")), true);
+  strictEqual(CORE_SOUNDS.skunk.every((c) => c.startsWith("/sounds/skunk-")), true);
+  strictEqual(CORE_SOUNDS["double-skunk"].every((c) => c.startsWith("/sounds/doubleskunk-")), true);
+  strictEqual(CORE_SOUNDS.stinkhole.every((c) => c.startsWith("/sounds/stinkhole-")), true);
+});
+check("sounds: every registered clip exists, is an MP3, and fits the budget", () => {
+  const clips = clipsFor(null);
+  strictEqual(clips.length, 16);
+  let total = 0;
+  for (const url of clips) {
+    strictEqual(existsSync(onDisk(url)), true, url);
+    strictEqual(url.endsWith(".mp3"), true, url);
+    const { size } = statSync(onDisk(url));
+    strictEqual(size > 0 && size < SOUND_CLIP_MAX_BYTES, true, `${url}: ${size}`);
+    total += size;
+  }
+  strictEqual(SOUND_CLIP_MAX_BYTES, 60_000);
+  strictEqual(SOUND_SET_MAX_BYTES, 350_000);
+  strictEqual(total < SOUND_SET_MAX_BYTES, true, `the set: ${total}`);
+});
+check("sounds: no clip sits on disk unregistered", () => {
+  const onDiskNow = readdirSync("public/sounds").filter((f) => f.endsWith(".mp3")).map((f) => `/sounds/${f}`).sort();
+  deepStrictEqual(onDiskNow, clipsFor(null).sort());
+});
+check("sounds: no event plays points -- nothing exists for a score to trigger", () => {
+  deepStrictEqual([...SOUND_EVENTS].sort(), ["card", "deal", "double-skunk", "loss", "shuffle", "skunk", "stinkhole", "win", "zeroHand"]);
+});
+check("sounds: the deal's lead-in is the shuffle's length, and a burst is a few ms", () => {
+  strictEqual(SHUFFLE_LEAD_MS, 650);
+  strictEqual(BURST_WINDOW_MS <= 50, true);
+});
+check("sounds: soundFor falls back to the core sound; no board has sounds yet", () => {
+  for (const event of SOUND_EVENTS) {
+    deepStrictEqual(soundFor(event, null, plainTable), CORE_SOUNDS[event]);
+    deepStrictEqual(soundFor(event, undefined, plainTable), CORE_SOUNDS[event]);
+    for (const board of CUSTOM_BOARDS) {
+      strictEqual(board.sounds, undefined);
+      deepStrictEqual(soundFor(event, board, plainTable), CORE_SOUNDS[event]);
+    }
+  }
+});
+check("sounds: a board's clip plays only while its board is on screen", () => {
+  const board = { sounds: { card: "/sounds/beer/glug.mp3" } };
+  deepStrictEqual(soundFor("card", board, plainTable), ["/sounds/beer/glug.mp3"]);
+  deepStrictEqual(soundFor("deal", board, plainTable), CORE_SOUNDS.deal); // not its event
+  deepStrictEqual(soundFor("card", board, { isMuggins: true, square: true }), CORE_SOUNDS.card);
+  deepStrictEqual(soundFor("card", board, { isMuggins: false, square: false }), CORE_SOUNDS.card);
+  strictEqual(clipsFor(board).includes("/sounds/beer/glug.mp3"), true);
+  strictEqual(clipsFor(board).length, 17);
+});
+check("sounds: the picker never repeats back to back", () => {
+  for (const event of SOUND_EVENTS) {
+    const clips = CORE_SOUNDS[event];
+    if (clips.length < 2) continue;
+    let last: string | null = null;
+    for (let i = 0; i < 500; i++) {
+      const next = pickClip(clips, last);
+      strictEqual(clips.includes(next), true);
+      strictEqual(next !== last, true, `${event} repeated ${next}`);
+      last = next;
+    }
+  }
+});
+check("sounds: the picker -- both ends of random, a single clip, a last pick not in the list", () => {
+  const list = ["a", "b", "c"];
+  strictEqual(pickClip(list, "a", () => 0), "b");
+  strictEqual(pickClip(list, "a", () => 0.999), "c");
+  strictEqual(pickClip(list, null, () => 0), "a");
+  strictEqual(pickClip(["only"], "only"), "only"); // nothing else to play
+  strictEqual(pickClip(list, "gone", () => 0), "a");
+});
+check("sounds: every pick reachable from every last pick", () => {
+  const list = ["a", "b", "c", "d"];
+  for (const last of list) {
+    const seen = new Set<string>();
+    for (const r of [0, 0.34, 0.67, 0.99]) seen.add(pickClip(list, last, () => r));
+    deepStrictEqual([...seen].sort(), list.filter((c) => c !== last));
+  }
+});
+check("sounds: who hears the end -- 2, 3 and 4 Solo players: only the winner wins", () => {
+  strictEqual(gameOutcome({ players: SOUND_P2, winnerId: "a", myId: "a", teams: false }), "win");
+  strictEqual(gameOutcome({ players: SOUND_P2, winnerId: "a", myId: "b", teams: false }), "loss");
+  for (const me of ["b", "c", "d"]) {
+    strictEqual(gameOutcome({ players: SOUND_P4, winnerId: "a", myId: me, teams: false }), "loss");
+  }
+});
+check("sounds: who hears the end -- Teams: both partners win, both opponents lose", () => {
+  // Seats 1 and 3 against 2 and 4 (teamOfPosition).
+  const outcomeOf = (winnerId: string) =>
+    SOUND_P4.map((myId) => gameOutcome({ players: SOUND_P4, winnerId, myId, teams: true }));
+  deepStrictEqual(outcomeOf("a"), ["win", "loss", "win", "loss"]);
+  deepStrictEqual(outcomeOf("c"), ["win", "loss", "win", "loss"]);
+  deepStrictEqual(outcomeOf("b"), ["loss", "win", "loss", "win"]);
+  deepStrictEqual(outcomeOf("d"), ["loss", "win", "loss", "win"]);
+});
+check("sounds: who hears the end -- a spectator, a missing winner or nobody signed in: nothing", () => {
+  strictEqual(gameOutcome({ players: SOUND_P2, winnerId: "a", myId: "z", teams: false }), null);
+  strictEqual(gameOutcome({ players: SOUND_P4, winnerId: "a", myId: "z", teams: true }), null);
+  strictEqual(gameOutcome({ players: SOUND_P2, winnerId: null, myId: "a", teams: false }), null);
+  strictEqual(gameOutcome({ players: SOUND_P2, winnerId: "a", myId: null, teams: false }), null);
+});
+check("sounds: the loss tiers are God's numbers, at every boundary", () => {
+  const expected: [number, string | null][] = [
+    [0, "double-skunk"], [60, "double-skunk"],
+    [61, "skunk"], [90, "skunk"],
+    [91, null], [119, null],
+    [120, "stinkhole"],
+  ];
+  for (const [score, tier] of expected) strictEqual(lossTier(score), tier, String(score));
+  for (let score = 0; score <= 120; score++) {
+    strictEqual(godLossSplash("hard", true, score), lossTier(score));
+  }
+});
+check("sounds: a loss plays its tier; a win never does", () => {
+  const plain = { isMuggins: false };
+  strictEqual(endSoundEvent("loss", 100, plain), "loss");
+  strictEqual(endSoundEvent("loss", 75, plain), "skunk");
+  strictEqual(endSoundEvent("loss", 40, plain), "double-skunk");
+  strictEqual(endSoundEvent("loss", 120, plain), "stinkhole");
+  strictEqual(endSoundEvent("loss", null, plain), "loss"); // the read failed
+  strictEqual(endSoundEvent("win", 40, plain), "win");
+});
+check("sounds: the gate -- a Muggins table never tells a loser how far behind they were", () => {
+  const muggins = { isMuggins: true };
+  for (let score = 0; score <= 121; score++) strictEqual(endSoundEvent("loss", score, muggins), "loss");
+  strictEqual(endSoundEvent("win", null, muggins), "win");
+});
+check("sounds: the loser's score -- Solo reads mine, Teams the higher of the two rows", () => {
+  const rows = [
+    { user_id: "a", score: 121 },
+    { user_id: "b", score: 70 },
+    { user_id: "c", score: 121 },
+    { user_id: "d", score: 95 },
+  ];
+  const base = { rows, players: SOUND_P4, winnerId: "a", gameHole: 121 };
+  strictEqual(loserScore({ ...base, myId: "b", teams: false }), 70);
+  strictEqual(loserScore({ ...base, myId: "b", teams: true }), 95); // a partner's row still on its way
+  strictEqual(loserScore({ ...base, myId: "d", teams: true }), 95);
+});
+check("sounds: the loser's score -- not final, or not there: null, so a plain loss", () => {
+  const players = SOUND_P2;
+  const final = { players, winnerId: "a", myId: "b", teams: false, gameHole: 121 };
+  strictEqual(loserScore({ ...final, rows: [{ user_id: "a", score: 0 }, { user_id: "b", score: 0 }] }), null);
+  strictEqual(loserScore({ ...final, rows: [] }), null);
+  strictEqual(loserScore({ ...final, rows: [{ user_id: "a", score: 121 }] }), null);
+  strictEqual(loserScore({ ...final, rows: [{ user_id: "a", score: 121 }, { user_id: "b", score: null }] }), null);
+});
+check("sounds: the keys -- a play's seq restarts each hand, so its key has the hand in it", () => {
+  strictEqual(playKey("g", 1, 1) === playKey("g", 2, 1), false);
+  strictEqual(playKey("g", 1, 1) === playKey("g", 1, 2), false);
+  strictEqual(playKey("g", 1, 1) === playKey("h", 1, 1), false);
+  strictEqual(playKey("g", 1, 1), playKey("g", 1, 1));
+});
+check("sounds: the keys -- each is its own, and hand, round and player count", () => {
+  strictEqual(discardKey("g", 1, "a") === discardKey("g", 2, "a"), false);
+  strictEqual(discardKey("g", 1, "a") === discardKey("g", 1, "b"), false);
+  strictEqual(cutKey("g", 0, "a") === cutKey("g", 1, "a"), false); // a tie's redraw
+  strictEqual(cutKey("g", 0, "a") === cutKey("g", 0, "b"), false);
+  const keys = [playKey("g", 1, 1), discardKey("g", 1, "a"), cutKey("g", 1, "a"), cutOpenKey("g"), dealKey("g:1"), endKey("g")];
+  strictEqual(new Set(keys).size, keys.length);
+});
+check("sounds: a later row repeats a cut, with the same keys", () => {
+  const first = [[{ user_id: "a" }]];
+  const later = [[{ user_id: "a" }, { user_id: "b" }]];
+  deepStrictEqual(cutKeys("g", first), [cutKey("g", 0, "a")]);
+  deepStrictEqual(cutKeys("g", later), [cutKey("g", 0, "a"), cutKey("g", 0, "b")]);
+  // The tap's key is the row's: the tapping player's own echo stays quiet.
+  strictEqual(cutKeys("g", later).includes(cutKey("g", 0, "a")), true);
+  // A tie opens a round: a second card from the same player is a new key.
+  deepStrictEqual(cutKeys("g", [[{ user_id: "a" }], []]), [cutKey("g", 0, "a")]);
+  deepStrictEqual(cutKeys("g", [[{ user_id: "a" }], [{ user_id: "a" }]]), [cutKey("g", 0, "a"), cutKey("g", 1, "a")]);
+  deepStrictEqual(cutKeys("g", null), []);
+});
+check("sounds: a discard is one list entry per player, keyed per hand", () => {
+  deepStrictEqual(discardKeys("g", 3, ["a", "b"]), [discardKey("g", 3, "a"), discardKey("g", 3, "b")]);
+  deepStrictEqual(discardKeys("g", 3, []), []);
+  deepStrictEqual(discardKeys("g", 3, null), []);
+});
+check("sounds: what a read finds is heard, not played", () => {
+  const row = { id: "g", hand_no: 2, deal_cut: [[{ user_id: "a" }]], discarded_by: ["b"] };
+  deepStrictEqual(heardKeys(row), [cutKey("g", 0, "a"), discardKey("g", 2, "b")]);
+  deepStrictEqual(heardKeys({ id: "g", hand_no: 1, deal_cut: null, discarded_by: null }), []);
+});
+check("sounds: a burst -- win and lose over deal over shuffle over card", () => {
+  deepStrictEqual(pickBurst([]), null);
+  const card = cue("card");
+  const shuffle = cue("shuffle");
+  const deal = cue("deal");
+  for (const end of ["win", "loss", "skunk", "double-skunk", "stinkhole"] as const) {
+    const ending = cue(end);
+    strictEqual(pickBurst([card, shuffle, deal, ending]), ending);
+    strictEqual(pickBurst([ending, deal, shuffle, card]), ending);
+  }
+  strictEqual(pickBurst([card, shuffle, deal]), deal);
+  strictEqual(pickBurst([card, shuffle]), shuffle);
+  strictEqual(pickBurst([card, card]), card);
+  strictEqual(SOUND_PRIORITY.win > SOUND_PRIORITY.deal, true);
+});
+check("sounds: a burst -- the shuffle-then-deal pair stays whole, ahead of a lone shuffle", () => {
+  const pair = cue("shuffle", "deal");
+  const shuffle = cue("shuffle");
+  const card = cue("card");
+  strictEqual(pickBurst([card, shuffle, pair]), pair);
+  strictEqual(pickBurst([pair, card]), pair);
+  deepStrictEqual(pickBurst([card, pair])?.steps.map((s) => s.event), ["shuffle", "deal"]);
+  const win = cue("win");
+  strictEqual(pickBurst([pair, win]), win);
+  strictEqual(pickBurst([cue("card", "card"), card])?.steps.length, 2); // a discard's two cards, first of equals
+});
+check("sounds: the setting -- no storage reads on at 0.8, and writes don't throw", () => {
+  strictEqual(readSoundOn(), true); // no localStorage at all, as here in Node
+  strictEqual(readSoundVolume(), DEFAULT_SOUND_VOLUME);
+  strictEqual(DEFAULT_SOUND_VOLUME, 0.8);
+  strictEqual(readLastClip("win"), null);
+  writeSoundOn(false);
+  writeSoundVolume(0.5);
+  writeLastClip("win", "x");
+});
+check("sounds: the setting -- saved under its own keys, and read back", () => {
+  strictEqual(SOUND_KEY, "nobs:sound");
+  strictEqual(SOUND_VOLUME_KEY, "nobs:sound-volume");
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  try {
+    strictEqual(readSoundOn(), true); // on by default
+    writeSoundOn(false);
+    strictEqual(store.get(SOUND_KEY), "0");
+    strictEqual(readSoundOn(), false);
+    writeSoundOn(true);
+    strictEqual(store.get(SOUND_KEY), "1");
+    strictEqual(readSoundOn(), true);
+
+    strictEqual(readSoundVolume(), 0.8);
+    writeSoundVolume(0.35);
+    strictEqual(store.get(SOUND_VOLUME_KEY), "0.35");
+    strictEqual(readSoundVolume(), 0.35);
+    writeSoundVolume(0);
+    strictEqual(readSoundVolume(), 0); // silence is a volume, not a missing one
+    writeSoundVolume(4);
+    strictEqual(readSoundVolume(), 1);
+    writeSoundVolume(-1);
+    strictEqual(readSoundVolume(), 0);
+    writeSoundVolume(Number.NaN);
+    strictEqual(readSoundVolume(), 0); // not saved
+
+    for (const junk of ["", " ", "loud", "NaN"]) {
+      store.set(SOUND_VOLUME_KEY, junk);
+      strictEqual(readSoundVolume(), 0.8, JSON.stringify(junk));
+    }
+    store.set(SOUND_VOLUME_KEY, "7");
+    strictEqual(readSoundVolume(), 1); // an edited value is held in range
+
+    writeLastClip("win", "/sounds/win-2-booyah.mp3");
+    strictEqual(readLastClip("win"), "/sounds/win-2-booyah.mp3");
+    strictEqual(readLastClip("loss"), null); // one last pick per category
+  } finally {
+    delete g.localStorage;
+  }
+});
+check("sounds: the setting -- blocked storage falls back, and never throws", () => {
+  const g = globalThis as unknown as { localStorage?: unknown };
+  const blocked = () => {
+    throw new Error("blocked");
+  };
+  g.localStorage = { getItem: blocked, setItem: blocked, removeItem: blocked };
+  try {
+    strictEqual(readSoundOn(), true);
+    strictEqual(readSoundVolume(), 0.8);
+    strictEqual(readLastClip("win"), null);
+    writeSoundOn(false);
+    writeSoundVolume(0.1);
+    writeLastClip("win", "x");
+  } finally {
+    delete g.localStorage;
+  }
+});
+
+check("sounds: mute, then unmute, then a sound plays again -- nothing stays stopped", () => {
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  // The player's question, asked as it is at a sound's start: the setting is
+  // read then, not remembered.
+  let contextState: string | null = "running";
+  const plays = () => cueAllowed({ hidden: false, on: readSoundOn(), contextState, loaded: true });
+  try {
+    strictEqual(plays(), true);
+    writeSoundOn(false);
+    strictEqual(plays(), false);
+    writeSoundOn(true);
+    strictEqual(plays(), true);
+    for (let i = 0; i < 5; i++) {
+      writeSoundOn(false);
+      strictEqual(plays(), false);
+      writeSoundOn(true);
+      strictEqual(plays(), true);
+    }
+
+    // A sound that fired while muted is only dropped: a later key plays.
+    const handled = new Set<string>();
+    const fire = (key: string) => {
+      if (handled.has(key)) return false;
+      handled.add(key);
+      return plays();
+    };
+    writeSoundOn(false);
+    strictEqual(fire(playKey("g", 1, 1)), false);
+    writeSoundOn(true);
+    strictEqual(fire(playKey("g", 1, 2)), true);
+
+    // The browser suspended the context while muted: the unmute's tap resumes it.
+    writeSoundOn(false);
+    contextState = "suspended";
+    writeSoundOn(true);
+    strictEqual(plays(), false);
+    strictEqual(audioRepair(contextState), "resume");
+    contextState = "running";
+    strictEqual(plays(), true);
+
+    // It closed: replaced, never stuck until a reload.
+    contextState = "closed";
+    strictEqual(plays(), false);
+    strictEqual(audioRepair(contextState), "make");
+    contextState = "running";
+    strictEqual(plays(), true);
+  } finally {
+    delete g.localStorage;
+  }
+});
+check("sounds: a table opened with sound off has no context yet, and switching on makes one", () => {
+  strictEqual(audioRepair(null), "make");
+  strictEqual(audioRepair("interrupted"), "resume"); // iOS, after a call
+  strictEqual(audioRepair("running"), null);
+});
+check("sounds: what stops a sound, each on its own", () => {
+  const ok = { hidden: false, on: true, contextState: "running", loaded: true };
+  strictEqual(cueAllowed(ok), true);
+  strictEqual(cueAllowed({ ...ok, hidden: true }), false);
+  strictEqual(cueAllowed({ ...ok, on: false }), false);
+  strictEqual(cueAllowed({ ...ok, loaded: false }), false);
+  for (const state of [null, "suspended", "interrupted", "closed"]) {
+    strictEqual(cueAllowed({ ...ok, contextState: state }), false);
+  }
+});
+check("sounds: the speaker sits above the deal overlay, so it works mid-deal", () => {
+  const css = readFileSync("app/globals.css", "utf8");
+  const zOf = (rule: string) => Number(css.match(new RegExp(`\\.${rule} \\{[^}]*z-index: (\\d+)`))?.[1]);
+  strictEqual(zOf("sound-toggle") > zOf("deal-overlay"), true);
+  strictEqual(readFileSync("components/table/SoundToggle.tsx", "utf8").includes('className="sound-toggle '), true);
+});
+
+check("sounds: a 19 hand has its own clip list, and SHOT! stays in the skunk tier", () => {
+  deepStrictEqual(CORE_SOUNDS.zeroHand, ["/sounds/skunk-3-shot.mp3"]);
+  strictEqual(CORE_SOUNDS.skunk.includes("/sounds/skunk-3-shot.mp3"), true);
+  deepStrictEqual(soundFor("zeroHand", null, plainTable), CORE_SOUNDS.zeroHand);
+  strictEqual(clipsFor(null).filter((c) => c === "/sounds/skunk-3-shot.mp3").length, 1); // loaded once
+  strictEqual(pickClip(CORE_SOUNDS.zeroHand, CORE_SOUNDS.zeroHand[0]), CORE_SOUNDS.zeroHand[0]); // one clip still plays
+  const later = ["/sounds/19-a.mp3", "/sounds/19-b.mp3"]; // a longer list never repeats
+  let last: string | null = null;
+  for (let i = 0; i < 100; i++) {
+    const next = pickClip(later, last);
+    strictEqual(next !== last, true);
+    last = next;
+  }
+});
+check("sounds: a 19 hand -- only a counted hand or crib of 0, never pegging", () => {
+  strictEqual(isZeroCount(0, "hand: nothing"), true);
+  strictEqual(isZeroCount(0, "crib: nothing"), true);
+  strictEqual(isZeroCount(4, "hand: 15s 4"), false);
+  strictEqual(isZeroCount(0, "fifteen"), false);
+  strictEqual(isZeroCount(0, "go"), false);
+  strictEqual(isZeroCount(0, "his heels"), false);
+  strictEqual(isZeroCount(null, "hand: nothing"), false); // a New Game's reset
+  strictEqual(isZeroCount(0, null), false);
+});
+check("sounds: a 19 hand -- silent wherever the count is hidden", () => {
+  strictEqual(zeroSoundAllowed({ isMuggins: false, hideCounts: false }), true);
+  strictEqual(zeroSoundAllowed({ isMuggins: true, hideCounts: false }), false);
+  strictEqual(zeroSoundAllowed({ isMuggins: false, hideCounts: true }), false);
+  strictEqual(zeroSoundAllowed({ isMuggins: true, hideCounts: true }), false);
+});
+check("sounds: a 19 hand -- one key per game, hand, player, and hand or crib", () => {
+  const key = zeroKey("g", 3, "a", "hand: nothing");
+  strictEqual(zeroKey("g", 3, "a", "hand: nothing"), key); // a repeated row
+  strictEqual(zeroKey("g", 4, "a", "hand: nothing") === key, false);
+  strictEqual(zeroKey("h", 3, "a", "hand: nothing") === key, false);
+  strictEqual(zeroKey("g", 3, "b", "hand: nothing") === key, false);
+  strictEqual(zeroKey("g", 3, "a", "crib: nothing") === key, false); // the dealer's hand, then their crib
+  strictEqual(new Set([key, playKey("g", 3, 1), discardKey("g", 3, "a"), endKey("g")]).size, 4);
+});
+check("sounds: a 19 hand -- what a catch-up read finds is heard, not played", () => {
+  const rows = [
+    { user_id: "a", last_points: 0, last_reason: "hand: nothing" },
+    { user_id: "b", last_points: 0, last_reason: "crib: nothing" },
+    { user_id: "c", last_points: 2, last_reason: "pair" },
+    { user_id: "d", last_points: null, last_reason: null },
+  ];
+  deepStrictEqual(heardZeroKeys("g", 3, rows), [zeroKey("g", 3, "a", "hand: nothing"), zeroKey("g", 3, "b", "crib: nothing")]);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
