@@ -163,7 +163,9 @@ function LeaderboardCard({
     >
       {/* The rank, right-aligned, then the avatar 4px along: its wings use the
           rank column's spare room and stop short of the number. Then the
-          name on a line of its own, the whole width, and the record under it. */}
+          name on a line of its own, the whole width, and the record under it,
+          at the right. My own row says so by its brass highlight alone (and
+          aria-current for screen readers). */}
       <div className="flex min-w-0 items-center">
         <span className="w-6 shrink-0 text-right font-display text-lg font-bold tabular-nums text-[var(--brass-light)]">
           {rank}
@@ -176,7 +178,7 @@ function LeaderboardCard({
         </span>
         <span className="ml-2 flex min-w-0 flex-1 flex-col">
           <span className="block truncate font-bold leading-tight">{row.nickname}</span>
-          <span className="flex items-baseline gap-1.5 leading-tight">
+          <span className="flex items-baseline justify-end gap-1.5 leading-tight">
             <span
               className="font-display text-lg font-bold tabular-nums"
               aria-label={`${row.wins} ${row.wins === 1 ? "win" : "wins"}, ${row.losses} ${row.losses === 1 ? "loss" : "losses"}`}
@@ -186,7 +188,6 @@ function LeaderboardCard({
             <span aria-hidden="true" className="text-[11px] uppercase tracking-[0.18em] text-[var(--brass-light)]">
               W - L
             </span>
-            {isMe && <span className="ml-auto text-xs text-[var(--brass-light)]">You</span>}
           </span>
         </span>
       </div>

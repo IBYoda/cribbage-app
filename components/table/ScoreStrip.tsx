@@ -5,7 +5,6 @@ import { DealerChip } from "@/components/table/OpponentBand";
 import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
 import { isCountReason } from "@/components/table/countingView";
 import { placementFor, plateSpot, wingsOverhang, type WingsTier } from "@/lib/wings";
-import { stackedPlateRow } from "@/lib/phase3";
 
 export type PlateMember = {
   userId: string;
@@ -46,51 +45,42 @@ export type ScorePlate = {
 // Screen readers hear why a plate has no score.
 const HIDDEN_SCORE = <span className="sr-only">Score not shown: rejoined after this game</span>;
 
-// The scores, directly under my hand: a row of equal-width plates, 48px tall.
-// Fits 2, 3 or 4 plates at 375px wide (4 plates are ~90px each: the name
-// truncates, the score doesn't).
+// The scores, directly under my hand: a row of equal-width plates, 48px tall,
+// the same on every table (2, 3 and 4 players, Teams too). Each plate: the
+// avatar on the left and, beside it, the name on its own line (11px, the
+// smallest that stays readable, left-aligned) over the score (right-aligned, as
+// big as the plate's width and height allow: .plate-stack in app/globals.css).
+// Fits 4 plates at 375px wide (~87px each: the name truncates, the score
+// doesn't).
 export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
-  // THREE OR FOUR PLATES (3 players, 4-player Solo): too narrow for name and
-  // score side by side, so the avatar on the left and, beside it, the name
-  // (11px, the smallest that stays readable) over the score -- the score as big
-  // as the plate's width and height allow (.plate-stack in app/globals.css).
-  // Same height. 2 plates (and Teams) are drawn exactly as before.
-  if (stackedPlateRow(plates.length)) return <StackedScoreStrip plates={plates} />;
   return (
     <div className="relative">
       <div className="flex h-12 gap-1">
         {plates.map((plate) => (
           <div
             key={plate.key}
-            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-2 ${
+            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-1.5 ${
               plate.isMine
                 ? "border-zinc-500 bg-zinc-100 dark:border-zinc-400 dark:bg-zinc-800"
                 : "border-zinc-300 dark:border-zinc-700"
             }`}
           >
             <PlateAvatars plate={plate} plateCount={plates.length} />
-            <div className="flex min-w-0 flex-1 flex-col leading-tight">
-              <span className="flex min-w-0 items-center gap-1 text-xs font-medium">
-                {plate.members.length > 1 ? (
-                  // A team plate (4-player Teams): my name first, with "(you)"
-                  // right after it, then my partner's.
-                  <span className="truncate" title={plate.members.map((m) => m.name).join(" & ")}>
-                    {plate.members[0].name}
-                    {plate.isMine && <span className="text-zinc-500"> (you)</span>}
-                    {plate.members.slice(1).map((m) => ` & ${m.name}`).join("")}
-                  </span>
-                ) : (
-                  <span className="truncate" title={plate.members.map((m) => m.name).join(" & ")}>
-                    {plate.members.map((m) => m.name).join(" & ")}
-                    {plate.isMine && <span className="text-zinc-500"> (you)</span>}
-                  </span>
-                )}
+            <div className="plate-stack flex min-w-0 flex-1 flex-col justify-center">
+              <span className="flex min-w-0 items-center gap-1 text-[11px] font-medium leading-tight">
+                {/* My name first (buildPlates puts me first on my plate), with
+                    "(you)" right after it, then a Teams partner's. */}
+                <span className="truncate" title={plate.members.map((m) => m.name).join(" & ")}>
+                  {plate.members[0]?.name}
+                  {plate.isMine && <span className="text-zinc-500"> (you)</span>}
+                  {plate.members.slice(1).map((m) => ` & ${m.name}`).join("")}
+                </span>
                 {plate.hasDealer && <DealerChip />}
               </span>
+              <span className="plate-stack__score self-end font-bold tabular-nums">
+                {plate.scoreHidden ? HIDDEN_SCORE : plate.score}
+              </span>
             </div>
-            <span className="shrink-0 text-xl font-bold tabular-nums">
-              {plate.scoreHidden ? HIDDEN_SCORE : plate.score}
-            </span>
           </div>
         ))}
       </div>
@@ -124,43 +114,6 @@ function PlateAvatars({ plate, plateCount }: { plate: ScorePlate; plateCount: nu
           lift={pair && anyWinged}
         />
       ))}
-    </div>
-  );
-}
-
-// The four-plate row: one player a plate (see ScoreStrip).
-function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
-  return (
-    <div className="relative">
-      <div className="flex h-12 gap-1">
-        {plates.map((plate) => {
-          const name = plate.members.map((m) => m.name).join(" & ");
-          return (
-            <div
-              key={plate.key}
-              className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-1.5 ${
-                plate.isMine
-                  ? "border-zinc-500 bg-zinc-100 dark:border-zinc-400 dark:bg-zinc-800"
-                  : "border-zinc-300 dark:border-zinc-700"
-              }`}
-            >
-              <PlateAvatars plate={plate} plateCount={plates.length} />
-              <div className="plate-stack flex min-w-0 flex-1 flex-col justify-center">
-                <span className="flex min-w-0 items-center gap-1 text-[11px] font-medium leading-tight">
-                  <span className="truncate" title={name}>
-                    {name}
-                    {plate.isMine && <span className="text-zinc-500"> (you)</span>}
-                  </span>
-                  {plate.hasDealer && <DealerChip />}
-                </span>
-                <span className="plate-stack__score font-bold tabular-nums">
-                  {plate.scoreHidden ? HIDDEN_SCORE : plate.score}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
