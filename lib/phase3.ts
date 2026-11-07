@@ -1,4 +1,5 @@
 import type { ScorePlate } from "@/components/table/ScoreStrip";
+import type { WingsTier } from "@/lib/wings";
 
 // PHASE 3 (3 and 4 players): the pure rules the table screen builds on, in
 // one place, with no React and no database -- scripts/test-phase3.ts checks
@@ -116,9 +117,19 @@ export type PlateRow = {
   last_points: number | null;
   last_reason: string | null;
   last_awarded_at: string | null;
+  // Their wings. Only a player with a tier carries the key.
+  wings?: WingsTier | null;
 };
 
-const timeOf = (t: string | null) => (t ? Date.parse(t) || 0 : 0);
+// A plate member. Its wings key is left out for a player with none.
+const plateMember = (m: PlateRow) => ({
+  userId: m.user_id,
+  name: m.name,
+  avatarUrl: m.avatar_url,
+  ...(m.wings ? { wings: m.wings } : {}),
+});
+
+const timeOf =(t: string | null) => (t ? Date.parse(t) || 0 : 0);
 
 export function buildPlates(input: {
   rows: PlateRow[]; // in plate order: me first
@@ -131,7 +142,7 @@ export function buildPlates(input: {
   if (!teamsPlayers) {
     return rows.map((m) => ({
       key: m.user_id,
-      members: [{ userId: m.user_id, name: m.name, avatarUrl: m.avatar_url }],
+      members: [plateMember(m)],
       score: m.score,
       isMine: m.user_id === myId,
       hasDealer: dealerId === m.user_id,
@@ -152,7 +163,7 @@ export function buildPlates(input: {
     return [
       {
         key: `team-${team}`,
-        members: teamRows.map((m) => ({ userId: m.user_id, name: m.name, avatarUrl: m.avatar_url })),
+        members: teamRows.map(plateMember),
         score: Math.max(...teamRows.map((m) => m.score)),
         isMine: teamRows.some((m) => m.user_id === myId),
         hasDealer: teamRows.some((m) => m.user_id === dealerId),

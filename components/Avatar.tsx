@@ -9,6 +9,14 @@
 // tone: "felt" for the card-room pages (a brass ring, a green fill), "table"
 // for the game table (a ring in the page background, a grey fill) -- the two
 // looks the app already had.
+//
+// WINGS: tier and wings (the mode, from placementFor in lib/wings.ts) draw a
+// player's wings or badge round it (components/Wings.tsx). No tier: exactly the
+// avatar, with nothing round it. The Profile's own image uses WingsFrame directly,
+// and the Beer Board its SVG (BeerBoard.tsx).
+
+import { WingsFrame } from "@/components/Wings";
+import type { WingsMode, WingsTier } from "@/lib/wings";
 
 export type AvatarSize = "xs" | "sm" | "md" | "lg";
 
@@ -18,6 +26,8 @@ const SIZES: Record<AvatarSize, string> = {
   md: "h-12 w-12 text-lg", // 48px: the main menu and Open Tables
   lg: "h-14 w-14 text-xl", // 56px: the opponent chooser
 };
+
+const DIAMETERS: Record<AvatarSize, number> = { xs: 24, sm: 28, md: 48, lg: 56 };
 
 const TONES = {
   felt: { ring: "border-2 border-[var(--brass)]", fill: "bg-[#2a6a44]" },
@@ -34,22 +44,25 @@ export function Avatar({
   size = "md",
   tone = "felt",
   ringColor,
+  tier,
+  wings = "none",
 }: {
   name: string;
   url: string | null | undefined;
   size?: AvatarSize;
   tone?: keyof typeof TONES;
   ringColor?: string;
+  tier?: WingsTier | null;
+  wings?: WingsMode;
 }) {
   const box = `${SIZES[size]} shrink-0 rounded-full ${TONES[tone].ring}`;
   const ring = ringColor
     ? { borderColor: ringColor, boxShadow: "0 0 0 1px rgba(255, 255, 255, 0.7)" }
     : undefined;
-  if (url) {
+  const avatar = url ? (
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt="" className={`${box} object-cover`} style={ring} data-lane-ring={ringColor ? "" : undefined} />;
-  }
-  return (
+    <img src={url} alt="" className={`${box} object-cover`} style={ring} data-lane-ring={ringColor ? "" : undefined} />
+  ) : (
     <span
       aria-hidden="true"
       className={`${box} ${TONES[tone].fill} flex items-center justify-center font-bold`}
@@ -58,5 +71,10 @@ export function Avatar({
     >
       {name.slice(0, 1).toUpperCase()}
     </span>
+  );
+  return (
+    <WingsFrame tier={tier} mode={wings} size={DIAMETERS[size]}>
+      {avatar}
+    </WingsFrame>
   );
 }

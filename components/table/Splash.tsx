@@ -9,8 +9,10 @@ import {
   zeroSplashPhrases,
 } from "@/lib/splashPhrases";
 import { godLossAlt, type GodLoss } from "@/lib/resultScores";
+import { WingsFrame } from "@/components/Wings";
+import { WINGS_SPLASH, wingsSplashSub, type WingsTier } from "@/lib/wings";
 
-// THE TABLE SPLASHES: a big centred overlay for three live moments.
+// THE TABLE SPLASHES: a big centred overlay for four live moments.
 //   * "19" -- a counted hand or crib scored 0: a random phrase from
 //     lib/splashPhrases.ts, and "<name> scored 0" under it (3s). At a table
 //     against God the human's 0 uses God's phrases, and God's own 0 shows
@@ -19,6 +21,13 @@ import { godLossAlt, type GodLoss } from "@/lib/resultScores";
 //     a stinkhole (godLossSplash, lib/resultScores.ts): the same image (3s).
 //   * GO -- a player said Go (or was auto-gone): a giant "GO" (1.2s). The
 //     small amber Go label by the seat stays as it is.
+//   * Wings -- a win against God made the count exactly 10, 25, 50 or 100: the
+//     full wings round the player's avatar, their tier and count (3s). If God
+//     was skunked by the same win, that image follows when this one is over.
+//
+// LATER, A SOUND: the wings moment has none yet. It goes where showWings is
+// called on the table page: a new SoundEvent in lib/sounds.ts, claimed with the
+// same wings:<gameId> key, played after the win clip.
 //
 // LIVE ONLY. The table page calls showZero / showGo / showGodLoss from its
 // realtime handlers, never from a read: postgres_changes streams only what
@@ -39,7 +48,11 @@ import { godLossAlt, type GodLoss } from "@/lib/resultScores";
 export type SplashEvent =
   | { id: number; kind: "zero"; phrase: string; sub: string }
   | { id: number; kind: "image"; alt: string }
+  | ({ id: number; kind: "wings" } & WingsMoment)
   | { id: number; kind: "go" };
+
+// A player reaching a tier, as the splash shows it.
+export type WingsMoment = { tier: WingsTier; count: number; name: string; url: string | null };
 
 // noZero: the count numbers are hidden on this screen (Hide counts, or a
 // Muggins table) -- the "19" splash says 0, so it never fires, and neither
@@ -108,13 +121,31 @@ export function useSplash({ noZero, computerLevel }: { noZero: boolean; computer
     [claim]
   );
 
+  // A milestone, and God's splash after it if the same win earned one: one at a
+  // time, so the second waits out the first.
+  const followRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (followRef.current !== null) window.clearTimeout(followRef.current);
+    },
+    []
+  );
+  const showWings = useCallback(
+    (key: string, moment: WingsMoment, then?: { key: string; loss: GodLoss }) => {
+      if (!claim(key)) return;
+      setSplash({ id: ++nextIdRef.current, kind: "wings", ...moment });
+      if (then) followRef.current = window.setTimeout(() => showGodLoss(then.key, then.loss), splashDurationMs("wings"));
+    },
+    [claim, showGodLoss]
+  );
+
   // Clears the splash once its animation is over -- unless a newer one has
   // already replaced it.
   const dismiss = useCallback((id: number) => {
     setSplash((current) => (current && current.id === id ? null : current));
   }, []);
 
-  return { splash, showZero, showGo, showGodLoss, dismiss };
+  return { splash, showZero, showGo, showGodLoss, showWings, dismiss };
 }
 
 export function Splash({ splash, onDone }: { splash: SplashEvent | null; onDone: (id: number) => void }) {
@@ -135,6 +166,30 @@ export function Splash({ splash, onDone }: { splash: SplashEvent | null; onDone:
         >
           GO
         </span>
+      ) : splash.kind === "wings" ? (
+        <div
+          key={splash.id}
+          onAnimationEnd={(event) => {
+            // Flames animate in here: only the wrapper's own end counts.
+            if (event.target === event.currentTarget) onDone(splash.id);
+          }}
+          className="splash-wings flex max-w-full select-none flex-col items-center gap-4 text-center"
+        >
+          <WingsFrame tier={splash.tier} mode="full" size={120}>
+            {splash.url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={splash.url} alt="" className="splash-wings__avatar" />
+            ) : (
+              <span className="splash-wings__avatar splash-wings__letter" aria-hidden="true">
+                {splash.name.slice(0, 1).toUpperCase()}
+              </span>
+            )}
+          </WingsFrame>
+          <span className="text-[clamp(2rem,9vw,4.5rem)] font-black uppercase leading-[0.95] text-white">
+            {WINGS_SPLASH[splash.tier]}
+          </span>
+          <span className="text-base font-semibold text-white sm:text-lg">{wingsSplashSub(splash.count)}</span>
+        </div>
       ) : splash.kind === "image" ? (
         // The wrapper animates and clears the splash. The image itself must
         // never animate: its animation events would bubble up here and clear

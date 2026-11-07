@@ -14,6 +14,7 @@
 // avatars.
 
 import type { ScorePlate } from "@/components/table/ScoreStrip";
+import type { WingsTier } from "@/lib/wings";
 import { GAME_HOLE, clampScore } from "@/lib/boardLayout";
 import { laneRingColor, type BoardSkin } from "@/lib/boardSkins";
 import type { CustomBoard } from "@/lib/customBoards";
@@ -167,6 +168,8 @@ export type BeerSceneAvatar = {
   ringColor: string;
   // This is me: the gold ring.
   mine: boolean;
+  // Their wings. Only a player with a tier carries the key.
+  wings?: WingsTier;
 };
 export type BeerScene = { layout: BeerLayout; mugs: BeerSceneMug[]; scores: BeerSceneScore[]; avatars: BeerSceneAvatar[] };
 
@@ -208,6 +211,7 @@ function beerAvatar(
     url: member.avatarUrl,
     ringColor: plate.laneColor ?? NO_LANE_RING,
     mine,
+    ...(member.wings ? { wings: member.wings } : {}),
   };
 }
 

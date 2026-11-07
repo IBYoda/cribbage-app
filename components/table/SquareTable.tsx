@@ -4,6 +4,7 @@ import { MugginsTag } from "@/components/MugginsTag";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
 import type { ScreenSide } from "@/lib/tableLayout";
+import { placementFor, type WingsTier } from "@/lib/wings";
 
 // THE SQUARE TABLE (PRD item 31, docs/mockups/table-redesign/) -- the default
 // layout of 2-, 3- and 4-player tables, self-scoring (Muggins) ones
@@ -93,7 +94,7 @@ export function SquareTableHeader({
   // laneColor: their board lane's colour, as their avatar's ring. status (4
   // players): their word in the discard and counting ("Picking…",
   // "Discarded", "Counting"), shown when they haven't said Go.
-  opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string; status?: ReactNode } | null;
+  opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string; status?: ReactNode; wings?: WingsTier | null } | null;
   right: ReactNode;
 }) {
   const header = (
@@ -113,7 +114,15 @@ export function SquareTableHeader({
         {opponent && (
           <>
             <span className="shrink-0" data-sq="opp-avatar">
-              <Avatar name={opponent.name} url={opponent.avatarUrl} size="sm" tone="table" ringColor={opponent.laneColor} />
+              <Avatar
+                name={opponent.name}
+                url={opponent.avatarUrl}
+                size="sm"
+                tone="table"
+                ringColor={opponent.laneColor}
+                tier={opponent.wings}
+                wings={placementFor("header-seat")}
+              />
             </span>
             {/* Up to 9rem, then less as the header runs out of room; the
                 full name in the tooltip (and in the text itself, which the

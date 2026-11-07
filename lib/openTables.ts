@@ -22,7 +22,8 @@ export type MyTable = {
 export type JoinableTable = {
   code: string;
   isMuggins: boolean; // likewise
-  hostName: string; // the first seated player
+  hostId?: string; // the first seated player
+  hostName: string;
   hostAvatar: string | null;
   createdAt: string;
   seated: number; // how many are seated now
@@ -151,6 +152,7 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
     return {
       code: t.code,
       isMuggins: t.isMuggins,
+      hostId: t.host,
       hostName: host?.nickname?.trim() || "A player",
       hostAvatar: host?.avatar_url ?? null,
       createdAt: t.createdAt,

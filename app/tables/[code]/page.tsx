@@ -24,6 +24,9 @@ import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { SoundToggle } from "@/components/table/SoundToggle";
 import { useTableSounds } from "@/components/table/useTableSounds";
+import { preloadFullWings, useWingsOn } from "@/components/Wings";
+import { getGodWins, type GodWins } from "@/lib/godWins";
+import { initSeenTier, readSeenTier, shouldCelebrate, writeSeenTier, type WingsTier } from "@/lib/wings";
 import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, discardKeys, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
@@ -600,7 +603,7 @@ export default function TablePage() {
   const errorRef = useRef<string | null>(null);
   // THE SPLASHES ("19" and GO), fired from the realtime handlers only -- see
   // components/table/Splash.tsx.
-  const { splash, showZero, showGo, showGodLoss, dismiss: dismissSplash } = useSplash({
+  const { splash, showZero, showGo, showGodLoss, showWings, dismiss: dismissSplash } = useSplash({
     noZero: hideCountNumbers,
     computerLevel: table?.computer_level,
   });
@@ -636,6 +639,45 @@ export default function TablePage() {
     board: customBoard,
   });
   const soundCatchUpRef = useRef(true);
+  // WINGS: each player's tier, read with the roster (lib/godWins.ts) so they
+  // arrive with the avatar. wingsOn: this device's "Show wings".
+  const wingsOn = useWingsOn();
+  const [wingsById, setWingsById] = useState<Record<string, WingsTier | null>>({});
+  const applyWings = useCallback((found: Map<string, GodWins>) => {
+    setWingsById((current) =>
+      [...found].every(([id, won]) => (current[id] ?? null) === won.tier)
+        ? current
+        : { ...current, ...Object.fromEntries([...found].map(([id, won]) => [id, won.tier])) }
+    );
+  }, []);
+  // THE WINGS MILESTONE: is this won game my moment? Claimed first, so the live
+  // win and the catch-up on its result can't both ask. Past the cache, because
+  // this win has just changed the count. The seen tier is written before the
+  // moment shows, so a refresh can't show it again; a device that has never
+  // read my count just notes it, silently (shouldCelebrate, lib/wings.ts).
+  const wingsClaimRef = useRef(new Set<string>());
+  const wingsMoment = useCallback(
+    async (gameId: string) => {
+      const myId = myHandRef.current?.userId;
+      if (!myId || wingsClaimRef.current.has(gameId)) return null;
+      wingsClaimRef.current.add(gameId);
+      const found = await getGodWins([myId], { fresh: true });
+      const mine = found.get(myId);
+      if (!mine) return null;
+      applyWings(found);
+      if (!shouldCelebrate(mine.count, readSeenTier(myId)) || !mine.tier) {
+        initSeenTier(myId, mine.count);
+        return null;
+      }
+      writeSeenTier(myId, mine.tier);
+      const [{ data: profile }] = await Promise.all([
+        supabase.from("profiles").select("nickname, avatar_url").eq("id", myId).maybeSingle(),
+        preloadFullWings(mine.tier),
+      ]);
+      return { tier: mine.tier, count: mine.count, name: profile?.nickname ?? "", url: profile?.avatar_url ?? null };
+    },
+    [applyWings]
+  );
   // The second half of a catch-up: a zero count is on the roster, not the games
   // row, so the game read leaves its hand here for the roster read that
   // follows (heardZeroKeys).
@@ -892,6 +934,12 @@ export default function TablePage() {
         tableSound.heard(heardZeroKeys(zeroCatchUpRef.current.id, zeroCatchUpRef.current.hand_no, rows));
         zeroCatchUpRef.current = null;
       }
+      // Their wings, read here so they land with the roster. Cached, so the
+      // safety poll adds no read. My first read sets the milestone's start.
+      const wings = await getGodWins(rows.map((m) => m.user_id));
+      const myId = myHandRef.current?.userId;
+      const mine = myId ? wings.get(myId) : undefined;
+      if (myId && mine) initSeenTier(myId, mine.count);
       const shownById = new Map(membersRef.current.map((m) => [m.user_id, m]));
       // Players already shown with their name, in the same seat, keep it
       // (profile edits arrive through realtime); a new seat, a rejoin or a
@@ -935,13 +983,14 @@ export default function TablePage() {
         console.warn("[table-sync] poll repaired:", { members: diff });
       }
       membersAppliedSeqRef.current = ticket;
+      applyWings(wings);
       setMembers((current) =>
         raced ? [...current, ...fresh.filter((m) => !current.some((c) => c.user_id === m.user_id))] : fresh
       );
       setMembersLoaded(true);
       return null;
     }
-  }, [tableSound]);
+  }, [tableSound, applyWings]);
 
   // Fetches the current active game + full roster for a table. Used both for
   // the initial load and to "catch up" after the realtime connection drops
@@ -1540,11 +1589,11 @@ export default function TablePage() {
             ];
           });
 
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("nickname, avatar_url")
-            .eq("id", newRow.user_id)
-            .maybeSingle();
+          const [{ data: profile }, wings] = await Promise.all([
+            supabase.from("profiles").select("nickname, avatar_url").eq("id", newRow.user_id).maybeSingle(),
+            getGodWins([newRow.user_id]),
+          ]);
+          applyWings(wings);
 
           if (profile) {
             setMembers((current) =>
@@ -1860,17 +1909,22 @@ export default function TablePage() {
             const wonGameId = updatedGame.id;
             const level = table.computer_level;
             const humanId = table.created_by;
+            // THE WINGS MILESTONE comes first if this win earned it, and God's
+            // splash follows: so both answers are in before either shows.
+            const moment = wingsMoment(wonGameId);
             supabase
               .from("table_members")
               .select("user_id, score")
               .eq("table_id", table.id)
-              .then(({ data, error }) => {
-                if (error || data?.length !== 2) return;
-                const human = data.find((m) => m.user_id === humanId);
-                const god = data.find((m) => m.user_id !== humanId);
-                if (human?.score !== GAME_HOLE) return;
-                const loss = godLossSplash(level, true, god?.score);
-                if (loss) showGodLoss(`godloss:${wonGameId}`, loss);
+              .then(async ({ data, error }) => {
+                const human = data?.find((m) => m.user_id === humanId);
+                const god = data?.find((m) => m.user_id !== humanId);
+                const final = !error && data?.length === 2 && human?.score === GAME_HOLE;
+                const loss = final ? godLossSplash(level, true, god?.score) : null;
+                const lossKey = `godloss:${wonGameId}`;
+                const wings = await moment;
+                if (wings) showWings(`wings:${wonGameId}`, wings, loss ? { key: lossKey, loss } : undefined);
+                else if (loss) showGodLoss(lossKey, loss);
               });
           }
           // THE GAME'S END, IN SOUND: the same live moment, for the same
@@ -2105,7 +2159,7 @@ export default function TablePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo, showGodLoss, tableSound]);
+  }, [table, refreshTableState, fetchMyHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo, showGodLoss, showWings, wingsMoment, applyWings, tableSound]);
 
   // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
   // comes back online -- the same full refresh as on subscribe. A hidden tab
@@ -2223,6 +2277,17 @@ export default function TablePage() {
   // back, so the human sees pegging end first.
   const myUserId = session?.user.id ?? null;
   const computerTable = Boolean(table?.computer_level) && table?.created_by === myUserId;
+  // THE WINGS MILESTONE, catching up: a won God game's result is on screen and
+  // this player may have missed the moment (offline at the win, or a refresh).
+  // The live win has already claimed its game, so this asks only when it didn't.
+  const myGodWinId =
+    finishedGame && finishedGame.winner_id === myUserId && isGodLevel(table?.computer_level) ? finishedGame.id : null;
+  useEffect(() => {
+    if (!myGodWinId) return;
+    wingsMoment(myGodWinId).then((moment) => {
+      if (moment) showWings(`wings:${myGodWinId}`, moment);
+    });
+  }, [myGodWinId, wingsMoment, showWings]);
   useComputerDriver({
     enabled: computerTable && !error && leaveStatus !== "leaving",
     tableId: table?.id ?? null,
@@ -2335,6 +2400,8 @@ export default function TablePage() {
     );
   }
 
+  // A player's wings as this screen shows them: none with the setting off.
+  const tierOf = (userId: string) => (wingsOn ? (wingsById[userId] ?? null) : null);
   const me = members.find((m) => m.user_id === session.user.id);
   // Seating: everyone who isn't you sits across the top. Rendered from an
   // array rather than a single hardcoded opponent so 3- and 4-player tables
@@ -2822,6 +2889,7 @@ export default function TablePage() {
       userId: opponent.user_id,
       name: displayName(opponent),
       avatarUrl: opponent.avatar_url,
+      wings: tierOf(opponent.user_id),
       isDealer: handDealerId === opponent.user_id,
       // In counting the hand is in the middle: the strip keeps no cards.
       // The final board: the hand face-up when readable, else face-down.
@@ -2867,6 +2935,7 @@ export default function TablePage() {
         user_id: m.user_id,
         name: displayName(m),
         avatar_url: m.avatar_url,
+        wings: tierOf(m.user_id),
         score: m.score,
         last_points: m.last_points,
         last_reason: m.last_reason,
@@ -3637,6 +3706,7 @@ export default function TablePage() {
           header: {
             name: top.name,
             avatarUrl: top.avatarUrl,
+            wings: top.wings,
             saidGo,
             laneColor: top.laneColor,
             status: <SeatStatus kind={statusKind} />,
@@ -3711,6 +3781,7 @@ export default function TablePage() {
           userId: id,
           name: displayName(m),
           avatarUrl: m.avatar_url,
+          wings: tierOf(id),
           laneColor: ringScores.laneColorOf(id),
           status: <SeatStatus kind={goBy.has(id) ? "go" : statusKindOf(id)} />,
           // Counting: their four, face-down until their count comes up (and
@@ -3873,6 +3944,7 @@ export default function TablePage() {
           userId: m.user_id,
           name: displayName(m),
           avatarUrl: m.avatar_url,
+          wings: tierOf(m.user_id),
           laneColor: ringScores.laneColorOf(m.user_id),
           // The top seat (4 players) spreads its shown hand as the across
           // seat does on the 2-player final board.
@@ -4058,6 +4130,7 @@ export default function TablePage() {
               opponent={{
                 name: oppName,
                 avatarUrl: squareOpponent.avatar_url,
+                wings: tierOf(squareOpponent.user_id),
                 saidGo: goBy.has(squareOpponent.user_id),
                 laneColor: squareScores.laneColorOf(squareOpponent.user_id),
               }}
@@ -4232,6 +4305,7 @@ export default function TablePage() {
               opponent={{
                 name: oppName,
                 avatarUrl: squareOpponent.avatar_url,
+                wings: tierOf(squareOpponent.user_id),
                 saidGo: false,
                 laneColor: squareScores.laneColorOf(squareOpponent.user_id),
               }}

@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
+import { placementFor, type WingsTier } from "@/lib/wings";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
 import { ringLayout, seatGeometry, type SeatPosition } from "@/lib/tableLayout";
@@ -48,6 +49,7 @@ export type RingSeat = {
   name: string;
   avatarUrl: string | null;
   laneColor?: string;
+  wings?: WingsTier | null;
   // A short word by the name: "Go", "Discarded", "Counting".
   status?: ReactNode;
   // The hand. Face-down backs (count), or -- counting and the final board --
@@ -183,7 +185,15 @@ function SideSeatColumn({ seat }: { seat: RingSeat }) {
 function SeatTag({ seat }: { seat: RingSeat }) {
   return (
     <div className={`sq-ring__tag sq-ring__tag--${seat.position}`} data-sq={`tag-${seat.position}`}>
-      <Avatar name={seat.name} url={seat.avatarUrl} size="xs" tone="table" ringColor={seat.laneColor} />
+      <Avatar
+        name={seat.name}
+        url={seat.avatarUrl}
+        size="xs"
+        tone="table"
+        ringColor={seat.laneColor}
+        tier={seat.wings}
+        wings={placementFor("side-tag")}
+      />
       <span className="min-w-0 truncate text-sm font-medium" title={seat.name}>
         {seat.name}
       </span>

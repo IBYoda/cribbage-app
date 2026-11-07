@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ScorePlate } from "@/components/table/ScoreStrip";
+import { useAmbientMotion } from "@/components/table/useAmbientMotion";
+import { emberUrl, wingsBox, wingsUrl, type WingsTier } from "@/lib/wings";
 import { boardGeometry } from "@/lib/boardLayout";
 import {
   BEER_DRAIN_MS,
@@ -107,6 +109,10 @@ export function BeerBoard({ plates, fixedSize }: { plates: ScorePlate[]; fixedSi
         {scene.mugs.map((mug) => (
           <BeerMug key={mug.id} mug={mug} uid={uid} />
         ))}
+        {/* Under the numbers as well as the avatars: wings never cover a score. */}
+        {scene.avatars.map(
+          (avatar) => avatar.wings && <MugWings key={avatar.key} tier={avatar.wings} x={avatar.x} y={avatar.y} r={avatar.r} />
+        )}
         {scene.scores.map((score) => (
           <ScoreText key={score.key} score={score} filter={`url(#${uid}-score)`} />
         ))}
@@ -273,6 +279,23 @@ function ScoreText({ score, filter }: { score: BeerSceneScore; filter: string })
     >
       {score.text}
     </text>
+  );
+}
+
+// Mini wings behind a mug's avatar: SVG images, because iOS Safari can't draw
+// HTML inside an SVG. The same art and place as WingsFrame (wingsBox,
+// lib/wings.ts), with black's slow pulse. Nothing at all without a tier.
+function MugWings({ tier, x, y, r }: { tier: WingsTier; x: number; y: number; r: number }) {
+  const motion = useAmbientMotion();
+  const box = wingsBox(2 * r, "mini");
+  const place = { x: x - r + box.left, y: y - r + box.top, width: box.width, height: box.height };
+  return (
+    <>
+      <image href={wingsUrl(tier, "mini")} {...place} />
+      {tier === "black" && (
+        <image href={emberUrl("mini")} {...place} className={`wings-ember ${motion ? "wings-ember--on" : ""}`} />
+      )}
+    </>
   );
 }
 

@@ -8,6 +8,9 @@ import { HomeMenu, type OpenTablesState } from "@/components/brand/HomeMenu";
 import { LandingView } from "@/components/brand/LandingView";
 import { NicknameStep } from "@/components/brand/NicknameStep";
 import { needsNickname } from "@/lib/nickname";
+import { useWingsOn } from "@/components/Wings";
+import { getGodWins } from "@/lib/godWins";
+import { initSeenTier, type WingsTier } from "@/lib/wings";
 
 // How often Open Tables re-reads while the tab is visible (was 15 s; 45 s
 // to cut request volume -- the Refresh button reads at once).
@@ -78,6 +81,23 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
 
   const openTables = useOpenTables(userId);
 
+  // My wings for the greeting. A player's first read here is what sets the
+  // milestone's starting point (initSeenTier).
+  const wingsOn = useWingsOn();
+  const [myWings, setMyWings] = useState<WingsTier | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getGodWins([userId]).then((found) => {
+      const mine = found.get(userId);
+      if (cancelled || !mine) return;
+      initSeenTier(userId, mine.count);
+      setMyWings(mine.tier);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
   // Until the profile read answers: the card room as it was while the
   // session was read (LandingView, buttons held back), so a player without
   // a nickname never sees the menu flash past on the way to the step.
@@ -100,6 +120,7 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
     <HomeMenu
       name={nickname ?? emailName}
       avatarUrl={avatarUrl}
+      wings={wingsOn ? myWings : null}
       isAdmin={isAdmin}
       openTables={openTables}
       onLogout={onLogout}
@@ -114,6 +135,8 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
 function useOpenTables(userId: string): OpenTablesState {
   const [mine, setMine] = useState<MyTable[] | null>(null);
   const [joinable, setJoinable] = useState<JoinableTable[] | null>(null);
+  const [hostWings, setHostWings] = useState<Record<string, WingsTier | null>>({});
+  const wingsOn = useWingsOn();
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [readAt, setReadAt] = useState(0);
@@ -128,13 +151,17 @@ function useOpenTables(userId: string): OpenTablesState {
     inFlight.current = true;
     Promise.all([
       loadMyTables(userId).catch(() => null),
-      loadJoinableTables(userId).catch(() => null),
-    ]).then(([nextMine, nextJoinable]) => {
+      // With their wings, so each row arrives whole.
+      loadJoinableTables(userId)
+        .catch(() => null)
+        .then(async (rows) => ({ rows, wins: await getGodWins((rows ?? []).flatMap((t) => t.hostId ?? [])) })),
+    ]).then(([nextMine, { rows: nextJoinable, wins }]) => {
       inFlight.current = false;
       if (!mounted.current) return;
       setRefreshing(false);
       if (nextMine) setMine(nextMine);
       if (nextJoinable) {
+        setHostWings(Object.fromEntries([...wins].map(([id, won]) => [id, won.tier])));
         setJoinable(nextJoinable);
         setReadAt(Date.now());
       }
@@ -179,5 +206,5 @@ function useOpenTables(userId: string): OpenTablesState {
     };
   }, [refresh]);
 
-  return { mine, joinable, failed, refreshing, readAt, onRefresh };
+  return { mine, joinable, failed, refreshing, readAt, onRefresh, hostWings: wingsOn ? hostWings : {} };
 }

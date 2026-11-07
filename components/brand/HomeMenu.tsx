@@ -8,6 +8,7 @@ import { JoinTableForm } from "@/components/brand/JoinTableForm";
 import type { JoinableTable, MyTable } from "@/lib/openTables";
 import { MugginsTag } from "@/components/MugginsTag";
 import { Avatar } from "@/components/Avatar";
+import { placementFor, type WingsTier } from "@/lib/wings";
 
 // What the Open Tables list shows (read by HomeView, lib/openTables.ts).
 export type OpenTablesState = {
@@ -17,6 +18,7 @@ export type OpenTablesState = {
   refreshing: boolean; // a Refresh the player asked for is running
   readAt: number; // when the joinable rows were read, for "5 min ago"
   onRefresh: () => void;
+  hostWings?: Record<string, WingsTier | null>; // the joinable rows' hosts
 };
 
 // THE MAIN MENU (signed in), as plain props -- HomeView reads the data. A
@@ -28,12 +30,14 @@ export type OpenTablesState = {
 export function HomeMenu({
   name,
   avatarUrl,
+  wings,
   isAdmin,
   openTables,
   onLogout,
 }: {
   name: string;
   avatarUrl: string | null;
+  wings?: WingsTier | null;
   isAdmin: boolean;
   openTables: OpenTablesState;
   onLogout: () => void;
@@ -63,7 +67,7 @@ export function HomeMenu({
         </header>
 
         <section className="flex items-center gap-3">
-          <Avatar name={name} url={avatarUrl} />
+          <Avatar name={name} url={avatarUrl} tier={wings} wings={placementFor("home-greeting")} />
           <div className="min-w-0 flex-1">
             <p className="text-sm">
               <TimeOfDayGreeting />,
@@ -78,7 +82,7 @@ export function HomeMenu({
           </Link>
         </section>
 
-        <OpenTables state={openTables} viewerName={name} viewerAvatar={avatarUrl} />
+        <OpenTables state={openTables} viewerName={name} viewerAvatar={avatarUrl} viewerWings={wings} />
 
         {/* The actions, pushed to the bottom: in the lower third of a 375x667
             screen. */}
@@ -124,10 +128,12 @@ function OpenTables({
   state,
   viewerName,
   viewerAvatar,
+  viewerWings,
 }: {
   state: OpenTablesState;
   viewerName: string;
   viewerAvatar: string | null;
+  viewerWings?: WingsTier | null;
 }) {
   const { mine, joinable, failed, refreshing, readAt, onRefresh } = state;
   const myRows = mine ?? [];
@@ -184,7 +190,7 @@ function OpenTables({
             {myRows.map((t) => (
               <li key={`mine-${t.code}`} className="table-row table-row--mine">
                 <span className="flex min-w-0 items-center gap-3">
-                  <Avatar name={viewerName} url={viewerAvatar} />
+                  <Avatar name={viewerName} url={viewerAvatar} tier={viewerWings} wings={placementFor("open-tables")} />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-bold">Your table</span>
                     <span className="text-sm leading-snug">
@@ -201,7 +207,12 @@ function OpenTables({
             {joinRows.map((t) => (
               <li key={`join-${t.code}`} className="table-row">
                 <span className="flex min-w-0 items-center gap-3">
-                  <Avatar name={t.hostName} url={t.hostAvatar} />
+                  <Avatar
+                    name={t.hostName}
+                    url={t.hostAvatar}
+                    tier={t.hostId ? state.hostWings?.[t.hostId] : null}
+                    wings={placementFor("open-tables")}
+                  />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-bold">{t.hostName}</span>
                     <span className="text-sm">
