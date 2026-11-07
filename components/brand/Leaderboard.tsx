@@ -2,7 +2,7 @@
 
 import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
 import { useWingsOn } from "@/components/Wings";
-import { placementFor, tierForCount, wingsOverhang } from "@/lib/wings";
+import { displayTier, placementFor, tierForCount, wingsOverhang } from "@/lib/wings";
 
 // THE LEADERBOARD's content (app/leaderboard): plain props, so the page
 // reads the data and a dev preview can draw the same thing with made-up
@@ -65,7 +65,10 @@ export function LeaderboardPanel({
   const wingsOn = useWingsOn();
   const leaderboardWings = placementFor("leaderboard");
   const anyWinged =
-    wingsOn && ranked(rows).slice(0, SHOWN_LIMIT).some(({ row }) => tierForCount(row.beat_god) !== null);
+    wingsOn &&
+    ranked(rows)
+      .slice(0, SHOWN_LIMIT)
+      .some(({ row }) => displayTier(row.user_id, tierForCount(row.beat_god)) !== null);
   const reserve =
     wingsLayout === "reserve" && anyWinged ? wingsOverhang(AVATAR_DIAMETERS.md, leaderboardWings.scale) : 0;
 
@@ -149,7 +152,7 @@ function LeaderboardCard({
   reserve: number;
 }) {
   // The row already has the count: no read of its own.
-  const tier = wingsOn ? tierForCount(row.beat_god) : null;
+  const tier = wingsOn ? displayTier(row.user_id, tierForCount(row.beat_god)) : null;
   const chips = [
     { label: "Skunks", value: row.skunks },
     { label: "Double Skunks", value: row.double_skunks },

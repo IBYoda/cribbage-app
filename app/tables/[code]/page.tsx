@@ -26,7 +26,7 @@ import { SoundToggle } from "@/components/table/SoundToggle";
 import { useTableSounds } from "@/components/table/useTableSounds";
 import { preloadFullWings, useWingsOn } from "@/components/Wings";
 import { getGodWins, type GodWins } from "@/lib/godWins";
-import { initSeenTier, readSeenTier, shouldCelebrate, writeSeenTier, type WingsTier } from "@/lib/wings";
+import { displayTier, initSeenTier, isCreator, readSeenTier, shouldCelebrate, writeSeenTier, type GodWinsTier } from "@/lib/wings";
 import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, discardKeys, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
@@ -642,7 +642,7 @@ export default function TablePage() {
   // WINGS: each player's tier, read with the roster (lib/godWins.ts) so they
   // arrive with the avatar. wingsOn: this device's "Show wings".
   const wingsOn = useWingsOn();
-  const [wingsById, setWingsById] = useState<Record<string, WingsTier | null>>({});
+  const [wingsById, setWingsById] = useState<Record<string, GodWinsTier | null>>({});
   const applyWings = useCallback((found: Map<string, GodWins>) => {
     setWingsById((current) =>
       [...found].every(([id, won]) => (current[id] ?? null) === won.tier)
@@ -670,6 +670,9 @@ export default function TablePage() {
         return null;
       }
       writeSeenTier(myId, mine.tier);
+      // The creator's wings always show as the creator's: no splash for a God
+      // tier they never see. The seen tier above still moves, as for anyone.
+      if (isCreator(myId)) return null;
       const [{ data: profile }] = await Promise.all([
         supabase.from("profiles").select("nickname, avatar_url").eq("id", myId).maybeSingle(),
         preloadFullWings(mine.tier),
@@ -2401,7 +2404,8 @@ export default function TablePage() {
   }
 
   // A player's wings as this screen shows them: none with the setting off.
-  const tierOf = (userId: string) => (wingsOn ? (wingsById[userId] ?? null) : null);
+  // The creator's come first and need no read (displayTier, lib/wings.ts).
+  const tierOf = (userId: string) => (wingsOn ? displayTier(userId, wingsById[userId]) : null);
   const me = members.find((m) => m.user_id === session.user.id);
   // Seating: everyone who isn't you sits across the top. Rendered from an
   // array rather than a single hardcoded opponent so 3- and 4-player tables

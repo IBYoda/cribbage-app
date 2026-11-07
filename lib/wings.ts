@@ -5,20 +5,40 @@
 // (docs/sql/god-wins.sql, read through lib/godWins.ts), and is stored nowhere;
 // the drawing is components/Wings.tsx.
 
-export type WingsTier = "white" | "silver" | "gold" | "black";
+// The tiers a God-win count earns, and what a player's wings show: one of
+// those, or the creator's own (displayTier).
+export type GodWinsTier = "white" | "silver" | "gold" | "black";
+export type WingsTier = GodWinsTier | "creator";
 
-export const WINGS_TIERS: readonly { tier: WingsTier; wins: number; name: string }[] = [
+export const WINGS_TIERS: readonly { tier: GodWinsTier; wins: number; name: string }[] = [
   { tier: "white", wins: 10, name: "white" },
   { tier: "silver", wins: 25, name: "silver" },
   { tier: "gold", wins: 50, name: "gold" },
   { tier: "black", wins: 100, name: "black" },
 ];
 
-export function tierForCount(count: number): WingsTier | null {
-  let tier: WingsTier | null = null;
+export function tierForCount(count: number): GodWinsTier | null {
+  let tier: GodWinsTier | null = null;
   for (const t of WINGS_TIERS) if (count >= t.wins) tier = t.tier;
   return tier;
 }
+
+// THE CREATOR'S WINGS: metallic green with orange flames, for the account(s)
+// here and nobody else. They win over any God-win tier and need no database,
+// so they show even when get_god_wins can't be read. Only the display changes:
+// the creator's real God wins still drive the milestone and the seen tier.
+export const CREATOR_USER_IDS: readonly string[] = ["f190b27b-a23b-4464-8445-023edbee28b2"];
+
+export const isCreator = (userId: string | null | undefined) => !!userId && CREATOR_USER_IDS.includes(userId);
+
+// What a player's wings show: the creator's, else what their count earned.
+// Every place that turns a player into wings asks this first.
+export function displayTier(userId: string | null | undefined, earned: GodWinsTier | null | undefined): WingsTier | null {
+  return isCreator(userId) ? "creator" : (earned ?? null);
+}
+
+// Tiers drawn burning: the black tier's flames, embers and glow.
+export const hasFlames = (tier: WingsTier) => tier === "black" || tier === "creator";
 
 // The next tier up, or null at the top.
 export function nextTier(count: number) {
@@ -26,7 +46,7 @@ export function nextTier(count: number) {
 }
 
 // Where a player stands, for the Profile.
-export function progress(count: number): { count: number; tier: WingsTier | null; text: string } {
+export function progress(count: number): { count: number; tier: GodWinsTier | null; text: string } {
   const next = nextTier(count);
   return {
     count,
@@ -40,7 +60,7 @@ export function isMilestone(count: number): boolean {
   return WINGS_TIERS.some((t) => t.wins === count);
 }
 
-const tierRank = (tier: WingsTier | "none" | null) => WINGS_TIERS.findIndex((t) => t.tier === tier);
+const tierRank = (tier: GodWinsTier | "none" | null) => WINGS_TIERS.findIndex((t) => t.tier === tier);
 
 // WHICH SPOT GETS WHAT: the one table. full: 2.62 x the avatar, animated.
 // mini: `scale` x the avatar, behind it, with a margin of (scale - 1) / 2 x on
@@ -120,13 +140,24 @@ export function wingsBox(d: number, scale: number) {
   return { width, height, left: (d - width) / 2, top: d / 2 - height * WINGS_CENTRE_Y };
 }
 
-export const wingsUrl = (tier: WingsTier, size: "full" | "mini") => `/wings/${size}-${tier}.webp`;
+// Each tier's art, by file name. The creator's is green; its flames and glow
+// are the black tier's own (emberUrl, FLAMES_URL).
+const WINGS_ART: Record<WingsTier, string> = {
+  white: "white",
+  silver: "silver",
+  gold: "gold",
+  black: "black",
+  creator: "green",
+};
+export const ALL_WINGS_TIERS: readonly WingsTier[] = [...WINGS_TIERS.map((t) => t.tier), "creator"];
+
+export const wingsUrl = (tier: WingsTier, size: "full" | "mini") => `/wings/${size}-${WINGS_ART[tier]}.webp`;
 export const emberUrl = (size: "full" | "mini") => `/wings/${size}-black-ember.webp`;
 export const FLAMES_URL = "/wings/black-flames.json";
 
 export function wingsAssets(): string[] {
   return [
-    ...WINGS_TIERS.flatMap((t) => [wingsUrl(t.tier, "full"), wingsUrl(t.tier, "mini")]),
+    ...ALL_WINGS_TIERS.flatMap((tier) => [wingsUrl(tier, "full"), wingsUrl(tier, "mini")]),
     emberUrl("full"),
     emberUrl("mini"),
     FLAMES_URL,
@@ -139,12 +170,15 @@ export const WINGS_BADGE: Record<WingsTier, string> = {
   silver: "#cfe0ff",
   gold: "#ffd24a",
   black: "#ff5a14",
+  creator: "#2ee07a",
 };
 export const WINGS_HALO: Record<WingsTier, string> = {
   white: "rgb(255 246 216 / 0.3)",
   silver: "rgb(207 224 255 / 0.3)",
   gold: "rgb(255 210 74 / 0.3)",
   black: "rgb(255 90 20 / 0.38)",
+  // The creator's flames are orange too: the same warm glow as black's.
+  creator: "rgb(255 90 20 / 0.38)",
 };
 
 // THE FLAMES ON A PHONE: a touch screen gets every back flame, half the front
@@ -165,8 +199,8 @@ export function flamesForPointer<F, E>(data: { front: F[]; embers: E[] }, coarse
 // The badge's size: 11px on the 28px avatar, in step with the rest.
 export const badgeSize = (d: number) => Math.round((d * 11) / 28);
 
-// THE MILESTONE SPLASH's words.
-export const WINGS_SPLASH: Record<WingsTier, string> = {
+// THE MILESTONE SPLASH's words. The creator has no splash.
+export const WINGS_SPLASH: Record<GodWinsTier, string> = {
   white: "YOU'VE GOT WINGS, MY CHILD",
   silver: "SILVER WINGS, MY CHILD",
   gold: "GOLD WINGS, MY CHILD",
@@ -187,16 +221,16 @@ export function idBatches(ids: readonly string[], size = 50): string[][] {
 // write is guarded: storage can be missing or blocked.
 export const wingsSeenKey = (userId: string) => `nobs:wings-seen:${userId}`;
 
-export function readSeenTier(userId: string): WingsTier | "none" | null {
+export function readSeenTier(userId: string): GodWinsTier | "none" | null {
   try {
     const stored = localStorage.getItem(wingsSeenKey(userId));
-    return stored === "none" || WINGS_TIERS.some((t) => t.tier === stored) ? (stored as WingsTier | "none") : null;
+    return stored === "none" || WINGS_TIERS.some((t) => t.tier === stored) ? (stored as GodWinsTier | "none") : null;
   } catch {
     return null;
   }
 }
 
-export function writeSeenTier(userId: string, tier: WingsTier | null) {
+export function writeSeenTier(userId: string, tier: GodWinsTier | null) {
   try {
     localStorage.setItem(wingsSeenKey(userId), tier ?? "none");
   } catch {
@@ -212,7 +246,7 @@ export function initSeenTier(userId: string, count: number) {
 
 // Whether this count is the moment. Never read (or no storage): no celebration,
 // because the moment can't be kept to once.
-export function shouldCelebrate(count: number, seen: WingsTier | "none" | null): boolean {
+export function shouldCelebrate(count: number, seen: GodWinsTier | "none" | null): boolean {
   return seen !== null && isMilestone(count) && tierRank(tierForCount(count)) > tierRank(seen);
 }
 

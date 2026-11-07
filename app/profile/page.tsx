@@ -11,7 +11,7 @@ import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
 import { saveNickname } from "@/lib/profileNickname";
 import { WingsFrame } from "@/components/Wings";
 import { getGodWins } from "@/lib/godWins";
-import { initSeenTier, placementFor, progress } from "@/lib/wings";
+import { displayTier, initSeenTier, isCreator, placementFor, progress, wingsSplashSub } from "@/lib/wings";
 
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
 
@@ -174,6 +174,14 @@ export default function ProfilePage() {
   const displayedAvatar = avatarPreview ?? avatarUrl;
   // Mine, always: "Show wings" is about the table and the lists.
   const standing = godWins === null ? null : progress(godWins);
+  // The creator's wings need no read; the line then says so, with any God wins.
+  const creator = session ? isCreator(session.user.id) : false;
+  const tier = displayTier(session?.user.id, standing?.tier);
+  const standingText = creator
+    ? godWins
+      ? `Creator · ${wingsSplashSub(godWins)}`
+      : "Creator"
+    : (standing?.text ?? null);
 
   return (
     <CardRoomFrame
@@ -187,8 +195,8 @@ export default function ProfilePage() {
       }
     >
       <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
-        <div className={`flex flex-col items-center gap-3 ${standing?.tier ? "profile-winged" : ""}`}>
-          <WingsFrame tier={standing?.tier} placement={placementFor("profile")} size={96}>
+        <div className={`flex flex-col items-center gap-3 ${tier ? "profile-winged" : ""}`}>
+          <WingsFrame tier={tier} placement={placementFor("profile")} size={96}>
             {displayedAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -202,7 +210,7 @@ export default function ProfilePage() {
               </div>
             )}
           </WingsFrame>
-          {standing && <p className="text-sm">{standing.text}</p>}
+          {standingText && <p className="text-sm">{standingText}</p>}
           <input
             type="file"
             accept="image/png,image/jpeg,image/webp"

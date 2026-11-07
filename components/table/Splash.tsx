@@ -10,7 +10,7 @@ import {
 } from "@/lib/splashPhrases";
 import { godLossAlt, type GodLoss } from "@/lib/resultScores";
 import { WingsFrame } from "@/components/Wings";
-import { WINGS_SPLASH, placementFor, wingsSplashSub, type WingsTier } from "@/lib/wings";
+import { WINGS_SPLASH, placementFor, wingsSplashSub, type GodWinsTier } from "@/lib/wings";
 
 // THE TABLE SPLASHES: a big centred overlay for four live moments.
 //   * "19" -- a counted hand or crib scored 0: a random phrase from
@@ -52,7 +52,7 @@ export type SplashEvent =
   | { id: number; kind: "go" };
 
 // A player reaching a tier, as the splash shows it.
-export type WingsMoment = { tier: WingsTier; count: number; name: string; url: string | null };
+export type WingsMoment = { tier: GodWinsTier; count: number; name: string; url: string | null };
 
 // noZero: the count numbers are hidden on this screen (Hide counts, or a
 // Muggins table) -- the "19" splash says 0, so it never fires, and neither

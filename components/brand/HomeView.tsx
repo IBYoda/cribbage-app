@@ -10,7 +10,7 @@ import { NicknameStep } from "@/components/brand/NicknameStep";
 import { needsNickname } from "@/lib/nickname";
 import { useWingsOn } from "@/components/Wings";
 import { getGodWins } from "@/lib/godWins";
-import { initSeenTier, type WingsTier } from "@/lib/wings";
+import { displayTier, initSeenTier, type GodWinsTier, type WingsTier } from "@/lib/wings";
 
 // How often Open Tables re-reads while the tab is visible (was 15 s; 45 s
 // to cut request volume -- the Refresh button reads at once).
@@ -84,7 +84,7 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
   // My wings for the greeting. A player's first read here is what sets the
   // milestone's starting point (initSeenTier).
   const wingsOn = useWingsOn();
-  const [myWings, setMyWings] = useState<WingsTier | null>(null);
+  const [myWings, setMyWings] = useState<GodWinsTier | null>(null);
   useEffect(() => {
     let cancelled = false;
     getGodWins([userId]).then((found) => {
@@ -120,7 +120,7 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
     <HomeMenu
       name={nickname ?? emailName}
       avatarUrl={avatarUrl}
-      wings={wingsOn ? myWings : null}
+      wings={wingsOn ? displayTier(userId, myWings) : null}
       isAdmin={isAdmin}
       openTables={openTables}
       onLogout={onLogout}
@@ -161,7 +161,12 @@ function useOpenTables(userId: string): OpenTablesState {
       setRefreshing(false);
       if (nextMine) setMine(nextMine);
       if (nextJoinable) {
-        setHostWings(Object.fromEntries([...wins].map(([id, won]) => [id, won.tier])));
+        // Every host, so the creator's show even when the count can't be read.
+        setHostWings(
+          Object.fromEntries(
+            nextJoinable.flatMap((t) => (t.hostId ? [[t.hostId, displayTier(t.hostId, wins.get(t.hostId)?.tier)]] : []))
+          )
+        );
         setJoinable(nextJoinable);
         setReadAt(Date.now());
       }

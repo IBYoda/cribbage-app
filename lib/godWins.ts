@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import { idBatches, tierForCount, type WingsTier } from "@/lib/wings";
+import { idBatches, tierForCount, type GodWinsTier } from "@/lib/wings";
 
 // HOW MANY TIMES EACH PLAYER HAS BEATEN GOD, from get_god_wins()
 // (docs/sql/god-wins.sql), for their wings. Read with the member and profile
@@ -12,7 +12,9 @@ import { idBatches, tierForCount, type WingsTier } from "@/lib/wings";
 // holds off for a while: the browser logs every failed request, and the safety
 // poll would otherwise repeat it.
 
-export type GodWins = { count: number; tier: WingsTier | null };
+// tier: what the count earned. The creator's wings aren't here: they need no
+// read (displayTier, lib/wings.ts).
+export type GodWins = { count: number; tier: GodWinsTier | null };
 
 const RETRY_AFTER_MS = 5 * 60 * 1000;
 

@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ScorePlate } from "@/components/table/ScoreStrip";
 import { useAmbientMotion } from "@/components/table/useAmbientMotion";
-import { emberUrl, placementFor, wingsBox, wingsUrl, type WingsTier } from "@/lib/wings";
+import { emberUrl, hasFlames, placementFor, wingsBox, wingsUrl, type WingsTier } from "@/lib/wings";
 import { boardGeometry } from "@/lib/boardLayout";
 import {
   BEER_DRAIN_MS,
@@ -284,7 +284,7 @@ function ScoreText({ score, filter }: { score: BeerSceneScore; filter: string })
 
 // Mini wings behind a mug's avatar: SVG images, because iOS Safari can't draw
 // HTML inside an SVG. The same art and place as WingsFrame (wingsBox,
-// lib/wings.ts), with black's slow pulse. Nothing at all without a tier.
+// lib/wings.ts), with burning wings' slow pulse. Nothing at all without a tier.
 function MugWings({ tier, x, y, r }: { tier: WingsTier; x: number; y: number; r: number }) {
   const motion = useAmbientMotion();
   const box = wingsBox(2 * r, placementFor("beer").scale);
@@ -292,7 +292,7 @@ function MugWings({ tier, x, y, r }: { tier: WingsTier; x: number; y: number; r:
   return (
     <>
       <image href={wingsUrl(tier, "mini")} {...place} />
-      {tier === "black" && (
+      {hasFlames(tier) && (
         <image href={emberUrl("mini")} {...place} className={`wings-ember ${motion ? "wings-ember--on" : ""}`} />
       )}
     </>
