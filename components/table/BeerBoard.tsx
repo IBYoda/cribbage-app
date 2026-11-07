@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ScorePlate } from "@/components/table/ScoreStrip";
 import { useAmbientMotion } from "@/components/table/useAmbientMotion";
-import { emberUrl, wingsBox, wingsUrl, type WingsTier } from "@/lib/wings";
+import { emberUrl, placementFor, wingsBox, wingsUrl, type WingsTier } from "@/lib/wings";
 import { boardGeometry } from "@/lib/boardLayout";
 import {
   BEER_DRAIN_MS,
@@ -287,7 +287,7 @@ function ScoreText({ score, filter }: { score: BeerSceneScore; filter: string })
 // lib/wings.ts), with black's slow pulse. Nothing at all without a tier.
 function MugWings({ tier, x, y, r }: { tier: WingsTier; x: number; y: number; r: number }) {
   const motion = useAmbientMotion();
-  const box = wingsBox(2 * r, "mini");
+  const box = wingsBox(2 * r, placementFor("beer").scale);
   const place = { x: x - r + box.left, y: y - r + box.top, width: box.width, height: box.height };
   return (
     <>

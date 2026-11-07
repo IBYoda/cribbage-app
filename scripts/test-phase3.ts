@@ -35,6 +35,7 @@ import {
   wingsAssets,
   wingsBox,
   wingsSeenKey,
+  wingsOverhang,
   wingsSplashSub,
   writeSeenTier,
   writeWingsOn,
@@ -124,6 +125,7 @@ import {
   winHeadline,
   seatOrderFrom,
   seatPlaces,
+  stackedPlateRow,
   teamOfPosition,
   type PlateRow,
 } from "../lib/phase3";
@@ -3878,31 +3880,53 @@ check("wings: the setting -- on by default, stored as 1 or 0", () => {
     strictEqual(readWingsOn(), true);
   });
 });
-check("wings: the placement table -- every spot, as decided", () => {
-  deepStrictEqual(WINGS_PLACEMENT, {
+check("wings: the placement table -- every spot and width, as decided", () => {
+  const shown = Object.fromEntries(
+    Object.entries(WINGS_PLACEMENT).map(([spot, p]) => [spot, p.mode === "mini" ? `mini ${p.scale}` : p.mode])
+  );
+  deepStrictEqual(shown, {
     profile: "full",
     milestone: "full",
-    "header-seat": "mini",
-    "side-tag": "mini",
-    "plate-2": "mini",
-    "plate-3": "badge",
+    "header-seat": "mini 2",
+    "side-tag": "mini 2",
+    "plate-2": "mini 2",
+    "plate-3": "mini 1.4",
     "plate-4": "badge",
-    "plate-teams": "badge",
-    beer: "mini",
+    "plate-teams": "mini 2",
+    beer: "mini 2",
     "classic-seat": "badge",
     "classic-side": "badge",
-    "home-greeting": "badge",
-    "open-tables": "badge",
-    leaderboard: "badge",
+    "home-greeting": "mini 2",
+    "open-tables": "mini 2",
+    leaderboard: "mini 2.2",
     "god-chip": "none",
     "opponent-chooser": "none",
   });
-  strictEqual(placementFor("god-chip"), "none");
-  strictEqual(placementFor("profile"), "full");
+  strictEqual(placementFor("god-chip").mode, "none");
+  strictEqual(placementFor("profile").scale, 1 / 0.381);
 });
 check("wings: full wings only on Profile and the milestone; nothing for God or a computer", () => {
-  deepStrictEqual(Object.entries(WINGS_PLACEMENT).filter(([, m]) => m === "full").map(([s]) => s).sort(), ["milestone", "profile"]);
-  deepStrictEqual(Object.entries(WINGS_PLACEMENT).filter(([, m]) => m === "none").map(([s]) => s).sort(), ["god-chip", "opponent-chooser"]);
+  deepStrictEqual(Object.entries(WINGS_PLACEMENT).filter(([, p]) => p.mode === "full").map(([s]) => s).sort(), ["milestone", "profile"]);
+  deepStrictEqual(Object.entries(WINGS_PLACEMENT).filter(([, p]) => p.mode === "none").map(([s]) => s).sort(), ["god-chip", "opponent-chooser"]);
+});
+check("wings: the margin is the overhang, (width - 1) / 2 x the avatar", () => {
+  const near = (a: number, b: number) => strictEqual(Math.abs(a - b) < 1e-9, true, `${a} vs ${b}`);
+  near(wingsOverhang(48, 2.2), 28.8); // the leaderboard: about 29px a side
+  near(wingsOverhang(28, 2), 14); // 2-player and Teams plates
+  near(wingsOverhang(28, 1.4), 5.6); // 3-player plates
+  near(wingsOverhang(48, 2), 24); // the Home greeting and Open Tables
+  near(wingsOverhang(24, 2), 12); // the side seat tags
+  // The art fills exactly the avatar plus its margin on both sides.
+  for (const [d, scale] of [[48, 2.2], [28, 1.4], [28, 2]] as const) {
+    const box = wingsBox(d, scale);
+    near(box.left, -wingsOverhang(d, scale));
+    near(box.width, d + 2 * wingsOverhang(d, scale));
+  }
+});
+check("plates: three or four stack name over score; two, Teams included, don't", () => {
+  strictEqual(stackedPlateRow(2), false);
+  strictEqual(stackedPlateRow(3), true);
+  strictEqual(stackedPlateRow(4), true);
 });
 check("wings: a plate's spot comes from its row", () => {
   strictEqual(plateSpot(2, 1), "plate-2");
@@ -3914,11 +3938,11 @@ check("wings: the art's place -- mini 2.0 x and full 2.62 x, centred, the avatar
   const near = (a: number, b: number) => strictEqual(Math.abs(a - b) < 1e-6, true, `${a} vs ${b}`);
   near(WINGS_ASPECT, 695 / 1075);
   near(WINGS_CENTRE_Y, 475 / 695);
-  const mini = wingsBox(28, "mini");
+  const mini = wingsBox(28, 2);
   near(mini.width, 56);
   near(mini.left, -14); // the 0.5 x overhang the margin makes room for
   near(mini.top + mini.height * (475 / 695), 14); // the avatar's centre
-  const full = wingsBox(96, "full");
+  const full = wingsBox(96, 1 / 0.381);
   near(full.width, 96 / 0.381);
   near(full.left + full.width / 2, 48);
   near(full.top + full.height * (475 / 695), 48);

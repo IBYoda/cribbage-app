@@ -43,45 +43,62 @@ export function isMilestone(count: number): boolean {
 const tierRank = (tier: WingsTier | "none" | null) => WINGS_TIERS.findIndex((t) => t.tier === tier);
 
 // WHICH SPOT GETS WHAT: the one table. full: 2.62 x the avatar, animated.
-// mini: 2.0 x, beside the avatar, with a margin of 0.5 x on each side (only for
-// a player with a tier). badge: a dot on the avatar's corner, no extra room.
-// none: never, for anyone. A new avatar spot is a new line here.
+// mini: `scale` x the avatar, behind it, with a margin of (scale - 1) / 2 x on
+// each side (wingsOverhang), only for a player with a tier. badge: a dot on the
+// avatar's corner, no extra room. none: never, for anyone. A new avatar spot is
+// a new line here.
 export type WingsMode = "full" | "mini" | "badge" | "none";
+export type WingsPlacement = { mode: WingsMode; scale: number };
+
+export const WINGS_MINI_SCALE = 2;
+export const WINGS_FULL_SCALE = 1 / 0.381;
+
+const full: WingsPlacement = { mode: "full", scale: WINGS_FULL_SCALE };
+const mini = (scale: number): WingsPlacement => ({ mode: "mini", scale });
+const badge: WingsPlacement = { mode: "badge", scale: 1 };
+const none: WingsPlacement = { mode: "none", scale: 1 };
 
 export const WINGS_PLACEMENT = {
-  profile: "full",
-  milestone: "full",
+  profile: full,
+  milestone: full,
   // The square table's header, the across player: the name gives way.
-  "header-seat": "mini",
+  "header-seat": mini(2),
   // The 3- and 4-player side seats' tags: the margin keeps them on screen.
-  "side-tag": "mini",
+  "side-tag": mini(2),
   // Two plates are 180px wide at 375: room for the margin.
-  "plate-2": "mini",
-  // Three are 117px and four 87px. Tried as mini: a name kept about 1 letter,
-  // and on four a score of 121 ran 9px past the plate.
-  "plate-3": "badge",
-  "plate-4": "badge",
-  // Two avatars overlap on one plate.
-  "plate-teams": "badge",
+  "plate-2": mini(2),
+  // Three are 117px: narrower wings, so a name keeps some letters.
+  "plate-3": mini(1.4),
+  // Four Solo plates are 87px: tried as mini, a name kept about 1 letter and a
+  // score of 121 ran 9px past the plate.
+  "plate-4": badge,
+  // The two partners' avatars overlap; their wings go behind both, and the
+  // margin goes on the pair's outside edges (ScoreStrip).
+  "plate-teams": mini(2),
   // Drawn in the board's own SVG, over the mug.
-  beer: "mini",
-  // The classic table's narrow seats.
-  "classic-seat": "badge",
-  "classic-side": "badge",
-  // 20px from the screen's edge.
-  "home-greeting": "badge",
-  // Clipped by the list's scroll box.
-  "open-tables": "badge",
-  // 10px from the rank and from the name.
-  leaderboard: "badge",
+  beer: mini(2),
+  // The classic table's seats. Tried as mini: the top band is 32px tall and
+  // hides overflow, so 3px of wing tip went; a side column is about 38px wide,
+  // and 24px wings need 48.
+  "classic-seat": badge,
+  "classic-side": badge,
+  // The margin keeps the greeting's wings inside the page's own padding.
+  "home-greeting": mini(2),
+  // Inside the row's padding, so the scroll box never clips them.
+  "open-tables": mini(2),
+  // The rank and the name move over for them.
+  leaderboard: mini(2.2),
   // God and the computers earn nothing.
-  "god-chip": "none",
-  "opponent-chooser": "none",
-} as const satisfies Record<string, WingsMode>;
+  "god-chip": none,
+  "opponent-chooser": none,
+} as const satisfies Record<string, WingsPlacement>;
 
 export type WingsSpot = keyof typeof WINGS_PLACEMENT;
 
-export const placementFor = (spot: WingsSpot): WingsMode => WINGS_PLACEMENT[spot];
+export const placementFor = (spot: WingsSpot): WingsPlacement => WINGS_PLACEMENT[spot];
+
+// The room a winged avatar takes on each side: what its wings hang out by.
+export const wingsOverhang = (d: number, scale: number) => ((scale - 1) / 2) * d;
 
 // A score plate's spot, from the row it's in.
 export function plateSpot(plateCount: number, memberCount: number): WingsSpot {
@@ -94,13 +111,11 @@ export function plateSpot(plateCount: number, memberCount: number): WingsSpot {
 // 475 down, and 410 across in the full art. The space above is for flames.
 export const WINGS_ASPECT = 695 / 1075;
 export const WINGS_CENTRE_Y = 475 / 695;
-export const WINGS_MINI_SCALE = 2;
-export const WINGS_FULL_SCALE = 1 / 0.381;
 
 // Where the art sits against an avatar of diameter d, from the avatar's own
-// top-left. It's wider than the avatar, and centred on it.
-export function wingsBox(d: number, mode: "full" | "mini") {
-  const width = d * (mode === "full" ? WINGS_FULL_SCALE : WINGS_MINI_SCALE);
+// top-left. It's `scale` x wider than the avatar, and centred on it.
+export function wingsBox(d: number, scale: number) {
+  const width = d * scale;
   const height = width * WINGS_ASPECT;
   return { width, height, left: (d - width) / 2, top: d / 2 - height * WINGS_CENTRE_Y };
 }

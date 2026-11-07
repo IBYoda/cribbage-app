@@ -129,7 +129,11 @@ const plateMember = (m: PlateRow) => ({
   ...(m.wings ? { wings: m.wings } : {}),
 });
 
-const timeOf =(t: string | null) => (t ? Date.parse(t) || 0 : 0);
+// The plate row stacks each plate's name over its score from three plates on
+// (3 players, 4-player Solo); two plates, Teams included, keep them side by side.
+export const stackedPlateRow = (plateCount: number) => plateCount >= 3;
+
+const timeOf = (t: string | null) => (t ? Date.parse(t) || 0 : 0);
 
 export function buildPlates(input: {
   rows: PlateRow[]; // in plate order: me first

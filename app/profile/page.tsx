@@ -188,7 +188,7 @@ export default function ProfilePage() {
     >
       <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className={`flex flex-col items-center gap-3 ${standing?.tier ? "profile-winged" : ""}`}>
-          <WingsFrame tier={standing?.tier} mode={placementFor("profile")} size={96}>
+          <WingsFrame tier={standing?.tier} placement={placementFor("profile")} size={96}>
             {displayedAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
