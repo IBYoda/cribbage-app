@@ -195,11 +195,16 @@ function useRunOnce(
 // places, turning face-up. Landed cards stay until it is all over; then the
 // overlay goes and the real cards show. A tap anywhere skips to the end; a
 // resize cuts it short (the measured places are stale).
+//
+// onStart: called as it starts (never during render); its answer holds every
+// card that long first, so the shuffle plays before the first card leaves and
+// the deal sound runs with the cards. Nothing to play, nothing held.
 export function DealAnimation({
   plan,
   seats,
   dealer,
   faces,
+  onStart,
   onDone,
 }: {
   plan: DealPlan;
@@ -208,6 +213,7 @@ export function DealAnimation({
   dealer: SeatPosition;
   // My dealt cards, in my hand's order: the fan's face-up sides.
   faces: string[];
+  onStart?: () => number;
   // Over: finished, skipped (a tap) or cut short (a resize).
   onDone: () => void;
 }) {
@@ -215,6 +221,7 @@ export function DealAnimation({
   const finishRef = useRunOnce(
     layerRef,
     (layer, table) => {
+      const leadInMs = onStart?.() ?? 0;
       const back = template(layer, "back");
       const query = (selector: string | undefined) => (selector ? table.querySelector(selector) : null);
       const deckSlot = query(DECK_SLOTS[dealer]);
@@ -277,7 +284,7 @@ export function DealAnimation({
                   { transform: from, opacity: 1, offset: 0.02, easing: EASE_OUT },
                   { transform: atRestOn(to), opacity: 1 },
                 ],
-                { delay: step.delayMs, duration: step.durationMs, fill: "both" }
+                { delay: leadInMs + step.delayMs, duration: step.durationMs, fill: "both" }
               )
             );
             continue;
@@ -303,12 +310,12 @@ export function DealAnimation({
                 { transform: inStack, opacity: 1, offset: at(fan.delayMs - step.delayMs), easing: EASE_IN_OUT },
                 { transform: atRestOn(to), opacity: 1, offset: 1 },
               ],
-              { delay: step.delayMs, duration: length, fill: "both" }
+              { delay: leadInMs + step.delayMs, duration: length, fill: "both" }
             )
           );
           animations.push(
             inner.animate([{ transform: "rotateY(0deg)" }, { transform: "rotateY(180deg)" }], {
-              delay: fan.delayMs,
+              delay: leadInMs + fan.delayMs,
               duration: fan.durationMs,
               easing: EASE_IN_OUT,
               fill: "both",
@@ -317,7 +324,7 @@ export function DealAnimation({
         }
       }
       return {
-        lengthMs: plan.totalMs,
+        lengthMs: leadInMs + plan.totalMs,
         cleanup: () => {
           for (const a of animations) a.cancel();
           for (const box of boxes) box.remove();

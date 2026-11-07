@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppearanceProvider } from "@/components/AppearanceProvider";
+import { SoundProvider } from "@/components/SoundProvider";
 import { APPEARANCE_INLINE_SCRIPT } from "@/lib/appearance";
 import { displayFont } from "@/lib/fonts";
 
@@ -55,6 +56,8 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {/* The signed-in player's own card back and table surface. */}
         <AppearanceProvider>{children}</AppearanceProvider>
+        {/* Unlocks audio on the first tap anywhere, for the whole app. */}
+        <SoundProvider />
       </body>
     </html>
   );

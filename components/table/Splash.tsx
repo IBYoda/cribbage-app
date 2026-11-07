@@ -32,7 +32,9 @@ import { godLossAlt, type GodLoss } from "@/lib/resultScores";
 // animation ends at opacity 0 and onAnimationEnd clears it -- the same
 // remount-to-replay idea as the score flash. Never clickable
 // (pointer-events-none, no backdrop), above the table (z-40) and below any
-// modal (the dialogs are native <dialog>s, drawn in the top layer). No sound.
+// modal (the dialogs are native <dialog>s, drawn in the top layer). A splash
+// makes no sound of its own: the table's sounds are lib/sounds.ts, with the
+// same live-only rule and the same claim keys.
 
 export type SplashEvent =
   | { id: number; kind: "zero"; phrase: string; sub: string }

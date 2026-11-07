@@ -12,12 +12,18 @@
 
 import type { BoardGeometry, BoardPattern } from "@/lib/boardLayout";
 import { CLASSIC_WOOD, type BoardSkin } from "@/lib/boardSkins";
+import type { SoundEvent } from "@/lib/sounds";
 
 // The Pattern row's fourth tile. One line to rename it.
 export const CUSTOM_PATTERN_LABEL = "Custom";
 
+// A board's own clips, one per event, under public/: soundFor (lib/sounds.ts)
+// plays them in place of the core sound while the board is on screen. No board
+// has any yet.
+type BoardSounds = { sounds?: Partial<Record<SoundEvent, string>> };
+
 // A board on one of the patterns' tracks.
-export type PatternCustomBoard = {
+export type PatternCustomBoard = BoardSounds & {
   id: string;
   name: string;
   // The track it uses (lib/boardLayout.ts).
@@ -34,7 +40,7 @@ export type PatternCustomBoard = {
 };
 
 // A board that's a picture with its own track: drawn by its own component.
-export type TrackBoard = {
+export type TrackBoard = BoardSounds & {
   id: string;
   name: string;
   layout: "track";
@@ -48,7 +54,7 @@ export type TrackBoard = {
 // A board that draws the scores themselves, in layers (lib/beerBoard.ts), and
 // so takes the score plates' place too: platesReplaced says when. It has no
 // pegs. Its skin is only the lane rings and the self-scoring banner.
-export type MugBoard = {
+export type MugBoard = BoardSounds & {
   id: string;
   name: string;
   layout: "mugs";
