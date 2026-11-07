@@ -125,7 +125,6 @@ import {
   winHeadline,
   seatOrderFrom,
   seatPlaces,
-  stackedPlateRow,
   teamOfPosition,
   type PlateRow,
 } from "../lib/phase3";
@@ -3923,10 +3922,14 @@ check("wings: the margin is the overhang, (width - 1) / 2 x the avatar", () => {
     near(box.width, d + 2 * wingsOverhang(d, scale));
   }
 });
-check("plates: three or four stack name over score; two, Teams included, don't", () => {
-  strictEqual(stackedPlateRow(2), false);
-  strictEqual(stackedPlateRow(3), true);
-  strictEqual(stackedPlateRow(4), true);
+check("plates: one layout for every table -- name over score, score at the right", () => {
+  const strip = readFileSync("components/table/ScoreStrip.tsx", "utf8");
+  // One plate row only: the side-by-side version is gone.
+  strictEqual((strip.match(/className="plate-stack /g) ?? []).length, 1);
+  strictEqual(strip.includes("StackedScoreStrip"), false);
+  strictEqual(strip.includes('plate-stack__score self-end'), true);
+  // The score's size rule: as big as the plate allows, 30px at most, 16px at least.
+  strictEqual(readFileSync("app/globals.css", "utf8").includes("font-size: clamp(16px, 54cqi, 30px);"), true);
 });
 check("wings: a plate's spot comes from its row", () => {
   strictEqual(plateSpot(2, 1), "plate-2");

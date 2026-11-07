@@ -963,11 +963,11 @@ body {
 .sq-plates {
   margin-top: 2px;
 }
-/* FOUR SCORE PLATES (4-player Solo; ScoreStrip's StackedScoreStrip): the
-   name over the score, beside the avatar. The score is as big as the plate
-   allows: three digits ("121", bold, ~1.85em) fill the column's width
-   (54cqi), never taller than what is left of the 48px plate under the 11px
-   name (30px), never under 16px. */
+/* EVERY SCORE PLATE (ScoreStrip, every table size): the name over the score,
+   beside the avatar. The score is as big as the plate allows: three digits
+   ("121", bold, ~1.85em) fill the column's width (54cqi), never taller than
+   what is left of the 48px plate under the 11px name (30px), never under
+   16px. */
 .plate-stack {
   container-type: inline-size;
 }
