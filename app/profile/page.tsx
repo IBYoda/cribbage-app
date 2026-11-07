@@ -9,6 +9,9 @@ import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
 import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
 import { saveNickname } from "@/lib/profileNickname";
+import { WingsFrame } from "@/components/Wings";
+import { getGodWins } from "@/lib/godWins";
+import { initSeenTier, placementFor, progress } from "@/lib/wings";
 
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
 
@@ -21,6 +24,8 @@ export default function ProfilePage() {
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
+  // Times this player has beaten God; null until read, or if it can't be.
+  const [godWins, setGodWins] = useState<number | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -48,6 +53,14 @@ export default function ProfilePage() {
           setAvatarUrl(data.avatar_url);
         }
       });
+
+    const userId = session.user.id;
+    getGodWins([userId]).then((found) => {
+      const mine = found.get(userId);
+      if (!mine) return;
+      initSeenTier(userId, mine.count);
+      setGodWins(mine.count);
+    });
   }, [session]);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -159,6 +172,8 @@ export default function ProfilePage() {
   }
 
   const displayedAvatar = avatarPreview ?? avatarUrl;
+  // Mine, always: "Show wings" is about the table and the lists.
+  const standing = godWins === null ? null : progress(godWins);
 
   return (
     <CardRoomFrame
@@ -172,19 +187,22 @@ export default function ProfilePage() {
       }
     >
       <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
-        <div className="flex flex-col items-center gap-3">
-          {displayedAvatar ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={displayedAvatar}
-              alt="Profile picture"
-              className="h-24 w-24 rounded-full border-2 border-[var(--brass)] object-cover"
-            />
-          ) : (
-            <div className="flex h-24 w-24 items-center justify-center rounded-full border-2 border-[var(--brass)] bg-[#2a6a44] text-center text-xs">
-              No photo
-            </div>
-          )}
+        <div className={`flex flex-col items-center gap-3 ${standing?.tier ? "profile-winged" : ""}`}>
+          <WingsFrame tier={standing?.tier} mode={placementFor("profile")} size={96}>
+            {displayedAvatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={displayedAvatar}
+                alt="Profile picture"
+                className="h-24 w-24 rounded-full border-2 border-[var(--brass)] object-cover"
+              />
+            ) : (
+              <div className="flex h-24 w-24 items-center justify-center rounded-full border-2 border-[var(--brass)] bg-[#2a6a44] text-center text-xs">
+                No photo
+              </div>
+            )}
+          </WingsFrame>
+          {standing && <p className="text-sm">{standing.text}</p>}
           <input
             type="file"
             accept="image/png,image/jpeg,image/webp"

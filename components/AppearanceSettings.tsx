@@ -4,6 +4,7 @@ import { useState } from "react";
 import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { playTestSound, setSoundOn, setSoundVolume, useSoundOn, useSoundVolume } from "@/components/SoundProvider";
+import { setWingsOn, useWingsOn } from "@/components/Wings";
 import { setDealAnimationOn, useDealAnimationOn } from "@/components/table/DealAnimation";
 import {
   CribbageBoard,
@@ -66,6 +67,7 @@ export function AppearanceSettings() {
   const dealAnimationOn = useDealAnimationOn();
   const soundOn = useSoundOn();
   const soundVolume = useSoundVolume();
+  const wingsOn = useWingsOn();
   const boardSkin = useBoardSkin();
   const boardPattern = useBoardPattern();
   const customBoard = useCustomBoard();
@@ -226,12 +228,12 @@ export function AppearanceSettings() {
             className="felt-switch"
           />
           <label htmlFor="deal-animation-switch" className="cursor-pointer text-sm">
-            Card animations
+            Card and wing animations
           </label>
         </div>
         <p id="deal-animation-hint" className="text-sm">
-          Cards fly from the dealer&apos;s deck at the start of each hand, and discards fly to the crib. Saved on
-          this device only, at once.
+          Cards fly from the dealer&apos;s deck at the start of each hand, discards fly to the crib, and black wings
+          burn. Saved on this device only, at once.
         </p>
       </fieldset>
 
@@ -280,6 +282,29 @@ export function AppearanceSettings() {
         </div>
         <p id="sound-hint" className="text-sm">
           Cards, the deal, a 19 hand and the end of a game. Saved on this device only, at once.
+        </p>
+      </fieldset>
+
+      {/* WINGS: this device only, saves at once (lib/wings.ts). Off: nothing at
+          the table or on the lists. Your own Profile wings stay. */}
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-medium">Wings</legend>
+        <div className="flex items-center gap-3">
+          <button
+            id="wings-switch"
+            type="button"
+            role="switch"
+            aria-checked={wingsOn}
+            aria-describedby="wings-hint"
+            onClick={() => setWingsOn(!wingsOn)}
+            className="felt-switch"
+          />
+          <label htmlFor="wings-switch" className="cursor-pointer text-sm">
+            Show wings
+          </label>
+        </div>
+        <p id="wings-hint" className="text-sm">
+          Wings and badges for players who&apos;ve beaten God. Saved on this device only, at once.
         </p>
       </fieldset>
 

@@ -1,6 +1,8 @@
 "use client";
 
 import { Avatar } from "@/components/Avatar";
+import { useWingsOn } from "@/components/Wings";
+import { placementFor, tierForCount } from "@/lib/wings";
 
 // THE LEADERBOARD's content (app/leaderboard): plain props, so the page
 // reads the data and a dev preview can draw the same thing with made-up
@@ -121,6 +123,8 @@ function LeaderboardCard({
   isMe: boolean;
   god: GodAvatar;
 }) {
+  // The row already has the count: no read of its own.
+  const wingsOn = useWingsOn();
   const chips = [
     { label: "Skunks", value: row.skunks },
     { label: "Double Skunks", value: row.double_skunks },
@@ -136,7 +140,12 @@ function LeaderboardCard({
         <span className="w-6 shrink-0 text-center font-display text-lg font-bold tabular-nums text-[var(--brass-light)]">
           {rank}
         </span>
-        <Avatar name={row.nickname} url={row.avatar_url} />
+        <Avatar
+          name={row.nickname}
+          url={row.avatar_url}
+          tier={wingsOn ? tierForCount(row.beat_god) : null}
+          wings={placementFor("leaderboard")}
+        />
         <span className="min-w-0 flex-1">
           <span className="block truncate font-bold">{row.nickname}</span>
           {isMe && <span className="block text-xs text-[var(--brass-light)]">You</span>}

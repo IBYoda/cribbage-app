@@ -24,7 +24,7 @@ export const GOD_ZERO_SPLASH_IMAGE = "/splashes/god-shot.webp";
 export const SPLASH_MS = 3000;
 export const GO_SPLASH_MS = 1200;
 
-export function splashDurationMs(kind: "zero" | "image" | "go"): number {
+export function splashDurationMs(kind: "zero" | "image" | "wings" | "go"): number {
   return kind === "go" ? GO_SPLASH_MS : SPLASH_MS;
 }
 

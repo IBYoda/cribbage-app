@@ -130,6 +130,7 @@ body {
    by Splash on the overlay. */
 .splash-zero,
 .splash-image,
+.splash-wings,
 .splash-go {
   animation-name: splash-pop;
   animation-duration: var(--splash-duration);
@@ -162,9 +163,29 @@ body {
   -webkit-text-stroke: 0.02em #b91c1c;
 }
 
+/* The milestone: the wings above their words. */
+.splash-wings__avatar {
+  display: block;
+  width: 120px;
+  height: 120px;
+  border: 3px solid var(--brass);
+  border-radius: 9999px;
+  object-fit: cover;
+  background: #2a6a44;
+}
+.splash-wings__letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  font-weight: 700;
+  color: #fff;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .splash-zero,
   .splash-image,
+  .splash-wings,
   .splash-go {
     animation-name: splash-fade;
   }
@@ -2219,6 +2240,134 @@ section.felt-panel {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* WINGS (components/Wings.tsx, sizes from lib/wings.ts). The frame is the
+   avatar's own size, so nothing moves; the art hangs off it, behind the
+   avatar, and only mini takes room, its 0.5 x margin. */
+.wings-frame {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.wings-frame--mini {
+  margin-inline: calc(var(--wings-d) * 0.5);
+}
+.wings-art {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+/* The Profile's wings rise about 0.65 x the avatar above it: room, so they stay
+   clear of the panel's heading. Only for a player with a tier. */
+.profile-winged {
+  padding-top: 46px;
+}
+.wings-img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+.wings-avatar {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.wings-badge {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  border: 1.5px solid #1a1410;
+  border-radius: 9999px;
+  pointer-events: none;
+}
+.wings-halo {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: visible;
+  background: radial-gradient(ellipse 48.4% 43.2% at 49.8% 68.35%, var(--wings-halo), transparent);
+}
+.wings-fx {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.wings-ember,
+.wings-glow {
+  mix-blend-mode: screen;
+  opacity: 0.8;
+}
+.wings-ember--on,
+.wings-fx--on .wings-glow {
+  animation: wings-glow 1.7s ease-in-out infinite;
+}
+.wings-flame {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.wings-flame--inner {
+  opacity: 0.7;
+}
+.wings-fx--on .wings-flame {
+  animation: wings-flick 0.8s ease-in-out infinite;
+}
+.wings-spark {
+  opacity: 0;
+  transform-box: fill-box;
+}
+.wings-fx--on .wings-spark {
+  animation: wings-rise 2.4s ease-out infinite;
+}
+@keyframes wings-flick {
+  0%,
+  100% {
+    transform: scale(1, 1) skewX(0);
+  }
+  30% {
+    transform: scale(0.85, 1.3) skewX(6deg);
+  }
+  60% {
+    transform: scale(1.1, 0.85) skewX(-6deg);
+  }
+}
+@keyframes wings-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes wings-rise {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(18px, -120px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wings-ember--on,
+  .wings-fx--on .wings-glow,
+  .wings-fx--on .wings-flame,
+  .wings-fx--on .wings-spark {
+    animation: none;
+  }
+}
+
 /* The Sound section's volume: the switch's brass and groove on a slider. The
    40px tall input is the touch target; the drawn track is 6px. */
 .felt-range {

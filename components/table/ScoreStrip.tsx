@@ -4,11 +4,14 @@ import { useState } from "react";
 import { DealerChip } from "@/components/table/OpponentBand";
 import { Avatar } from "@/components/Avatar";
 import { isCountReason } from "@/components/table/countingView";
+import { placementFor, plateSpot, type WingsTier } from "@/lib/wings";
 
 export type PlateMember = {
   userId: string;
   name: string;
   avatarUrl: string | null;
+  // Their wings, if they have any and this player shows them.
+  wings?: WingsTier | null;
 };
 
 // One score plate. A plate has one OR MORE members: 2- and 3-player games and
@@ -66,7 +69,16 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
           >
             <div className="flex shrink-0 -space-x-2">
               {plate.members.map((m) => (
-                <Avatar key={m.userId} name={m.name} url={m.avatarUrl} size="sm" tone="table" ringColor={plate.laneColor} />
+                <Avatar
+                  key={m.userId}
+                  name={m.name}
+                  url={m.avatarUrl}
+                  size="sm"
+                  tone="table"
+                  ringColor={plate.laneColor}
+                  tier={m.wings}
+                  wings={placementFor(plateSpot(plates.length, plate.members.length))}
+                />
               ))}
             </div>
             <div className="flex min-w-0 flex-1 flex-col leading-tight">
@@ -116,7 +128,16 @@ function StackedScoreStrip({ plates }: { plates: ScorePlate[] }) {
             >
               <div className="flex shrink-0 -space-x-2">
                 {plate.members.map((m) => (
-                  <Avatar key={m.userId} name={m.name} url={m.avatarUrl} size="sm" tone="table" ringColor={plate.laneColor} />
+                  <Avatar
+                    key={m.userId}
+                    name={m.name}
+                    url={m.avatarUrl}
+                    size="sm"
+                    tone="table"
+                    ringColor={plate.laneColor}
+                    tier={m.wings}
+                    wings={placementFor(plateSpot(plates.length, plate.members.length))}
+                  />
                 ))}
               </div>
               <div className="plate-stack flex min-w-0 flex-1 flex-col justify-center">

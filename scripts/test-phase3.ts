@@ -11,6 +11,34 @@
 
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  WINGS_ASPECT,
+  WINGS_BADGE,
+  WINGS_CENTRE_Y,
+  WINGS_PLACEMENT,
+  WINGS_SETTING_KEY,
+  WINGS_SPLASH,
+  WINGS_TIERS,
+  badgeSize,
+  flamesForPointer,
+  idBatches,
+  initSeenTier,
+  isMilestone,
+  nextTier,
+  placementFor,
+  plateSpot,
+  progress,
+  readSeenTier,
+  readWingsOn,
+  shouldCelebrate,
+  tierForCount,
+  wingsAssets,
+  wingsBox,
+  wingsSeenKey,
+  wingsSplashSub,
+  writeSeenTier,
+  writeWingsOn,
+} from "../lib/wings";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
@@ -3719,6 +3747,248 @@ check("sounds: a 19 hand -- what a catch-up read finds is heard, not played", ()
     { user_id: "d", last_points: null, last_reason: null },
   ];
   deepStrictEqual(heardZeroKeys("g", 3, rows), [zeroKey("g", 3, "a", "hand: nothing"), zeroKey("g", 3, "b", "crib: nothing")]);
+});
+
+// WINGS (lib/wings.ts).
+const withStorage = (run: (store: Map<string, string>) => void) => {
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  try {
+    run(store);
+  } finally {
+    delete g.localStorage;
+  }
+};
+
+check("wings: a tier at every threshold, and either side of it", () => {
+  const expected: [number, string | null][] = [
+    [0, null], [9, null],
+    [10, "white"], [24, "white"],
+    [25, "silver"], [49, "silver"],
+    [50, "gold"], [99, "gold"],
+    [100, "black"], [101, "black"],
+  ];
+  for (const [count, tier] of expected) strictEqual(tierForCount(count), tier, String(count));
+});
+check("wings: the next tier, and the Profile's progress line", () => {
+  strictEqual(nextTier(0)?.tier, "white");
+  strictEqual(nextTier(9)?.wins, 10);
+  strictEqual(nextTier(10)?.tier, "silver");
+  strictEqual(nextTier(99)?.tier, "black");
+  strictEqual(nextTier(100), null);
+  strictEqual(nextTier(101), null);
+  strictEqual(progress(7).text, "7 / 10 to white wings");
+  strictEqual(progress(0).text, "0 / 10 to white wings");
+  strictEqual(progress(10).text, "10 / 25 to silver wings");
+  strictEqual(progress(49).text, "49 / 50 to gold wings");
+  strictEqual(progress(99).text, "99 / 100 to black wings");
+  strictEqual(progress(100).text, "Black wings. Legend.");
+  strictEqual(progress(250).text, "Black wings. Legend.");
+  strictEqual(progress(30).tier, "silver");
+});
+check("wings: a milestone is exactly a tier's count", () => {
+  for (const count of [10, 25, 50, 100]) strictEqual(isMilestone(count), true, String(count));
+  for (const count of [0, 9, 11, 24, 26, 49, 51, 99, 101, 200]) strictEqual(isMilestone(count), false, String(count));
+});
+check("wings: the seen tier -- saved per player, safe with nothing stored", () => {
+  strictEqual(readSeenTier("a"), null); // no localStorage at all, as here in Node
+  writeSeenTier("a", "gold"); // and doesn't throw
+  initSeenTier("a", 50);
+  withStorage((store) => {
+    strictEqual(readSeenTier("a"), null);
+    writeSeenTier("a", "gold");
+    strictEqual(store.get(wingsSeenKey("a")), "gold");
+    strictEqual(wingsSeenKey("a"), "nobs:wings-seen:a");
+    strictEqual(readSeenTier("a"), "gold");
+    strictEqual(readSeenTier("b"), null); // per player
+    writeSeenTier("a", null);
+    strictEqual(readSeenTier("a"), "none");
+    store.set(wingsSeenKey("a"), "purple");
+    strictEqual(readSeenTier("a"), null); // an edited value is no value
+  });
+});
+check("wings: launch is silent -- the first read notes the tier, and never celebrates", () => {
+  withStorage(() => {
+    // A player already on 30, seen for the first time.
+    initSeenTier("a", 30);
+    strictEqual(readSeenTier("a"), "silver");
+    strictEqual(shouldCelebrate(30, readSeenTier("a")), false);
+    // Exactly on a milestone at launch: still silent.
+    initSeenTier("b", 50);
+    strictEqual(shouldCelebrate(50, readSeenTier("b")), false);
+    // No wins yet: "none", so the first tier will be the moment.
+    initSeenTier("c", 3);
+    strictEqual(readSeenTier("c"), "none");
+    // A later read never moves it: only a celebration does.
+    initSeenTier("c", 9);
+    initSeenTier("a", 60);
+    strictEqual(readSeenTier("c"), "none");
+    strictEqual(readSeenTier("a"), "silver");
+  });
+});
+check("wings: the moment fires once -- on the milestone, for a tier above the seen one", () => {
+  strictEqual(shouldCelebrate(10, "none"), true);
+  strictEqual(shouldCelebrate(25, "white"), true);
+  strictEqual(shouldCelebrate(50, "silver"), true);
+  strictEqual(shouldCelebrate(100, "gold"), true);
+  strictEqual(shouldCelebrate(10, "white"), false); // a refresh: seen is written first
+  strictEqual(shouldCelebrate(11, "none"), false); // not a milestone
+  strictEqual(shouldCelebrate(9, "none"), false);
+  strictEqual(shouldCelebrate(25, "gold"), false); // never down
+  strictEqual(shouldCelebrate(10, null), false); // never read, or no storage
+  withStorage(() => {
+    initSeenTier("a", 9);
+    strictEqual(shouldCelebrate(10, readSeenTier("a")), true);
+    writeSeenTier("a", tierForCount(10));
+    strictEqual(shouldCelebrate(10, readSeenTier("a")), false);
+  });
+});
+check("wings: blocked storage never throws, and never celebrates", () => {
+  const g = globalThis as unknown as { localStorage?: unknown };
+  const blocked = () => {
+    throw new Error("blocked");
+  };
+  g.localStorage = { getItem: blocked, setItem: blocked, removeItem: blocked };
+  try {
+    strictEqual(readSeenTier("a"), null);
+    writeSeenTier("a", "gold");
+    initSeenTier("a", 50);
+    strictEqual(shouldCelebrate(50, readSeenTier("a")), false);
+    strictEqual(readWingsOn(), true);
+    writeWingsOn(false);
+  } finally {
+    delete g.localStorage;
+  }
+});
+check("wings: the setting -- on by default, stored as 1 or 0", () => {
+  strictEqual(WINGS_SETTING_KEY, "nobs:wings");
+  strictEqual(readWingsOn(), true);
+  withStorage((store) => {
+    strictEqual(readWingsOn(), true);
+    writeWingsOn(false);
+    strictEqual(store.get("nobs:wings"), "0");
+    strictEqual(readWingsOn(), false);
+    writeWingsOn(true);
+    strictEqual(store.get("nobs:wings"), "1");
+    strictEqual(readWingsOn(), true);
+  });
+});
+check("wings: the placement table -- every spot, as decided", () => {
+  deepStrictEqual(WINGS_PLACEMENT, {
+    profile: "full",
+    milestone: "full",
+    "header-seat": "mini",
+    "side-tag": "mini",
+    "plate-2": "mini",
+    "plate-3": "badge",
+    "plate-4": "badge",
+    "plate-teams": "badge",
+    beer: "mini",
+    "classic-seat": "badge",
+    "classic-side": "badge",
+    "home-greeting": "badge",
+    "open-tables": "badge",
+    leaderboard: "badge",
+    "god-chip": "none",
+    "opponent-chooser": "none",
+  });
+  strictEqual(placementFor("god-chip"), "none");
+  strictEqual(placementFor("profile"), "full");
+});
+check("wings: full wings only on Profile and the milestone; nothing for God or a computer", () => {
+  deepStrictEqual(Object.entries(WINGS_PLACEMENT).filter(([, m]) => m === "full").map(([s]) => s).sort(), ["milestone", "profile"]);
+  deepStrictEqual(Object.entries(WINGS_PLACEMENT).filter(([, m]) => m === "none").map(([s]) => s).sort(), ["god-chip", "opponent-chooser"]);
+});
+check("wings: a plate's spot comes from its row", () => {
+  strictEqual(plateSpot(2, 1), "plate-2");
+  strictEqual(plateSpot(3, 1), "plate-3");
+  strictEqual(plateSpot(4, 1), "plate-4");
+  strictEqual(plateSpot(2, 2), "plate-teams");
+});
+check("wings: the art's place -- mini 2.0 x and full 2.62 x, centred, the avatar at 68.35%", () => {
+  const near = (a: number, b: number) => strictEqual(Math.abs(a - b) < 1e-6, true, `${a} vs ${b}`);
+  near(WINGS_ASPECT, 695 / 1075);
+  near(WINGS_CENTRE_Y, 475 / 695);
+  const mini = wingsBox(28, "mini");
+  near(mini.width, 56);
+  near(mini.left, -14); // the 0.5 x overhang the margin makes room for
+  near(mini.top + mini.height * (475 / 695), 14); // the avatar's centre
+  const full = wingsBox(96, "full");
+  near(full.width, 96 / 0.381);
+  near(full.left + full.width / 2, 48);
+  near(full.top + full.height * (475 / 695), 48);
+  near(full.height, full.width * (695 / 1075));
+});
+check("wings: the badge -- the four colours, 11px on a 28px avatar", () => {
+  deepStrictEqual(WINGS_BADGE, { white: "#ffffff", silver: "#cfe0ff", gold: "#ffd24a", black: "#ff5a14" });
+  strictEqual(badgeSize(28), 11);
+  strictEqual(badgeSize(24), 9);
+  strictEqual(badgeSize(48), 19);
+});
+check("wings: batches of up to 50, no repeats", () => {
+  deepStrictEqual(idBatches([]), []);
+  deepStrictEqual(idBatches(["a", "b", "a"]), [["a", "b"]]);
+  const ids = Array.from({ length: 120 }, (_, i) => `u${i}`);
+  deepStrictEqual(idBatches(ids).map((b) => b.length), [50, 50, 20]);
+  deepStrictEqual(idBatches([...ids, ...ids]).flat(), ids);
+});
+check("wings: every asset exists, nothing on disk is unlisted, and the flames are whole", () => {
+  for (const url of wingsAssets()) strictEqual(existsSync(`public${url}`), true, url);
+  const listed = new Set(wingsAssets().map((url) => url.split("/").pop()));
+  for (const file of readdirSync("public/wings")) strictEqual(listed.has(file), true, file);
+  strictEqual(existsSync("docs/wings-art.md"), true); // the notes aren't served
+  const flames = JSON.parse(readFileSync("public/wings/black-flames.json", "utf8"));
+  strictEqual(flames.back.length + flames.front.length, 136);
+  strictEqual(flames.embers.length, 26);
+  for (const f of [...flames.back, ...flames.front]) {
+    strictEqual(f.grad in flames.gradients, true);
+    strictEqual(f.dur > 0, true);
+  }
+});
+check("wings: a touch screen gets half the front flames and 12 embers; desktop gets all", () => {
+  const flames = JSON.parse(readFileSync("public/wings/black-flames.json", "utf8"));
+  const full = flamesForPointer<{ grad: string; d: string }, { cx: number }>(flames, false);
+  strictEqual(full.front.length, 88);
+  strictEqual(full.embers.length, 26);
+  const thin = flamesForPointer<{ grad: string; d: string }, { cx: number }>(flames, true);
+  strictEqual(thin.front.length, 44);
+  strictEqual(thin.embers.length, 12);
+  strictEqual(new Set(thin.embers).size, 12); // no ember twice
+  // Whole pairs: every outer flame keeps its core.
+  thin.front.forEach((f, i) => strictEqual(f.grad, i % 2 ? "fl2" : "fl"));
+  strictEqual(flames.back.length + thin.front.length + thin.embers.length, 104);
+  deepStrictEqual(flamesForPointer({ front: [], embers: [] }, true), { front: [], embers: [] });
+});
+check("wings: every tier has its splash words", () => {
+  for (const t of WINGS_TIERS) strictEqual(WINGS_SPLASH[t.tier].length > 0, true, t.tier);
+  strictEqual(wingsSplashSub(25), "25 wins against God");
+});
+check("wings: a player with no tier carries nothing, so no plate or board changes", () => {
+  const row: PlateRow = { user_id: "a", name: "A", avatar_url: null, score: 0, last_points: null, last_reason: null, last_awarded_at: null };
+  const one = (r: PlateRow) => buildPlates({ rows: [r], myId: "a", dealerId: null, teamsPlayers: null })[0].members[0];
+  deepStrictEqual(one(row), { userId: "a", name: "A", avatarUrl: null });
+  deepStrictEqual(one({ ...row, wings: null }), { userId: "a", name: "A", avatarUrl: null });
+  deepStrictEqual(one({ ...row, wings: "gold" }), { userId: "a", name: "A", avatarUrl: null, wings: "gold" });
+  const scene = beerScene(375, 117, [beerPlate("a", ["walt"], 10, { isMine: true }), beerPlate("b", ["nick"], 20)]);
+  strictEqual(scene.avatars.every((a) => !("wings" in a)), true);
+  const winged = beerScene(375, 117, [
+    beerPlate("a", ["walt"], 10, { isMine: true, members: [{ userId: "a", name: "walt", avatarUrl: null, wings: "black" }] }),
+    beerPlate("b", ["nick"], 20),
+  ]);
+  strictEqual(winged.avatars[0].wings, "black");
+  strictEqual("wings" in winged.avatars[1], false);
+});
+check("wings: God's splash keeps its numbers after moving them to lossTier", () => {
+  strictEqual(godLossSplash("hard", true, 120), "stinkhole");
+  strictEqual(godLossSplash("hard", true, 60), "double-skunk");
+  strictEqual(godLossSplash("hard", true, 90), "skunk");
+  strictEqual(godLossSplash("hard", true, 91), null);
+  strictEqual(splashDurationMs("wings"), SPLASH_MS);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
