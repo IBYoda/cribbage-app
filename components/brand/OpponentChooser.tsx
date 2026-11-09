@@ -1,7 +1,8 @@
 import { Avatar } from "@/components/Avatar";
-import { LEVEL_INFO, type ComputerLevel } from "@/lib/computer/config";
+import { COMPUTER_LEVEL_ORDER, LEVEL_INFO, type ComputerLevel } from "@/lib/computer/config";
 
-const ORDER: ComputerLevel[] = ["easy", "medium", "hard"];
+// Easiest first: Shortbus, Normie, Rainman, God (lib/computer/config.ts).
+const ORDER = COMPUTER_LEVEL_ORDER;
 
 // THE COMPUTER CHOICES (the single-player screen, app/single-player): one
 // card per computer -- a real radio inside its label, like Start a Table's

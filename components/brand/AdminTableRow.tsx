@@ -5,12 +5,15 @@
 // how full it is and its mode, who sits there, and its live game with
 // Force-End Game.
 
+import { computerLevelName } from "@/lib/computer/config";
+
 export type AdminTable = {
   id: string;
   code: string;
   created_at: string;
-  // A computer table's level ('easy' / 'medium' / 'hard'), null otherwise.
-  // Shown as a tag; computer tables are listed and force-endable like any.
+  // A computer table's level ('easy' / 'casual' / 'medium' / 'hard'), null
+  // otherwise. Shown as a tag with the computer's name ("Computer (Normie)",
+  // LEVEL_INFO); computer tables are listed and force-endable like any.
   computerLevel: string | null;
   // "1/4 seated · Solo · Self-Scoring" (adminTableLabel), and who sits there,
   // in seat order (seatedNames) -- so old test tables can be told apart.
@@ -36,7 +39,7 @@ export function AdminTableRow({
       <div className="flex items-center justify-between gap-3">
         <span className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="text-xl font-bold tracking-widest">{t.code}</span>
-          {t.computerLevel && <span className="muggins-tag">Computer ({t.computerLevel})</span>}
+          {t.computerLevel && <span className="muggins-tag">Computer ({computerLevelName(t.computerLevel)})</span>}
         </span>
         <button onClick={onForceEndTable} disabled={actionInFlight === t.id} className="danger-btn shrink-0">
           {actionInFlight === t.id ? "Ending..." : "Force-End Table"}

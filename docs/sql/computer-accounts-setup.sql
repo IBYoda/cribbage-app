@@ -1,33 +1,40 @@
--- Computer opponent: the three computer accounts (TEMPLATE)
+-- Computer opponent: the four computer accounts (TEMPLATE)
 -- Run this in the Supabase Dashboard -> SQL Editor, AFTER
--- computer-c2-engine.sql and its verification. Kept here for
--- reference/history.
+-- computer-c2-engine.sql and its verification, and AFTER
+-- computer-normie.sql (which allows the 'casual' level). Kept here for
+-- reference/history. On the live project the accounts already exist: this
+-- is for a fresh project, or to re-point a level at a new user. Re-running
+-- it keeps today's names (Rainman stays Rainman).
 --
 -- ===========================================================================
 -- BEFORE YOU RUN THIS -- do these first, in order:
 --
 --   1. In the dashboard: Authentication -> Users -> Add user -> Create new
---      user, THREE times, one per level. For each:
+--      user, FOUR times, one per level. For each:
 --        * an email address you control (or a plus-address of one), e.g.
---          you+nobs-easy@..., you+nobs-medium@..., you+nobs-hard@...;
+--          you+nobs-easy@..., you+nobs-casual@..., you+nobs-medium@...,
+--          you+nobs-hard@...;
 --        * a long random password that you do not keep -- nobody ever signs
 --          in as a computer;
 --        * tick "Auto Confirm User".
 --   2. Copy each new user's id (the UID column) and paste it below, in
---      place of PASTE-EASY-USER-ID, PASTE-MEDIUM-USER-ID and
---      PASTE-HARD-USER-ID. Keep the quotes.
---   3. Make sure none of the three is an admin, or seated at any table.
+--      place of PASTE-EASY-USER-ID, PASTE-CASUAL-USER-ID,
+--      PASTE-MEDIUM-USER-ID and PASTE-HARD-USER-ID. Keep the quotes.
+--   3. Make sure none of the four is an admin, or seated at any table.
 --
 -- WHAT IT DOES (one transaction; re-runnable):
---   * checks the three ids: pasted in, real auth users, all different, not
+--   * checks the four ids: pasted in, real auth users, all different, not
 --     admins, and not seated anywhere (unless already a computer account,
 --     on a re-run); anything else stops it with a clear message and changes
 --     nothing;
 --   * writes each account's profile: nickname "Shortbus" (easy),
---     "Normie" (medium), "God" (hard). A new profile starts with a null
+--     "Normie" (casual), "Rainman" (medium), "God" (hard) -- the names in
+--     LEVEL_INFO (lib/computer/config.ts). Medium is written before casual,
+--     so a medium account still called "Normie" frees the name first
+--     (nicknames are unique). A new profile starts with a null
 --     avatar (the app shows its usual fallback); an existing profile row
 --     keeps its avatar (only nickname and updated_at are refreshed);
---   * records the three in public.computer_accounts (a level already
+--   * records the four in public.computer_accounts (a level already
 --     recorded is pointed at the new id).
 -- ===========================================================================
 
@@ -35,34 +42,36 @@ begin;
 
 do $$
 declare
-  -- PASTE THE THREE USER IDS HERE (keep the quotes):
+  -- PASTE THE FOUR USER IDS HERE (keep the quotes):
   v_easy_txt   text := 'PASTE-EASY-USER-ID';
+  v_casual_txt text := 'PASTE-CASUAL-USER-ID';
   v_medium_txt text := 'PASTE-MEDIUM-USER-ID';
   v_hard_txt   text := 'PASTE-HARD-USER-ID';
 
+  -- Medium before casual: see WHAT IT DOES.
   v_ids uuid[];
-  v_levels text[] := array['easy', 'medium', 'hard'];
-  v_names text[] := array['Shortbus', 'Normie', 'God'];
+  v_levels text[] := array['easy', 'medium', 'casual', 'hard'];
+  v_names text[] := array['Shortbus', 'Rainman', 'Normie', 'God'];
   v_txt text;
   i int;
 begin
   -- Pasted in, and real uuids.
-  foreach v_txt in array array[v_easy_txt, v_medium_txt, v_hard_txt] loop
+  foreach v_txt in array array[v_easy_txt, v_medium_txt, v_casual_txt, v_hard_txt] loop
     if v_txt like 'PASTE-%' then
-      raise exception 'SETUP: replace the PASTE-...-USER-ID placeholders with the three user ids first.';
+      raise exception 'SETUP: replace the PASTE-...-USER-ID placeholders with the four user ids first.';
     end if;
     if v_txt !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
       raise exception 'SETUP: "%" is not a user id (expected the UID from Authentication -> Users).', v_txt;
     end if;
   end loop;
-  v_ids := array[v_easy_txt::uuid, v_medium_txt::uuid, v_hard_txt::uuid];
+  v_ids := array[v_easy_txt::uuid, v_medium_txt::uuid, v_casual_txt::uuid, v_hard_txt::uuid];
 
   -- All different.
-  if v_ids[1] = v_ids[2] or v_ids[1] = v_ids[3] or v_ids[2] = v_ids[3] then
-    raise exception 'SETUP: the three user ids must all be different.';
+  if (select count(distinct x) from unnest(v_ids) x) <> 4 then
+    raise exception 'SETUP: the four user ids must all be different.';
   end if;
 
-  for i in 1 .. 3 loop
+  for i in 1 .. 4 loop
     -- A real auth user.
     if not exists (select 1 from auth.users u where u.id = v_ids[i]) then
       raise exception 'SETUP: no auth user has the % id %.', v_levels[i], v_ids[i];
@@ -79,7 +88,7 @@ begin
     end if;
   end loop;
 
-  for i in 1 .. 3 loop
+  for i in 1 .. 4 loop
     -- A new profile starts with no avatar; an existing one keeps its avatar
     -- (re-running this file keeps the computers' avatars). Nicknames are
     -- unique (profiles_nickname_unique_idx), so if a human holds a computer
@@ -100,8 +109,8 @@ $$;
 
 commit;
 
--- Afterwards (read-only): the three, with their profiles.
+-- Afterwards (read-only): the four, with their profiles, easiest first.
 -- select ca.level, ca.user_id, p.nickname, p.avatar_url
 -- from public.computer_accounts ca
 -- left join public.profiles p on p.id = ca.user_id
--- order by array_position(array['easy', 'medium', 'hard'], ca.level);
+-- order by array_position(array['easy', 'casual', 'medium', 'hard'], ca.level);

@@ -41,7 +41,7 @@ All SQL lives in `docs/sql/` for history; there is **no Supabase CLI or migratio
 Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`, plus four added since Phase 2:
 
 - `user_appearance` — each player's card back and table surface, readable and writable by its owner only (`appearance-settings.sql`).
-- `computer_accounts` — the computer opponents, one auth user per level (easy, medium, hard); RLS on with no policies and no client privileges, read only by `security definer` functions (`computer-c2-engine.sql`).
+- `computer_accounts` — the computer opponents, one auth user per level: `easy` Shortbus, `casual` Normie, `medium` Rainman (the v2.0 Normie, renamed), `hard` God (the fourth level comes from `computer-normie.sql`, run in production on 2026-11-08; its verification passed, 10 checks); RLS on with no policies and no client privileges, read only by `security definer` functions (`computer-c2-engine.sql`).
 - `game_results` — every player's score, position and won flag, saved by a trigger on `games` when a game is won; the leaderboard's skunks come from it (`leaderboard-l1-game-results.sql`).
 - `leaderboard_hidden` — test accounts kept off the leaderboard; every game such an account played counts for nobody (`leaderboard-l3-hidden-accounts.sql`).
 

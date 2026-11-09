@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { OpponentChooser } from "@/components/brand/OpponentChooser";
-import { LEVEL_INFO, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
+import { DEFAULT_COMPUTER_LEVEL, LEVEL_INFO, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
 import { nicknameStepHref } from "@/lib/nickname";
 import { fetchNeedsNickname } from "@/lib/profileNickname";
 
@@ -32,7 +32,8 @@ export default function SinglePlayerPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [level, setLevel] = useState<ComputerLevel>("medium");
+  // Starts on Normie (DEFAULT_COMPUTER_LEVEL), the standard player's match.
+  const [level, setLevel] = useState<ComputerLevel>(DEFAULT_COMPUTER_LEVEL);
   const [avatars, setAvatars] = useState<Partial<Record<ComputerLevel, string | null>>>({});
   const [status, setStatus] = useState<"idle" | "creating" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);

@@ -20,15 +20,19 @@
 // level whose LEVELS[level].peek is true gets the opponent's unplayed cards
 // as opponentRemaining while pegging, and the game state (the scores, the
 // dealer and both kept hands) for playing to win near 121; no other level
-// ever does. Only Hard peeks; Easy and Medium never do (the calibrations
+// ever does. Only Hard peeks; Easy, Casual and Medium never do (the calibrations
 // switch a peek on for one test player through its settings override).
 //
 // THE DISCARD: a seat whose level peeks at the discard (Hard) discards
 // second and is given the other seat's kept four, as the real driver waits
 // for the human's discard.
 //
-// THE LADDER (the default run): Easy vs Medium and Hard vs Medium at 2000
-// games, Hard vs Easy at 1000.
+// THE LADDER (the default run), easiest first -- Shortbus (easy), Normie
+// (casual), Rainman (medium), God (hard): Normie vs Shortbus, Rainman vs
+// Normie and Rainman vs Shortbus at 2000 games each; then God vs Rainman at
+// 2000 and God vs Shortbus at 1000. The targets for Normie (set when it was
+// added): it beats Shortbus about 70-75% of the time, Rainman beats it about
+// 70-75%, and its average final score in a loss is about 100.
 //
 // THE EASY CALIBRATION: `npm run sim:computer -- --calibrate-easy` runs,
 // instead of the ladder, Easy at mistake rates 0.50, 0.55 and 0.60 against
@@ -48,7 +52,7 @@
 //                           state, no discard peek)
 
 import { decideDiscard, decidePlay, FULL_DECK, seededRng, type Rng } from "../lib/computer/brain";
-import { LEVELS, type ComputerLevel, type LevelSettings } from "../lib/computer/config";
+import { LEVELS, LEVEL_INFO, type ComputerLevel, type LevelSettings } from "../lib/computer/config";
 import { scoreHand } from "../lib/scoring";
 import { applyPlay, type PegState, type Seat } from "../lib/computer/rules";
 
@@ -67,7 +71,7 @@ type Player = {
   discardPeek?: boolean;
   settings?: LevelSettings;
 };
-const player = (level: ComputerLevel): Player => ({ name: level, level, withGame: true });
+const player = (level: ComputerLevel): Player => ({ name: `${LEVEL_INFO[level].name} (${level})`, level, withGame: true });
 const peeksAtDiscard = (p: Player) => p.discardPeek ?? (p.settings ?? LEVELS[p.level]).peekDiscard;
 
 // Runs fn with the player's own settings in place (a simulator-only device
@@ -265,9 +269,11 @@ if (process.argv.includes("--calibrate-medium")) {
   }
   matchup(oldMedium(), player("medium"));
 } else {
-  // THE LADDER. Hard vs Easy at 1000 games: Hard is slow and the result is
-  // never close.
-  matchup(player("easy"), player("medium"));
+  // THE LADDER, the new Normie first. God vs Shortbus at 1000 games: God is
+  // slow and the result is never close.
+  matchup(player("casual"), player("easy"));
+  matchup(player("medium"), player("casual"));
+  matchup(player("medium"), player("easy"));
   matchup(player("hard"), player("medium"));
   matchup(player("hard"), player("easy"), 1000);
 }
