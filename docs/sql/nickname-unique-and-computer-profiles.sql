@@ -7,7 +7,7 @@
 -- WHY:
 --   * profiles_nickname_unique_idx: nicknames are unique, case-insensitive
 --     and ignoring surrounding spaces (empty nicknames are exempt), so no
---     player can take a computer's name (Shortbus, Normie, God) -- or anyone
+--     player can take a computer's name (Shortbus, Normie, Rainman, God) -- or anyone
 --     else's -- and be mistaken for it. The app shows "That nickname is
 --     taken." on the unique violation (23505).
 --   * get_computer_profiles(): the computer opponents' profiles (level,

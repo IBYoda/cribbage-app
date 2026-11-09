@@ -125,9 +125,11 @@ type TableRow = {
   // whether partners play as teams. Every table before Phase 3 is 2 / teams.
   max_players: number;
   team_mode: string;
-  // A COMPUTER TABLE: the computer opponent's level ('easy' / 'medium' /
-  // 'hard'), null at every other table. Set by create_computer_table; the
-  // computer's moves come from the creator's browser (useComputerDriver).
+  // A COMPUTER TABLE: the computer opponent's level ('easy' Shortbus /
+  // 'casual' Normie / 'medium' Rainman / 'hard' God; lib/computer/config.ts),
+  // null at every other table. Set by create_computer_table; the computer's
+  // moves come from the creator's browser (useComputerDriver). Only 'hard'
+  // is God (isGodLevel).
   computer_level: string | null;
 };
 

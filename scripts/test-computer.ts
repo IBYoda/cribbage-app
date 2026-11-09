@@ -23,7 +23,15 @@ import {
   seededRng,
   type PlayInput,
 } from "../lib/computer/brain";
-import { LEVELS, type ComputerLevel } from "../lib/computer/config";
+import {
+  COMPUTER_LEVEL_ORDER,
+  DEFAULT_COMPUTER_LEVEL,
+  LEVELS,
+  LEVEL_INFO,
+  computerLevelName,
+  isComputerLevel,
+  type ComputerLevel,
+} from "../lib/computer/config";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -36,7 +44,7 @@ function check(name: string, fn: () => void) {
   }
 }
 
-const LEVEL_NAMES: ComputerLevel[] = ["easy", "medium", "hard"];
+const LEVEL_NAMES: ComputerLevel[] = ["easy", "casual", "medium", "hard"];
 
 function shuffled(rng: () => number) {
   const deck = [...FULL_DECK];
@@ -50,12 +58,59 @@ function shuffled(rng: () => number) {
 const same = (a: string[], b: string[]) => [...a].sort().join() === [...b].sort().join();
 
 // ---- Levels -------------------------------------------------------------------
-check("levels: the three settings as specified", () => {
+check("levels: the four settings as specified", () => {
   deepStrictEqual(LEVELS, {
     easy: { mistakeRate: 0.55, peek: false, peekDiscard: false, search: false, cribSamples: 60 },
+    casual: { mistakeRate: 0.25, peek: false, peekDiscard: false, search: false, cribSamples: 60 },
     medium: { mistakeRate: 0, peek: false, peekDiscard: false, search: false, cribSamples: 60 },
     hard: { mistakeRate: 0, peek: true, peekDiscard: true, search: true, cribSamples: 500 },
   });
+});
+
+// ---- The ladder: names, labels, order, default ------------------------------------
+check("ladder: isComputerLevel accepts the four levels and nothing else", () => {
+  for (const level of ["easy", "casual", "medium", "hard"]) strictEqual(isComputerLevel(level), true, level);
+  for (const value of ["Casual", "normie", "expert", "", null, undefined, 1]) strictEqual(isComputerLevel(value), false, String(value));
+});
+check("ladder: the chooser's order is easiest first, and starts on Normie", () => {
+  deepStrictEqual([...COMPUTER_LEVEL_ORDER], ["easy", "casual", "medium", "hard"]);
+  deepStrictEqual([...COMPUTER_LEVEL_ORDER].sort(), [...LEVEL_NAMES].sort());
+  strictEqual(DEFAULT_COMPUTER_LEVEL, "casual");
+  strictEqual(LEVEL_INFO[DEFAULT_COMPUTER_LEVEL].name, "Normie");
+});
+check("ladder: names and labels (Shortbus Easy, Normie Medium, Rainman Hard, God Pray)", () => {
+  deepStrictEqual(
+    COMPUTER_LEVEL_ORDER.map((level) => [LEVEL_INFO[level].name, LEVEL_INFO[level].label]),
+    [
+      ["Shortbus", "Easy"],
+      ["Normie", "Medium"],
+      ["Rainman", "Hard"],
+      ["God", "Pray"],
+    ]
+  );
+  // Shortbus and God keep their taglines; every level has one.
+  strictEqual(LEVEL_INFO.easy.tagline, "Just Learning");
+  strictEqual(LEVEL_INFO.hard.tagline, "Start Praying");
+  for (const level of LEVEL_NAMES) ok(LEVEL_INFO[level].tagline.trim().length > 0, level);
+});
+check("ladder: the mistake rates fall as the ladder climbs; only God peeks or searches", () => {
+  deepStrictEqual(
+    COMPUTER_LEVEL_ORDER.map((level) => LEVELS[level].mistakeRate),
+    [0.55, 0.25, 0, 0]
+  );
+  for (const level of LEVEL_NAMES) {
+    const god = level === "hard";
+    strictEqual(LEVELS[level].peek, god, level);
+    strictEqual(LEVELS[level].peekDiscard, god, level);
+    strictEqual(LEVELS[level].search, god, level);
+  }
+});
+check("ladder: Admin's tag names the computer, and an unknown value stays as it is", () => {
+  strictEqual(computerLevelName("easy"), "Shortbus");
+  strictEqual(computerLevelName("casual"), "Normie");
+  strictEqual(computerLevelName("medium"), "Rainman");
+  strictEqual(computerLevelName("hard"), "God");
+  strictEqual(computerLevelName("expert"), "expert");
 });
 
 // ---- legalPlays ---------------------------------------------------------------
@@ -84,7 +139,7 @@ check("discard: a pair of fives is never thrown (5-5-10-J)", () => {
     }
   }
 });
-check("discard: always two different cards from the hand (500 random hands x 3 levels)", () => {
+check("discard: always two different cards from the hand (500 random hands x 4 levels)", () => {
   const rng = seededRng(42);
   for (let t = 0; t < 500; t++) {
     const hand = shuffled(rng).slice(0, 6);
@@ -173,13 +228,13 @@ check("play: with peek, hard avoids handing the opponent a 15 when an equal card
   strictEqual(peeked.find((o) => o.card === "9D")?.risk, 2);
   strictEqual(peeked.find((o) => o.card === "7S")?.risk, 0);
 });
-check("play: easy ignores opponentRemaining (same seed, same card)", () => {
+check("play: easy and casual ignore opponentRemaining (same seed, same card)", () => {
   const rng = seededRng(99);
   for (let t = 0; t < 300; t++) {
     const deck = shuffled(rng);
     const mine = deck.slice(0, 4);
     const theirs = deck.slice(4, 8);
-    for (const level of ["easy"] as const) {
+    for (const level of ["easy", "casual"] as const) {
       const scene: PlayInput = { myRemaining: mine, starter: deck[8], segmentCards: [], count: 0, allPlayed: [], opponentCardCount: 4, level };
       const blind = decidePlay({ ...scene, rng: seededRng(t) });
       const shown = decidePlay({ ...scene, rng: seededRng(t), opponentRemaining: theirs });
@@ -313,6 +368,71 @@ check("easy deviates from the best card at about its rate (2000 pegging scenes)"
   console.log(`   easy play: differs from the best ${rate.toFixed(3)} (expected ${want.toFixed(3)})`);
   // About three standard errors over 2000 scenes.
   ok(Math.abs(rate - want) <= 0.035, `deviated ${rate.toFixed(3)}, expected ${want.toFixed(3)} +- 0.035`);
+});
+// ---- Casual (Normie): the same fair player with 25% mistakes ----------------------
+check("casual deviates from the best discard at about its rate", () => {
+  const rng = seededRng(12);
+  const hands = Array.from({ length: 400 }, () => shuffled(rng).slice(0, 6));
+  let deviations = 0;
+  hands.forEach((hand, t) => {
+    const seed = 6000 + t;
+    const isDealer = t % 2 === 0;
+    const best = evaluateDiscards({ hand, isDealer, level: "casual", rng: seededRng(seed) })[0].discard;
+    const out = decideDiscard({ hand, isDealer, level: "casual", rng: seededRng(seed) });
+    ok(out[0] !== out[1] && hand.includes(out[0]) && hand.includes(out[1]), `invalid: ${out}`);
+    if (!same(out, best)) deviations++;
+  });
+  // Expected: mistakeRate x 14/15 = 0.233.
+  const rate = deviations / hands.length;
+  console.log(`   casual discard: differs from the best ${rate.toFixed(3)} (expected ${(LEVELS.casual.mistakeRate * 14 / 15).toFixed(3)})`);
+  ok(rate >= 0.16 && rate <= 0.31, `deviated ${rate.toFixed(3)}, expected 0.16-0.31`);
+});
+check("casual deviates from the best card at about its rate (2000 pegging scenes)", () => {
+  const rng = seededRng(78);
+  let deviations = 0;
+  let expected = 0;
+  const N = 2000;
+  for (let t = 0; t < N; t++) {
+    const s = randomScene(rng);
+    const scene: PlayInput = {
+      myRemaining: s.myRemaining,
+      starter: s.starter,
+      segmentCards: s.segmentCards,
+      count: s.count,
+      allPlayed: s.allPlayed,
+      opponentCardCount: s.theirLeft.length,
+      level: "casual",
+    };
+    const options = evaluatePlays(scene);
+    if (decidePlay({ ...scene, rng: seededRng(t) }) !== options[0].card) deviations++;
+    expected += LEVELS.casual.mistakeRate * (1 - 1 / options.length);
+  }
+  const rate = deviations / N;
+  const want = expected / N;
+  console.log(`   casual play: differs from the best ${rate.toFixed(3)} (expected ${want.toFixed(3)})`);
+  ok(Math.abs(rate - want) <= 0.03, `deviated ${rate.toFixed(3)}, expected ${want.toFixed(3)} +- 0.03`);
+});
+check("casual chooses from the same evaluation as medium (only the mistakes differ)", () => {
+  const rng = seededRng(13);
+  for (let t = 0; t < 100; t++) {
+    const hand = shuffled(rng).slice(0, 6);
+    const isDealer = t % 2 === 0;
+    deepStrictEqual(
+      evaluateDiscards({ hand, isDealer, level: "casual", rng: seededRng(t) }),
+      evaluateDiscards({ hand, isDealer, level: "medium", rng: seededRng(t) })
+    );
+    const s = randomScene(rng);
+    const scene: PlayInput = {
+      myRemaining: s.myRemaining,
+      starter: s.starter,
+      segmentCards: s.segmentCards,
+      count: s.count,
+      allPlayed: s.allPlayed,
+      opponentCardCount: s.theirLeft.length,
+      level: "casual",
+    };
+    deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, level: "medium" }));
+  }
 });
 check("easy never searches and ignores opponentKept and the game state", () => {
   const rng = seededRng(222);
@@ -455,11 +575,11 @@ check("hard search: beats the one-move-ahead choice in hand-made positions", () 
     strictEqual(decidePlay({ ...scene, opponentRemaining: c.theirs }), c.searched);
   }
 });
-check("hard search: easy and medium never use the opponent's cards (same values with them)", () => {
+check("hard search: easy, casual and medium never use the opponent's cards (same values with them)", () => {
   const rng = seededRng(5050);
   for (let t = 0; t < 300; t++) {
     const s = randomScene(rng);
-    for (const level of ["easy", "medium"] as const) {
+    for (const level of ["easy", "casual", "medium"] as const) {
       const scene = { ...peggingScene(s), level };
       deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, opponentRemaining: undefined }));
     }
@@ -700,11 +820,11 @@ check("hard to-win search: far from 121 the choices and values are the same as b
     deepStrictEqual(evaluatePlays(input), evaluatePlays({ ...input, game: undefined }), `t=${t}`);
   }
 });
-check("hard to-win search: medium and easy ignore the game state", () => {
+check("hard to-win search: medium, casual and easy ignore the game state", () => {
   const rng = seededRng(9191);
   for (let t = 0; t < 200; t++) {
     const { input } = endgameScene(rng, 95, 120);
-    for (const level of ["medium", "easy"] as const) {
+    for (const level of ["medium", "casual", "easy"] as const) {
       const scene = { ...input, level, rng: seededRng(t) };
       strictEqual(decidePlay(scene), decidePlay({ ...scene, game: undefined, rng: seededRng(t) }));
       deepStrictEqual(evaluatePlays(scene), evaluatePlays({ ...scene, game: undefined }));
@@ -778,11 +898,11 @@ function discardDeal(rng: () => number) {
 // The average hand score of a keep over the given starters, written out here.
 const averageOver = (keep: string[], starters: string[]) =>
   starters.reduce((sum, s) => sum + scoreHand(keep, s, false).points, 0) / starters.length;
-check("easy and medium ignore opponentKept (same seed, same discard, same evaluation)", () => {
+check("easy, casual and medium ignore opponentKept (same seed, same discard, same evaluation)", () => {
   const rng = seededRng(3131);
   for (let t = 0; t < 100; t++) {
     const { hand, theirs } = discardDeal(rng);
-    for (const level of ["easy", "medium"] as const) {
+    for (const level of ["easy", "casual", "medium"] as const) {
       const isDealer = t % 2 === 0;
       deepStrictEqual(
         evaluateDiscards({ hand, isDealer, level, rng: seededRng(t), opponentKept: theirs }),
@@ -865,10 +985,10 @@ check("speed: hard's discard with the opponent's kept hand averages well under 5
 });
 
 // ---- Speed ---------------------------------------------------------------------
-check("speed: decideDiscard averages under 25 ms (hard, 500 samples) and stays quick for medium", () => {
+check("speed: decideDiscard averages under 25 ms (hard, 500 samples) and stays quick for medium and casual", () => {
   const rng = seededRng(8);
   const hands = Array.from({ length: 200 }, () => shuffled(rng).slice(0, 6));
-  for (const level of ["hard", "medium"] as const) {
+  for (const level of ["hard", "medium", "casual"] as const) {
     decideDiscard({ hand: hands[0], isDealer: true, level, rng }); // warm-up
     const start = performance.now();
     for (const hand of hands) decideDiscard({ hand, isDealer: true, level, rng });

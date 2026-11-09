@@ -11,10 +11,11 @@
 // LEVELS[level].peek; and opponentKept (their kept four-card hand, once they
 // have discarded) in decideDiscard, read ONLY when LEVELS[level].peekDiscard,
 // so that level discards after the human (lib/computer/next.ts). Only Hard
-// has either; for Easy and Medium both are ignored.
+// (God) has either; for Easy, Casual and Medium both are ignored.
 //
-// EASY AND MEDIUM'S PEGGING (no peek): the best card one move ahead -- its
-// points now minus the expected best reply, estimated from the unseen cards.
+// EASY, CASUAL AND MEDIUM'S PEGGING (no peek): the best card one move ahead --
+// its points now minus the expected best reply, estimated from the unseen
+// cards. They differ only in how often they err (mistakeRate, config.ts).
 //
 // THE PEGGING SEARCH (LEVELS[level].search, so Hard only): with the
 // opponent's exact unplayed cards known, evaluatePlays searches every line

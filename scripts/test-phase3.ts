@@ -2663,7 +2663,13 @@ check("nickname: the step's address carries only a safe return path", () => {
 // GOD-TABLE ZERO SPLASHES (lib/splashPhrases.ts).
 check("splash: only the hard level is God", () => {
   strictEqual(isGodLevel("hard"), true);
-  for (const level of ["easy", "medium", "Hard", "", null, undefined]) strictEqual(isGodLevel(level), false, String(level));
+  for (const level of ["easy", "casual", "medium", "Hard", "", null, undefined]) strictEqual(isGodLevel(level), false, String(level));
+});
+check("splash: the new Normie (casual) and Rainman (medium) are not God; no God splash at their tables", () => {
+  for (const level of ["casual", "medium"]) {
+    strictEqual(isGodLevel(level), false, level);
+    for (const score of [120, 75, 40]) strictEqual(godLossSplash(level, true, score), null, `${level}, ${score}`);
+  }
 });
 check("splash: a God table gets God's phrases, any other the normal ones, never mixed", () => {
   deepStrictEqual(zeroSplashPhrases(false), ["THAT'S A SHOT BITCH!", "DRINK UP SUCKA!", "SHOT!"]);
@@ -2701,7 +2707,7 @@ check("God loss: the boundaries on God's final score", () => {
 check("God loss: nothing when God wins, at any other table, or with no score", () => {
   for (const score of [120, 90, 60, 0]) {
     strictEqual(godLossSplash("hard", false, score), null, `God won, ${score}`);
-    for (const level of ["easy", "medium", null, undefined]) {
+    for (const level of ["easy", "casual", "medium", null, undefined]) {
       strictEqual(godLossSplash(level, true, score), null, `${level}, ${score}`);
     }
   }
