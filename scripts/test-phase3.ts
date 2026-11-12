@@ -280,6 +280,17 @@ import {
   type DiscardSeen,
   type DiscardShow,
 } from "../lib/dealAnimation";
+import { COMPUTER_LEVEL_ORDER } from "../lib/computer/config";
+import {
+  computerFaces,
+  formatWinPercent,
+  multiplayerRecord,
+  PROFILE_SOLO_ORDER,
+  shapeSoloStats,
+  skunkChips,
+  winPercent,
+  type SoloStatsRow,
+} from "../lib/soloStats";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -4075,6 +4086,106 @@ check("wings: God's splash keeps its numbers after moving them to lossTier", () 
   strictEqual(godLossSplash("hard", true, 90), "skunk");
   strictEqual(godLossSplash("hard", true, 91), null);
   strictEqual(splashDurationMs("wings"), SPLASH_MS);
+});
+
+// ---- Profile stats (lib/soloStats.ts, PRD item 35 S3) -----------------------
+const soloRow = (level: string, w: number, l: number, sk = 0, dsk = 0, tsk = 0, user = "me"): SoloStatsRow => ({
+  user_id: user,
+  level,
+  wins: w,
+  losses: l,
+  skunks: sk,
+  double_skunks: dsk,
+  times_skunked: tsk,
+  skunk_tracking_since: "2026-10-20T00:00:00Z",
+});
+check("solo stats: four entries in ladder order, whatever order the rows come in", () => {
+  const shaped = shapeSoloStats([soloRow("hard", 1, 9), soloRow("easy", 5, 1), soloRow("medium", 2, 2), soloRow("casual", 3, 0)], "me");
+  deepStrictEqual(shaped.map((e) => e.level), [...COMPUTER_LEVEL_ORDER]);
+  deepStrictEqual(shaped.map((e) => e.level), ["easy", "casual", "medium", "hard"]);
+  deepStrictEqual(shaped.map((e) => [e.wins, e.losses]), [[5, 1], [3, 0], [2, 2], [1, 9]]);
+  strictEqual(shaped.every((e) => e.played), true);
+});
+check("solo stats: a level with no row is zeros, not played, with a dash for win %", () => {
+  const shaped = shapeSoloStats([soloRow("casual", 4, 2)], "me");
+  strictEqual(shaped.length, 4);
+  for (const e of shaped.filter((x) => x.level !== "casual")) {
+    deepStrictEqual(
+      { w: e.wins, l: e.losses, g: e.games, pct: e.winPct, sk: e.skunks, dsk: e.doubleSkunks, tsk: e.timesSkunked, played: e.played },
+      { w: 0, l: 0, g: 0, pct: null, sk: 0, dsk: 0, tsk: 0, played: false }
+    );
+    strictEqual(formatWinPercent(e.winPct), "–");
+  }
+  strictEqual(shapeSoloStats([], "me").every((e) => !e.played), true);
+});
+check("solo stats: win % rounded, null (a dash) with zero games", () => {
+  strictEqual(winPercent(0, 0), null);
+  strictEqual(winPercent(2, 1), 67);
+  strictEqual(winPercent(1, 2), 33);
+  strictEqual(winPercent(1, 7), 13); // 12.5 rounds up
+  strictEqual(winPercent(5, 0), 100);
+  strictEqual(winPercent(0, 4), 0);
+  strictEqual(formatWinPercent(67), "67%");
+  strictEqual(formatWinPercent(0), "0%");
+  strictEqual(formatWinPercent(null), "–");
+});
+check("solo stats: skunks stay with their own level, never summed across levels", () => {
+  const shaped = shapeSoloStats([soloRow("easy", 6, 0, 3, 1, 0), soloRow("hard", 1, 8, 0, 0, 5)], "me");
+  const byLevel = Object.fromEntries(shaped.map((e) => [e.level, [e.skunks, e.doubleSkunks, e.timesSkunked]]));
+  deepStrictEqual(byLevel, { easy: [3, 1, 0], casual: [0, 0, 0], medium: [0, 0, 0], hard: [0, 0, 5] });
+  deepStrictEqual(skunkChips(shaped[0]), [{ label: "Skunks", value: 3 }, { label: "Double Skunks", value: 1 }]);
+  deepStrictEqual(skunkChips(shaped[3]), [{ label: "Skunked", value: 5 }]);
+  deepStrictEqual(skunkChips(shaped[1]), []);
+});
+check("solo stats: other players' rows, unknown levels and repeats are ignored", () => {
+  const shaped = shapeSoloStats(
+    [soloRow("easy", 9, 9, 0, 0, 0, "someone"), soloRow("bogus", 1, 1), soloRow("easy", 2, 1), soloRow("easy", 7, 7)],
+    "me"
+  );
+  deepStrictEqual([shaped[0].wins, shaped[0].losses], [2, 1]);
+  strictEqual(shaped.filter((e) => e.played).length, 1);
+});
+check("multiplayer record: own row, null with no row or no human games", () => {
+  const lb = (user: string, w: number, l: number) => ({
+    user_id: user,
+    wins: w,
+    losses: l,
+    skunks: 2,
+    double_skunks: 1,
+    times_skunked: 3,
+    skunk_tracking_since: null,
+  });
+  const mine = multiplayerRecord([lb("other", 9, 1), lb("me", 3, 1)], "me");
+  deepStrictEqual(mine, { wins: 3, losses: 1, games: 4, winPct: 75, skunks: 2, doubleSkunks: 1, timesSkunked: 3 });
+  strictEqual(multiplayerRecord([lb("other", 9, 1)], "me"), null); // no row (or hidden)
+  strictEqual(multiplayerRecord([lb("me", 0, 0)], "me"), null); // listed only for Beat God
+  strictEqual(multiplayerRecord([], "me"), null);
+});
+check("profile stats: Solo Play shows God first, Shortbus last; the ladder itself is unchanged", () => {
+  deepStrictEqual([...PROFILE_SOLO_ORDER], ["hard", "medium", "casual", "easy"]);
+  deepStrictEqual([...COMPUTER_LEVEL_ORDER], ["easy", "casual", "medium", "hard"]);
+  const shaped = shapeSoloStats(
+    [soloRow("easy", 6, 0, 3, 1, 0), soloRow("hard", 1, 8, 0, 0, 5), soloRow("bogus", 9, 9)],
+    "me",
+    PROFILE_SOLO_ORDER
+  );
+  // All four levels, in the Profile's order, with zeros filled in.
+  deepStrictEqual(shaped.map((e) => e.level), ["hard", "medium", "casual", "easy"]);
+  deepStrictEqual(shaped.map((e) => [e.wins, e.losses, e.played]), [[1, 8, true], [0, 0, false], [0, 0, false], [6, 0, true]]);
+  strictEqual(shaped[1].winPct, null);
+  // Skunks kept with their own level.
+  deepStrictEqual(
+    shaped.map((e) => [e.skunks, e.doubleSkunks, e.timesSkunked]),
+    [[0, 0, 5], [0, 0, 0], [0, 0, 0], [3, 1, 0]]
+  );
+});
+check("profile stats: computer faces fall back cleanly", () => {
+  const fallback = computerFaces([]);
+  deepStrictEqual(COMPUTER_LEVEL_ORDER.map((l) => fallback[l].name), ["Shortbus", "Normie", "Rainman", "God"]);
+  strictEqual(fallback.hard.url, null);
+  const live = computerFaces([{ level: "hard", nickname: "God", avatar_url: "https://x/god.png" }, { level: "x", nickname: "?", avatar_url: null }]);
+  deepStrictEqual(live.hard, { name: "God", url: "https://x/god.png" });
+  deepStrictEqual(live.easy, { name: "Shortbus", url: null });
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
