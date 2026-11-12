@@ -29,13 +29,32 @@ export function filterFromSearch(search: string | URLSearchParams): LeaderboardF
   return isComputerLevel(value) ? { kind: "computer", level: value } : ALL_PLAYERS;
 }
 
-// The query string for a filter, keeping any other params: "" or "?vs=hard".
-export function searchForFilter(current: string, filter: LeaderboardFilter): string {
+// FRIENDS ONLY (PRD item 36, F3): ?friends=1 alongside ?vs. Only "1" turns it
+// on (the FIRST ?friends when repeated); anything else, or none, is off.
+export const FRIENDS_PARAM = "friends";
+
+export function friendsFromSearch(search: string | URLSearchParams): boolean {
+  const params = typeof search === "string" ? new URLSearchParams(search) : search;
+  return params.get(FRIENDS_PARAM) === "1";
+}
+
+// The query string for a board and the Friends switch, keeping any other
+// params, written canonically: ?vs=<level> then friends=1, each once, each
+// left out when off -- "", "?vs=hard", "?friends=1", "?vs=hard&friends=1".
+export function searchForView(current: string, filter: LeaderboardFilter, friends: boolean): string {
   const params = new URLSearchParams(current);
   params.delete(VS_PARAM);
+  params.delete(FRIENDS_PARAM);
   if (filter.kind === "computer") params.set(VS_PARAM, filter.level);
+  if (friends) params.set(FRIENDS_PARAM, "1");
   const text = params.toString();
   return text ? `?${text}` : "";
+}
+
+// The query string for a filter (a chip), keeping the Friends switch as it is
+// in `current` and any other params: "" or "?vs=hard" (and "&friends=1").
+export function searchForFilter(current: string, filter: LeaderboardFilter): string {
+  return searchForView(current, filter, friendsFromSearch(current));
 }
 
 export function sameFilter(a: LeaderboardFilter, b: LeaderboardFilter): boolean {

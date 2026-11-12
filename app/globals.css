@@ -2532,6 +2532,41 @@ section.felt-panel {
   background: rgb(0 0 0 / 0.25);
   font-size: 0.75rem;
 }
+/* THE FOLLOW STAR (components/brand/FollowStar.tsx): top-right on a
+   leaderboard card, positioned over it so nothing on the card moves. Its box
+   is 40 x 34 -- 34 tall so it ends above the "W - L" record line -- with the
+   18px star at the box's top right, level with the name line and lined up
+   with the card's padding. Only a card WITH a star becomes the box it sits
+   in, so every other card is exactly as before. */
+.leaderboard-card:has(> .follow-star) {
+  position: relative;
+}
+.follow-star {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  width: 40px;
+  height: 34px;
+  padding: 11px 11px 0 0;
+  border-radius: 0 12px 0 10px;
+  color: var(--brass);
+}
+.follow-star[aria-pressed="true"] {
+  color: var(--brass-light);
+}
+.follow-star:disabled {
+  cursor: default;
+}
+.follow-star[data-loading] {
+  opacity: 0.45;
+}
+.follow-star:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: -3px;
+}
 /* THE LEADERBOARD'S FILTER CHIPS (components/brand/LeaderboardFilterBar.tsx):
    one row that scrolls sideways with no visible scrollbar, running to the
    panel's padding edge on each side so a chip can scroll out of sight under
