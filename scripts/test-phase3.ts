@@ -291,6 +291,14 @@ import {
   winPercent,
   type SoloStatsRow,
 } from "../lib/soloStats";
+import {
+  ALL_PLAYERS,
+  computerBoardText,
+  filterFromSearch,
+  leaderboardChips,
+  sameFilter,
+  searchForFilter,
+} from "../lib/leaderboardFilter";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -4186,6 +4194,61 @@ check("profile stats: computer faces fall back cleanly", () => {
   const live = computerFaces([{ level: "hard", nickname: "God", avatar_url: "https://x/god.png" }, { level: "x", nickname: "?", avatar_url: null }]);
   deepStrictEqual(live.hard, { name: "God", url: "https://x/god.png" });
   deepStrictEqual(live.easy, { name: "Shortbus", url: null });
+});
+
+// ---- Leaderboard filters (lib/leaderboardFilter.ts, PRD item 35 S4) --------
+check("leaderboard filter: each valid ?vs is that computer's board", () => {
+  for (const level of ["easy", "casual", "medium", "hard"] as const) {
+    deepStrictEqual(filterFromSearch(`?vs=${level}`), { kind: "computer", level });
+    deepStrictEqual(filterFromSearch(new URLSearchParams({ vs: level })), { kind: "computer", level });
+  }
+});
+check("leaderboard filter: missing or invalid ?vs is Multiplayer", () => {
+  for (const search of ["", "?", "?vs=", "?vs=god", "?vs=normie", "?vs=all", "?vs=hard2", "?other=1", "?VS=hard", "?vs=%20"]) {
+    deepStrictEqual(filterFromSearch(search), ALL_PLAYERS, search);
+  }
+});
+check("leaderboard filter: any case and stray spaces read; the FIRST ?vs wins when repeated", () => {
+  deepStrictEqual(filterFromSearch("?vs=HARD"), { kind: "computer", level: "hard" });
+  deepStrictEqual(filterFromSearch("?vs=Casual"), { kind: "computer", level: "casual" });
+  deepStrictEqual(filterFromSearch("?vs=%20medium%20"), { kind: "computer", level: "medium" });
+  deepStrictEqual(filterFromSearch("?vs=easy&vs=hard"), { kind: "computer", level: "easy" });
+  deepStrictEqual(filterFromSearch("?vs=bogus&vs=hard"), ALL_PLAYERS); // the first is invalid
+});
+check("leaderboard filter: the URL is written canonically, other params kept", () => {
+  strictEqual(searchForFilter("", { kind: "computer", level: "hard" }), "?vs=hard");
+  strictEqual(searchForFilter("?vs=HARD", ALL_PLAYERS), "");
+  strictEqual(searchForFilter("?vs=easy&vs=hard", { kind: "computer", level: "medium" }), "?vs=medium");
+  strictEqual(searchForFilter("?case=list&vs=easy", ALL_PLAYERS), "?case=list");
+  strictEqual(searchForFilter("?case=list", { kind: "computer", level: "casual" }), "?case=list&vs=casual");
+  // Round trip.
+  for (const level of ["easy", "casual", "medium", "hard"] as const) {
+    deepStrictEqual(filterFromSearch(searchForFilter("", { kind: "computer", level })), { kind: "computer", level });
+  }
+  strictEqual(sameFilter(ALL_PLAYERS, { kind: "all" }), true);
+  strictEqual(sameFilter({ kind: "computer", level: "hard" }, { kind: "computer", level: "hard" }), true);
+  strictEqual(sameFilter({ kind: "computer", level: "hard" }, { kind: "computer", level: "easy" }), false);
+  strictEqual(sameFilter(ALL_PLAYERS, { kind: "computer", level: "easy" }), false);
+});
+check("leaderboard chips: Multiplayer, then the Profile's order (God first), live names with fallbacks", () => {
+  const chips = leaderboardChips(computerFaces([{ level: "hard", nickname: "God", avatar_url: "https://x/god.png" }]));
+  deepStrictEqual(chips.map((c) => c.id), ["all", ...PROFILE_SOLO_ORDER]);
+  deepStrictEqual(chips.map((c) => c.label), ["Multiplayer", "God", "Rainman", "Normie", "Shortbus"]);
+  deepStrictEqual(chips[0].filter, ALL_PLAYERS);
+  strictEqual(chips[0].avatar, undefined);
+  deepStrictEqual(chips[1].avatar, { name: "God", url: "https://x/god.png" });
+  deepStrictEqual(chips[4].filter, { kind: "computer", level: "easy" });
+  // With no faces read at all: LEVEL_INFO names, no avatar image.
+  deepStrictEqual(leaderboardChips({}).map((c) => [c.label, c.avatar?.url ?? null]), [
+    ["Multiplayer", null], ["God", null], ["Rainman", null], ["Normie", null], ["Shortbus", null],
+  ]);
+});
+check("leaderboard filter: a computer board's words", () => {
+  deepStrictEqual(computerBoardText("God"), {
+    heading: "Against God",
+    empty: "Nobody has finished a game against God yet.",
+    failed: "Couldn't load this leaderboard. Try Refresh.",
+  });
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

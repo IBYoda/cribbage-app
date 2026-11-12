@@ -5,12 +5,11 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
-import {
-  LeaderboardPanel,
-  type GodAvatar,
-  type LeaderboardRow,
-  type LeaderboardStatus,
-} from "@/components/brand/Leaderboard";
+import { FilteredLeaderboard } from "@/components/brand/FilteredLeaderboard";
+import { type GodAvatar, type LeaderboardRow, type LeaderboardStatus } from "@/components/brand/Leaderboard";
+import type { ComputerLevel } from "@/lib/computer/config";
+import { readSoloLeaderboard } from "@/lib/leaderboardFilter";
+import { computerFaces, type ComputerFace } from "@/lib/soloStats";
 
 // THE LEADERBOARD ("Leaderboard" on the main menu): every player's wins,
 // losses, skunks and Beat God, from get_leaderboard() -- a security definer
@@ -20,12 +19,18 @@ import {
 // God's avatar for the Beat God chip: the 'hard' row of
 // get_computer_profiles(), as the opponent chooser reads it. If that call
 // fails, the chip shows without an avatar.
+//
+// THE FILTERS (PRD item 35, S4): Multiplayer is this page's own read, as
+// before; the computer boards (?vs=<level>) are read by FilteredLeaderboard.
+// The same get_computer_profiles() call gives the filter chips their names
+// and avatars (LEVEL_INFO's names and initials if it fails).
 export default function LeaderboardPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<LeaderboardStatus>("loading");
   const [rows, setRows] = useState<LeaderboardRow[]>([]);
   const [god, setGod] = useState<GodAvatar>(null);
+  const [faces, setFaces] = useState<Record<ComputerLevel, ComputerFace>>(() => computerFaces([]));
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -60,10 +65,10 @@ export default function LeaderboardPage() {
     supabase.rpc("get_computer_profiles").then(
       ({ data, error }) => {
         if (cancelled || error || !Array.isArray(data)) return;
-        const hard = (data as { level: string; nickname: string | null; avatar_url: string | null }[]).find(
-          (r) => r.level === "hard"
-        );
+        const profiles = data as { level: string; nickname: string | null; avatar_url: string | null }[];
+        const hard = profiles.find((r) => r.level === "hard");
         if (hard) setGod({ name: hard.nickname || "God", url: hard.avatar_url ?? null });
+        setFaces(computerFaces(profiles));
       },
       () => {} // a network failure: no avatar on the chip
     );
@@ -93,13 +98,12 @@ export default function LeaderboardPage() {
 
   return (
     <CardRoomFrame compact>
-      <LeaderboardPanel
-        status={status}
-        rows={rows}
+      <FilteredLeaderboard
+        main={{ status, rows, refreshing, onRefresh: load }}
         meId={session.user.id}
         god={god}
-        refreshing={refreshing}
-        onRefresh={load}
+        faces={faces}
+        readLevel={readSoloLeaderboard}
       />
     </CardRoomFrame>
   );

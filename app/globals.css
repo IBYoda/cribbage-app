@@ -2532,6 +2532,59 @@ section.felt-panel {
   background: rgb(0 0 0 / 0.25);
   font-size: 0.75rem;
 }
+/* THE LEADERBOARD'S FILTER CHIPS (components/brand/LeaderboardFilterBar.tsx):
+   one row that scrolls sideways with no visible scrollbar, running to the
+   panel's padding edge on each side so a chip can scroll out of sight under
+   it. Each chip is a 40px-tall pill; the chosen one is filled in brass. */
+.leaderboard-filters {
+  display: flex;
+  gap: 0.5rem;
+  margin-inline: -1.25rem;
+  padding: 0.125rem 1.25rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.leaderboard-filters::-webkit-scrollbar {
+  display: none;
+}
+/* With a mouse or trackpad a hidden-scrollbar row is hard to scroll, so
+   there the chips wrap onto a second line instead (the panel is at most
+   408px wide on any screen). Touch screens keep the sideways scroll. */
+@media (hover: hover) and (pointer: fine) {
+  .leaderboard-filters {
+    flex-wrap: wrap;
+    margin-inline: 0;
+    padding-inline: 0;
+    overflow-x: visible;
+  }
+}
+.leaderboard-filter {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 40px;
+  padding-inline: 0.875rem;
+  border: 1px solid rgb(226 193 125 / 0.4);
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.25);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.leaderboard-filter:has(img, span[aria-hidden]) {
+  padding-left: 0.375rem;
+}
+.leaderboard-filter--on {
+  border-color: var(--brass);
+  background: linear-gradient(#e7c98a, #c9a24f);
+  color: #1f1608;
+}
+.leaderboard-filter:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
 /* The main menu's Leaderboard link: a small outlined pill in the header,
    so it adds no height to the page (see HomeMenu). */
 .header-pill {
