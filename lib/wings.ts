@@ -206,7 +206,7 @@ export const WINGS_SPLASH: Record<GodWinsTier, string> = {
   gold: "GOLD WINGS, MY CHILD",
   black: "EVEN GOD FEARS YOU",
 };
-export const wingsSplashSub = (count: number) => `${count} wins against God`;
+export const wingsSplashSub = (count: number) => `${count} ${count === 1 ? "win" : "wins"} against God`;
 
 // A list of ids as batches of up to 50 (get_god_wins reads no more), no repeats.
 export function idBatches(ids: readonly string[], size = 50): string[][] {
@@ -250,7 +250,7 @@ export function shouldCelebrate(count: number, seen: GodWinsTier | "none" | null
   return seen !== null && isMilestone(count) && tierRank(tierForCount(count)) > tierRank(seen);
 }
 
-// THE PROFILE SETTING "Show wings": this device only, on unless turned
+// THE SETTINGS PAGE'S "Show wings": this device only, on unless turned
 // off. Off: nothing at a table or on the lists. A player's own Profile and their
 // own milestone still show theirs.
 export const WINGS_SETTING_KEY = "nobs:wings";

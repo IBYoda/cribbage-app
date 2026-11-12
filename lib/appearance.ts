@@ -32,7 +32,7 @@ export function surfaceIsDark(surface: TableSurface) {
 // CARD BACKS: what every face-down card on MY screen looks like. Classic is
 // the original red CSS stripes and loads nothing; the others are 5:7 WebP
 // art in public/cards/backs/. Painted by app/globals.css ("CARD BACKS") from
-// data-back on an ancestor -- the table shell, or the Profile preview.
+// data-back on an ancestor -- the table shell, or the Settings preview.
 // "classic" stays the stored id (the database's check constraint lists it);
 // only its label changed.
 export const CARD_BACKS = [

@@ -551,7 +551,7 @@ export function DealStandby({ onGiveUp }: { onGiveUp: () => void }) {
 
 // THE TWO "DON'T ANIMATE" SWITCHES, read live.
 //
-// The Profile's "Card animations" setting (this device only; see
+// The Settings page's "Card animations" setting (this device only; see
 // lib/dealAnimation.ts). A change in another tab arrives as a storage event,
 // one in this tab through setDealAnimationOn.
 const DEAL_SETTING_EVENT = "nobs:deal-animation-change";

@@ -1,6 +1,7 @@
 -- Solo stats: VERIFICATION of docs/sql/solo-stats.sql. READ-ONLY.
 --
 -- Run in the Supabase Dashboard -> SQL Editor AFTER docs/sql/solo-stats.sql.
+-- STATUS: RUN in production on 2026-11-11: ALL SOLO STATS CHECKS PASSED.
 -- The whole file is ONE DO block: run it as is. It only reads. It inserts,
 -- updates and deletes nothing, and creates nothing, so it is safe on the
 -- live database and can be run any time.

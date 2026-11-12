@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
 import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
@@ -184,16 +183,9 @@ export default function ProfilePage() {
     : (standing?.text ?? null);
 
   return (
-    <CardRoomFrame
-      title="Your Profile"
-      after={
-        // Card back and table surface: a section of its own, with its own
-        // Save (components/AppearanceSettings.tsx).
-        <section className="felt-panel w-full">
-          <AppearanceSettings />
-        </section>
-      }
-    >
+    // The look and sound settings moved to their own page, /settings (PRD
+    // item 35, slice S2).
+    <CardRoomFrame title="Your Profile">
       <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className={`flex flex-col items-center gap-3 ${tier ? "profile-winged" : ""}`}>
           <WingsFrame tier={tier} placement={placementFor("profile")} size={96}>

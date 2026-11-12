@@ -1,6 +1,7 @@
 -- Solo stats: removes everything docs/sql/solo-stats.sql added (three
 -- read-only functions; no table, column, index or policy was added, and no
 -- other function changed).
+-- STATUS: NOT RUN. Kept for reference.
 -- Safe with the app live as long as no deployed build calls get_solo_stats
 -- or get_solo_leaderboard yet (S1 ships SQL only).
 -- The two public functions go first: they call _solo_results.

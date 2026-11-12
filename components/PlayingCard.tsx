@@ -12,7 +12,7 @@ const DEFAULT_SIZING = "flex-1 min-w-0 aspect-[5/7]";
 
 // The back is the player's choice (lib/appearance.ts): .card-back is painted
 // by app/globals.css ("CARD BACKS") from data-back on an ancestor -- the table
-// shell, or the Profile preview. Classic -- no choice, or "classic" -- is the
+// shell, or the Settings preview. Classic -- no choice, or "classic" -- is the
 // original look: red with diagonal stripes, so a face-down card reads as "a
 // card" at a glance rather than a plain coloured rectangle.
 export function FaceDownCard({ sizing = DEFAULT_SIZING }: { sizing?: string }) {

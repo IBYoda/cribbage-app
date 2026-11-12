@@ -2,6 +2,8 @@
 -- Run this in the Supabase Dashboard -> SQL Editor BEFORE solo-stats.sql. It
 -- reads only; it changes nothing.
 --
+-- STATUS: RUN in production on 2026-11-11, before solo-stats.sql.
+--
 -- ONE query, so the editor shows every line in one result (it shows only the
 -- last result of a multi-statement run). Columns: section, item, value, note.
 --

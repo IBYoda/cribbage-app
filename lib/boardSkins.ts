@@ -2,7 +2,7 @@
 // can be added (and maybe sold -- PRD item 31, parked) without touching
 // components/table/CribbageBoard.tsx. Six boards, all on the same track and
 // geometry (lib/boardLayout.ts): only the wood, the lanes, the holes and the
-// pegs change. Each player picks the board THEY see in Profile (device only,
+// pegs change. Each player picks the board THEY see in Settings (device only,
 // see "THE PROFILE SETTING" below); nothing is sent to the server or to the
 // other players. Pure, no React; tested by scripts/test-phase3.ts.
 //
@@ -249,7 +249,7 @@ export const METALLIC: BoardSkin = {
   fourthLane: { color: "#5a86b0", peg: "#0e2236" },
 };
 
-// In the Profile picker's order.
+// In the Settings picker's order.
 export const BOARD_SKIN_LIST: readonly BoardSkin[] = [CLASSIC_WOOD, MIDNIGHT, ESPRESSO, MAHOGANY, HERITAGE, METALLIC];
 
 export const BOARD_SKINS: Record<string, BoardSkin> = Object.fromEntries(BOARD_SKIN_LIST.map((s) => [s.id, s]));

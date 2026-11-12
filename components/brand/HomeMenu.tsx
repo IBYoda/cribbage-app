@@ -23,8 +23,8 @@ export type OpenTablesState = {
 
 // THE MAIN MENU (signed in), as plain props -- HomeView reads the data. A
 // card room like the landing page: the wordmark, a Leaderboard pill and the
-// small Admin / Log out links at the top; the greeting with a brass "Update Profile and
-// Visuals" button beside it; "Open Tables"; and the actions at the bottom,
+// small Admin / Log out links at the top; the greeting with two small brass
+// buttons beside it, Profile and Settings; "Open Tables"; and the actions at the bottom,
 // in thumb reach -- Play Single Player Game (the opponent chooser), Create
 // Multiplayer Table (Start a Table), and Join by code.
 export function HomeMenu({
@@ -48,7 +48,7 @@ export function HomeMenu({
         <header className="flex items-center justify-between gap-3">
           <Wordmark size="small" />
           <nav className="flex items-center gap-4 text-sm" aria-label="Menu">
-            {/* In the header, not under Update Profile: the page is already
+            {/* In the header, not under Profile / Settings: the page is already
                 exactly 667px tall at 375x667 (the Open Tables cap's floor),
                 so anything taller below would make it scroll. The header
                 row is 40px for the wordmark, and the pill fits inside. */}
@@ -74,12 +74,18 @@ export function HomeMenu({
             </p>
             <p className="truncate font-display text-2xl font-bold">{name}</p>
           </div>
-          <Link
-            href="/profile"
-            className="peg-btn peg-btn--brass peg-btn--small max-w-[10rem] shrink-0 text-center leading-tight"
-          >
-            Update Profile and Visuals
-          </Link>
+          {/* Profile and Settings, side by side in the 160px the single
+              "Update Profile and Visuals" button took (PRD item 35, S2).
+              Stacked they would need at least 68px (two 32px targets and a
+              gap), taller than this 52px row, and the menu would scroll. */}
+          <nav className="grid w-40 shrink-0 grid-cols-2 gap-1.5" aria-label="Your account">
+            <Link href="/profile" className="peg-btn peg-btn--brass peg-btn--small peg-btn--pair">
+              Profile
+            </Link>
+            <Link href="/settings" className="peg-btn peg-btn--brass peg-btn--small peg-btn--pair">
+              Settings
+            </Link>
+          </nav>
         </section>
 
         <OpenTables state={openTables} viewerName={name} viewerAvatar={avatarUrl} viewerWings={wings} />
