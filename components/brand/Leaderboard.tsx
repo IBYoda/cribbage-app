@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
 import { useWingsOn } from "@/components/Wings";
+import { rankWithTies } from "@/lib/follows";
 import { formatWinPercent, winPercent } from "@/lib/soloStats";
 import { displayTier, placementFor, tierForCount, wingsOverhang } from "@/lib/wings";
 
@@ -62,6 +63,9 @@ export function LeaderboardPanel({
   wingsLayout = "reserve",
   filterBar,
   board,
+  shownLimit = SHOWN_LIMIT,
+  star,
+  note,
 }: {
   status: LeaderboardStatus;
   rows: LeaderboardRow[];
@@ -77,13 +81,22 @@ export function LeaderboardPanel({
   // The filter chips, drawn under the title row (S4).
   filterBar?: ReactNode;
   board?: ComputerBoard | null;
+  // FRIENDS (PRD item 36). shownLimit: how many cards to draw (null: all --
+  // the Friends view, at most 51). star: the follow star for a card, drawn on
+  // every card but the signed-in player's own. note: a line under the cards
+  // (or in place of the empty message when there are none). Unset, the panel
+  // is exactly as before.
+  shownLimit?: number | null;
+  star?: (row: LeaderboardRow) => ReactNode;
+  note?: string | null;
 }) {
+  const limit = shownLimit ?? Infinity;
   const wingsOn = useWingsOn();
   const leaderboardWings = placementFor("leaderboard");
   const anyWinged =
     wingsOn &&
-    ranked(rows)
-      .slice(0, SHOWN_LIMIT)
+    rankWithTies(rows)
+      .slice(0, limit)
       .some(({ row }) => displayTier(row.user_id, tierForCount(row.beat_god)) !== null);
   const reserve =
     wingsLayout === "reserve" && anyWinged ? wingsOverhang(AVATAR_DIAMETERS.md, leaderboardWings.scale) : 0;
@@ -130,12 +143,12 @@ export function LeaderboardPanel({
           </button>
         </div>
       ) : rows.length === 0 ? (
-        <p role="status">{board ? board.empty : "No finished games yet. Go play one!"}</p>
+        <p role="status">{note ?? (board ? board.empty : "No finished games yet. Go play one!")}</p>
       ) : (
         <>
           <ol className="flex flex-col gap-2" aria-label="Players by wins">
-            {ranked(rows)
-              .slice(0, SHOWN_LIMIT)
+            {rankWithTies(rows)
+              .slice(0, limit)
               .map(({ row, rank }) => (
                 <LeaderboardCard
                   key={row.user_id}
@@ -146,12 +159,14 @@ export function LeaderboardPanel({
                   wingsOn={wingsOn}
                   reserve={reserve}
                   computerBoard={!!board}
+                  star={star && row.user_id !== meId ? star(row) : undefined}
                 />
               ))}
           </ol>
-          {rows.length > SHOWN_LIMIT && (
-            <p className="text-sm text-[var(--brass-light)]">Showing the top {SHOWN_LIMIT}.</p>
+          {rows.length > limit && (
+            <p className="text-sm text-[var(--brass-light)]">Showing the top {limit}.</p>
           )}
+          {note && <p className="text-sm text-[var(--brass-light)]">{note}</p>}
         </>
       )}
     </>
@@ -166,6 +181,7 @@ function LeaderboardCard({
   wingsOn,
   reserve,
   computerBoard,
+  star,
 }: {
   row: LeaderboardRow;
   rank: number;
@@ -177,6 +193,9 @@ function LeaderboardCard({
   // On a computer board: the win % beside the record, and no Beat God chip
   // (the wings above still come from beat_god).
   computerBoard: boolean;
+  // The follow star (never on my own card): top-right, positioned over the
+  // card (.follow-star), with 28px kept free at the end of the name line.
+  star?: ReactNode;
 }) {
   // The row already has the count: no read of its own.
   const tier = wingsOn ? displayTier(row.user_id, tierForCount(row.beat_god)) : null;
@@ -208,7 +227,9 @@ function LeaderboardCard({
           <Avatar name={row.nickname} url={row.avatar_url} tier={tier} wings={placementFor("leaderboard")} />
         </span>
         <span className="ml-2 flex min-w-0 flex-1 flex-col">
-          <span className="block truncate font-bold leading-tight">{row.nickname}</span>
+          <span className={star ? "block truncate pr-7 font-bold leading-tight" : "block truncate font-bold leading-tight"}>
+            {row.nickname}
+          </span>
           <span className="flex items-baseline justify-end gap-1.5 leading-tight">
             <span
               className="font-display text-lg font-bold tabular-nums"
@@ -244,18 +265,7 @@ function LeaderboardCard({
           )}
         </ul>
       )}
+      {star}
     </li>
   );
-}
-
-// Ranks with ties: the same wins AND losses as the row above share its rank;
-// otherwise the rank is the position (1, 2, 2, 4). The rows arrive sorted.
-function ranked(rows: LeaderboardRow[]) {
-  const out: { row: LeaderboardRow; rank: number }[] = [];
-  rows.forEach((row, i) => {
-    const prev = out[i - 1];
-    const tied = prev && prev.row.wins === row.wins && prev.row.losses === row.losses;
-    out.push({ row, rank: tied ? prev.rank : i + 1 });
-  });
-  return out;
 }

@@ -295,10 +295,23 @@ import {
   ALL_PLAYERS,
   computerBoardText,
   filterFromSearch,
+  friendsFromSearch,
   leaderboardChips,
   sameFilter,
   searchForFilter,
+  searchForView,
 } from "../lib/leaderboardFilter";
+import {
+  FOLLOW_FAILED_MESSAGE,
+  FOLLOW_LIMIT_MESSAGE,
+  FOLLOW_NOBODY_HINT,
+  followMessage,
+  followSucceeded,
+  friendsHint,
+  friendsView,
+  rankWithTies,
+  toggledSet,
+} from "../lib/follows";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -4249,6 +4262,92 @@ check("leaderboard filter: a computer board's words", () => {
     empty: "Nobody has finished a game against God yet.",
     failed: "Couldn't load this leaderboard. Try Refresh.",
   });
+});
+
+// ---- Friends (lib/follows.ts and ?friends, PRD item 36 F2/F3) ---------------
+check("friends param: only ?friends=1 is on; the first wins when repeated; ?vs untouched", () => {
+  strictEqual(friendsFromSearch("?friends=1"), true);
+  strictEqual(friendsFromSearch(new URLSearchParams({ friends: "1" })), true);
+  for (const off of ["", "?friends=", "?friends=0", "?friends=true", "?friends=yes", "?friends=01", "?friends=%201", "?FRIENDS=1", "?vs=hard"]) {
+    strictEqual(friendsFromSearch(off), false, off);
+  }
+  strictEqual(friendsFromSearch("?friends=1&friends=0"), true);
+  strictEqual(friendsFromSearch("?friends=0&friends=1"), false);
+  strictEqual(friendsFromSearch("?vs=hard&friends=1"), true);
+  deepStrictEqual(filterFromSearch("?vs=hard&friends=1"), { kind: "computer", level: "hard" });
+  deepStrictEqual(filterFromSearch("?friends=1"), ALL_PLAYERS);
+});
+check("friends param: written canonically (?vs then friends=1), removed when off, other params kept", () => {
+  strictEqual(searchForView("", ALL_PLAYERS, true), "?friends=1");
+  strictEqual(searchForView("", { kind: "computer", level: "hard" }, true), "?vs=hard&friends=1");
+  strictEqual(searchForView("?friends=1&vs=hard", { kind: "computer", level: "hard" }, true), "?vs=hard&friends=1");
+  strictEqual(searchForView("?vs=hard&friends=1", { kind: "computer", level: "hard" }, false), "?vs=hard");
+  strictEqual(searchForView("?vs=hard&friends=1", ALL_PLAYERS, false), "");
+  strictEqual(searchForView("?friends=1&friends=1&vs=easy&vs=hard", ALL_PLAYERS, true), "?friends=1");
+  strictEqual(searchForView("?case=x&friends=0", { kind: "computer", level: "easy" }, true), "?case=x&vs=easy&friends=1");
+  // A chip keeps the switch as it is.
+  strictEqual(searchForFilter("?friends=1", { kind: "computer", level: "medium" }), "?vs=medium&friends=1");
+  strictEqual(searchForFilter("?vs=medium&friends=1", ALL_PLAYERS), "?friends=1");
+  strictEqual(searchForFilter("?vs=medium", ALL_PLAYERS), "");
+  strictEqual(searchForFilter("?vs=medium&friends=0", { kind: "computer", level: "hard" }), "?vs=hard");
+});
+type FRow = { user_id: string; wins: number; losses: number };
+const fr = (user_id: string, wins: number, losses: number): FRow => ({ user_id, wins, losses });
+const BOARD: FRow[] = [fr("a", 10, 1), fr("b", 9, 2), fr("me", 9, 2), fr("c", 9, 2), fr("d", 5, 5), fr("e", 5, 5), fr("f", 1, 9)];
+check("friends view: followed players plus me, in the board's order, re-ranked with ties, no cut", () => {
+  const view = friendsView(BOARD, new Set(["a", "c", "e", "zz"]), "me");
+  deepStrictEqual(view.map((r) => r.user_id), ["a", "me", "c", "e"]);
+  deepStrictEqual(rankWithTies(view).map((x) => [x.row.user_id, x.rank]), [["a", 1], ["me", 2], ["c", 2], ["e", 4]]);
+  // The full board's ranks, for contrast: me shared 2nd with b and c.
+  deepStrictEqual(rankWithTies(BOARD).map((x) => x.rank), [1, 2, 2, 2, 5, 5, 7]);
+  // No cut: 51 rows all kept.
+  const many = Array.from({ length: 60 }, (_, i) => fr(`p${i}`, 60 - i, i));
+  const follows = new Set(many.slice(0, 50).map((r) => r.user_id));
+  strictEqual(friendsView([...many, fr("me", 0, 99)], follows, "me").length, 51);
+});
+check("friends view: always me when I have a row; nothing extra when I don't; empty follows = only me", () => {
+  deepStrictEqual(friendsView(BOARD, new Set(), "me").map((r) => r.user_id), ["me"]);
+  const noMe = BOARD.filter((r) => r.user_id !== "me");
+  deepStrictEqual(friendsView(noMe, new Set(["b"]), "me").map((r) => r.user_id), ["b"]);
+  deepStrictEqual(friendsView(noMe, new Set(), "me"), []);
+  deepStrictEqual(friendsView(BOARD, new Set(["a"]), null).map((r) => r.user_id), ["a"]);
+});
+check("friends view: the snapshot decides, so an unfollowed card stays until a new snapshot", () => {
+  const snapshot = new Set(["a", "c"]); // taken when the switch turned on
+  const live = toggledSet(snapshot, "c", false); // then c was unfollowed
+  strictEqual(live.has("c"), false);
+  strictEqual(snapshot.has("c"), true); // the snapshot isn't touched
+  deepStrictEqual(friendsView(BOARD, snapshot, "me").map((r) => r.user_id), ["a", "me", "c"]); // c stays
+  deepStrictEqual(friendsView(BOARD, new Set(live), "me").map((r) => r.user_id), ["a", "me"]); // Refresh: gone
+  deepStrictEqual([...toggledSet(new Set(["a"]), "b", true)].sort(), ["a", "b"]);
+  deepStrictEqual([...toggledSet(new Set(["a"]), "a", true)], ["a"]);
+  deepStrictEqual([...toggledSet(new Set(["a"]), "zz", false)], ["a"]);
+});
+check("friends hint: follow nobody, nobody followed on the board, or none", () => {
+  strictEqual(friendsHint([fr("me", 1, 1)], new Set(), "me", null), FOLLOW_NOBODY_HINT);
+  strictEqual(
+    FOLLOW_NOBODY_HINT,
+    "You aren't following anyone yet. Turn Friends only off, then tap the star on a player's card to follow them."
+  );
+  strictEqual(friendsHint([], new Set(), "me", "God"), FOLLOW_NOBODY_HINT);
+  strictEqual(
+    friendsHint([fr("me", 1, 1)], new Set(["a"]), "me", "God"),
+    "None of the players you follow have finished a game against God yet."
+  );
+  strictEqual(friendsHint([], new Set(["a"]), "me", null), "None of the players you follow have finished a multiplayer game yet.");
+  strictEqual(friendsHint([fr("me", 1, 1), fr("a", 2, 0)], new Set(["a"]), "me", null), null);
+});
+check("follow outcomes: success, the cap message, and the failure message", () => {
+  strictEqual(followSucceeded(true, "following"), true);
+  strictEqual(followSucceeded(false, "not_following"), true);
+  strictEqual(followSucceeded(true, "not_following"), false);
+  strictEqual(followMessage(true, "following"), null);
+  strictEqual(followMessage(false, "not_following"), null);
+  strictEqual(followMessage(true, "limit"), "You can follow up to 50 players. Unfollow someone first.");
+  strictEqual(FOLLOW_LIMIT_MESSAGE, "You can follow up to 50 players. Unfollow someone first.");
+  strictEqual(followMessage(true, "not_allowed"), FOLLOW_FAILED_MESSAGE);
+  strictEqual(followMessage(true, "error"), "Couldn't update that just now.");
+  strictEqual(followMessage(false, "error"), "Couldn't update that just now.");
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

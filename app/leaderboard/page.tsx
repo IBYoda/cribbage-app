@@ -8,6 +8,7 @@ import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { FilteredLeaderboard } from "@/components/brand/FilteredLeaderboard";
 import { type GodAvatar, type LeaderboardRow, type LeaderboardStatus } from "@/components/brand/Leaderboard";
 import type { ComputerLevel } from "@/lib/computer/config";
+import { readMyFollows, writeFollow } from "@/lib/follows";
 import { readSoloLeaderboard } from "@/lib/leaderboardFilter";
 import { computerFaces, type ComputerFace } from "@/lib/soloStats";
 
@@ -24,6 +25,10 @@ import { computerFaces, type ComputerFace } from "@/lib/soloStats";
 // before; the computer boards (?vs=<level>) are read by FilteredLeaderboard.
 // The same get_computer_profiles() call gives the filter chips their names
 // and avatars (LEVEL_INFO's names and initials if it fails).
+//
+// FRIENDS (PRD item 36): FilteredLeaderboard reads the follow list
+// (get_my_follows) when it first shows, alongside these reads, and writes
+// follows through follow_user / unfollow_user (lib/follows.ts).
 export default function LeaderboardPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +109,8 @@ export default function LeaderboardPage() {
         god={god}
         faces={faces}
         readLevel={readSoloLeaderboard}
+        readFollows={readMyFollows}
+        writeFollow={writeFollow}
       />
     </CardRoomFrame>
   );
