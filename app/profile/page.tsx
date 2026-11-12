@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { ProfileStats } from "@/components/ProfileStats";
 import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
 import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
 import { saveNickname } from "@/lib/profileNickname";
@@ -184,8 +185,9 @@ export default function ProfilePage() {
 
   return (
     // The look and sound settings moved to their own page, /settings (PRD
-    // item 35, slice S2).
-    <CardRoomFrame title="Your Profile">
+    // item 35, slice S2). Under the profile card: the player's stats (S3),
+    // which read on their own and never block the form.
+    <CardRoomFrame title="Your Profile" after={<ProfileStats userId={session.user.id} />}>
       <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4">
         <div className={`flex flex-col items-center gap-3 ${tier ? "profile-winged" : ""}`}>
           <WingsFrame tier={tier} placement={placementFor("profile")} size={96}>
