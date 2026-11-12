@@ -38,12 +38,13 @@ From here, new work exists only under the rule recorded in the PRD's **Backlog (
 
 All SQL lives in `docs/sql/` for history; there is **no Supabase CLI or migrations setup**. The user runs every file by hand in the Supabase SQL Editor. Where a function was redefined across slices, the **last file to define it is the live version**.
 
-Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`, plus four added since Phase 2:
+Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`, plus five added since Phase 2:
 
 - `user_appearance` — each player's card back and table surface, readable and writable by its owner only (`appearance-settings.sql`).
 - `computer_accounts` — the computer opponents, one auth user per level: `easy` Shortbus, `casual` Normie, `medium` Rainman (the v2.0 Normie, renamed), `hard` God (the fourth level comes from `computer-normie.sql`, run in production on 2026-11-08; its verification passed, 10 checks); RLS on with no policies and no client privileges, read only by `security definer` functions (`computer-c2-engine.sql`).
 - `game_results` — every player's score, position and won flag, saved by a trigger on `games` when a game is won; the leaderboard's skunks come from it (`leaderboard-l1-game-results.sql`).
 - `leaderboard_hidden` — test accounts kept off the leaderboard; every game such an account played counts for nobody (`leaderboard-l3-hidden-accounts.sql`).
+- `follows` — who each player follows (one-way, private, up to 50); RLS on with no policies and no client privileges, written and read only through the follow functions (`follows.sql`, run and verified in production on 2026-11-11; PRD item 36).
 
 Functions, with the file holding the current definition:
 
@@ -72,6 +73,11 @@ Functions, with the file holding the current definition:
 | `_solo_results` | `solo-stats.sql` (run and verified in production on 2026-11-11; PRD item 35) | **no** — internal, not security definer; one row per human per finished game against a computer, with the loser's saved score. Granted to nobody, `service_role` included |
 | `get_solo_stats` | `solo-stats.sql` (run and verified on 2026-11-11) | yes — read-only, security definer, up to 50 ids; each player's wins, losses, skunks, double skunks and times skunked per computer level |
 | `get_solo_leaderboard` | `solo-stats.sql` (run and verified on 2026-11-11) | yes — read-only, security definer, `(p_level)`; one level's ranking (wins desc, losses asc), the same columns as `get_leaderboard`; an unknown level raises "Unknown computer level." |
+| `_followable` | `follows.sql` (run and verified on 2026-11-11; PRD item 36) | **no** — internal; true for an account with a nickname that is neither a computer nor hidden |
+| `_follow_user_as` | `follows.sql` (run and verified on 2026-11-11) | **no** — internal, security definer; the follow rules for a given actor and cap, with a per-player lock; returns `following`, `limit` or `not_allowed`. Granted to nobody, `service_role` included |
+| `follow_user` | `follows.sql` (run and verified on 2026-11-11) | yes — `(p_target)`; follows as the signed-in player, cap 50; idempotent |
+| `unfollow_user` | `follows.sql` (run and verified on 2026-11-11) | yes — `(p_target)`; always `not_following`; idempotent |
+| `get_my_follows` | `follows.sql` (run and verified on 2026-11-11) | yes — read-only; the signed-in player's own follows, never a hidden account, never who follows them |
 
 **Live grants that disagree with this table.** 2a's grants check found `card_rank_value` and `shuffled_deck` granted to the client in the real database, although they are listed above as not client-callable, plus `rls_auto_enable`, which this project's SQL never defines and appears to come from the Supabase platform (not verified). `phase2-batch2a-verification.sql` query 3 tolerates all three so it can judge 2a on its own. Nothing secret is exposed: `card_rank_value` is a pure lookup, and `shuffled_deck` returns a fresh random deck, not the game's. They should still be revoked deliberately in a later slice. See Known loose ends.
 
