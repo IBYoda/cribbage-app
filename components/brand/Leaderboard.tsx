@@ -1,7 +1,9 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
 import { useWingsOn } from "@/components/Wings";
+import { formatWinPercent, winPercent } from "@/lib/soloStats";
 import { displayTier, placementFor, tierForCount, wingsOverhang } from "@/lib/wings";
 
 // THE LEADERBOARD's content (app/leaderboard): plain props, so the page
@@ -31,6 +33,8 @@ export type LeaderboardRow = {
   double_skunks: number;
   times_skunked: number;
   beat_god: number;
+  // Returned by the functions; no longer shown (the skunk footnote was
+  // removed from the leaderboard in S4).
   skunk_tracking_since: string | null;
 };
 
@@ -40,6 +44,14 @@ export type GodAvatar = { name: string; url: string | null } | null;
 
 export type LeaderboardStatus = "loading" | "error" | "ready";
 
+// A COMPUTER BOARD (S4, lib/leaderboardFilter.ts): the rows are
+// get_solo_leaderboard(level)'s -- the same columns as get_leaderboard()'s,
+// counting only games against that computer. Set, the panel shows the
+// heading, the win % on each card, no Beat God chip (wings still come from
+// beat_god), its own empty and failed words, and Refresh also on a failed
+// read. Unset (Multiplayer), the panel is exactly as before S4.
+export type ComputerBoard = { heading: string; empty: string; failed: string };
+
 export function LeaderboardPanel({
   status,
   rows,
@@ -48,6 +60,8 @@ export function LeaderboardPanel({
   refreshing,
   onRefresh,
   wingsLayout = "reserve",
+  filterBar,
+  board,
 }: {
   status: LeaderboardStatus;
   rows: LeaderboardRow[];
@@ -60,8 +74,10 @@ export function LeaderboardPanel({
   // "indent" moves only the winged rows over. With no wings shown, neither
   // changes anything.
   wingsLayout?: "reserve" | "indent";
+  // The filter chips, drawn under the title row (S4).
+  filterBar?: ReactNode;
+  board?: ComputerBoard | null;
 }) {
-  const since = rows[0]?.skunk_tracking_since ?? null;
   const wingsOn = useWingsOn();
   const leaderboardWings = placementFor("leaderboard");
   const anyWinged =
@@ -78,7 +94,7 @@ export function LeaderboardPanel({
         <h1 id="page-title" className="font-display text-3xl font-bold italic">
           Leaderboard
         </h1>
-        {status === "ready" && (
+        {(status === "ready" || (board && status === "error")) && (
           <button
             type="button"
             onClick={onRefresh}
@@ -89,9 +105,18 @@ export function LeaderboardPanel({
           </button>
         )}
       </div>
+      {filterBar}
+      {board && (
+        <h2 className="-mb-1 font-display text-xl font-bold italic text-[var(--brass-light)]">{board.heading}</h2>
+      )}
 
       {status === "loading" ? (
         <p role="status">Loading the leaderboard...</p>
+      ) : board && status === "error" ? (
+        // A computer board fails quietly: the Refresh above tries again.
+        <p role="status" className="text-sm">
+          {board.failed}
+        </p>
       ) : status === "error" ? (
         <div role="alert" className="flex flex-col gap-3">
           <p className="text-[var(--error-on-felt)]">Couldn&apos;t load the leaderboard just now.</p>
@@ -105,7 +130,7 @@ export function LeaderboardPanel({
           </button>
         </div>
       ) : rows.length === 0 ? (
-        <p role="status">No finished games yet. Go play one!</p>
+        <p role="status">{board ? board.empty : "No finished games yet. Go play one!"}</p>
       ) : (
         <>
           <ol className="flex flex-col gap-2" aria-label="Players by wins">
@@ -120,14 +145,12 @@ export function LeaderboardPanel({
                   god={god}
                   wingsOn={wingsOn}
                   reserve={reserve}
+                  computerBoard={!!board}
                 />
               ))}
           </ol>
           {rows.length > SHOWN_LIMIT && (
             <p className="text-sm text-[var(--brass-light)]">Showing the top {SHOWN_LIMIT}.</p>
-          )}
-          {since && (
-            <p className="text-sm text-[var(--brass-light)]">Skunk stats count games since {localDate(since)}.</p>
           )}
         </>
       )}
@@ -142,6 +165,7 @@ function LeaderboardCard({
   god,
   wingsOn,
   reserve,
+  computerBoard,
 }: {
   row: LeaderboardRow;
   rank: number;
@@ -150,6 +174,9 @@ function LeaderboardCard({
   wingsOn: boolean;
   // Room kept beside an avatar with no wings, so every row's avatar lines up.
   reserve: number;
+  // On a computer board: the win % beside the record, and no Beat God chip
+  // (the wings above still come from beat_god).
+  computerBoard: boolean;
 }) {
   // The row already has the count: no read of its own.
   const tier = wingsOn ? displayTier(row.user_id, tierForCount(row.beat_god)) : null;
@@ -158,6 +185,7 @@ function LeaderboardCard({
     { label: "Double Skunks", value: row.double_skunks },
     { label: "Skunked", value: row.times_skunked },
   ].filter((c) => c.value > 0);
+  const showBeatGod = !computerBoard && row.beat_god > 0;
 
   return (
     <li
@@ -191,18 +219,23 @@ function LeaderboardCard({
             <span aria-hidden="true" className="text-[11px] uppercase tracking-[0.18em] text-[var(--brass-light)]">
               W - L
             </span>
+            {computerBoard && (
+              <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--brass-light)]">
+                · Win {formatWinPercent(winPercent(row.wins, row.losses))}
+              </span>
+            )}
           </span>
         </span>
       </div>
 
-      {(chips.length > 0 || row.beat_god > 0) && (
-        <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Skunks and Beat God">
+      {(chips.length > 0 || showBeatGod) && (
+        <ul className="mt-2 flex flex-wrap gap-1.5" aria-label={computerBoard ? "Skunks" : "Skunks and Beat God"}>
           {chips.map((c) => (
             <li key={c.label} className="leaderboard-chip">
               {c.label} <span className="font-bold tabular-nums">{c.value}</span>
             </li>
           ))}
-          {row.beat_god > 0 && (
+          {showBeatGod && (
             <li className="leaderboard-chip">
               Beat God
               {god && <Avatar name={god.name} url={god.url} size="xs" />}
@@ -225,9 +258,4 @@ function ranked(rows: LeaderboardRow[]) {
     out.push({ row, rank: tied ? prev.rank : i + 1 });
   });
   return out;
-}
-
-// The player's own date format ("Oct 30, 2026" / "30 Oct 2026").
-function localDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
