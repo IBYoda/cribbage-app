@@ -23,10 +23,12 @@ export function tierForCount(count: number): GodWinsTier | null {
   return tier;
 }
 
-// THE CREATOR'S WINGS: metallic green with orange flames, for the account(s)
-// here and nobody else. They win over any God-win tier and need no database,
-// so they show even when get_god_wins can't be read. Only the display changes:
-// the creator's real God wins still drive the milestone and the seen tier.
+// THE CREATOR'S EARS: a pair of green ears (Walt's own art, docs/wings-art.md)
+// in place of wings, with no flames, for the account(s) here and nobody else.
+// They are the "creator" tier: they win over any God-win tier and need no
+// database, so they show even when get_god_wins can't be read. Only the
+// display changes: the creator's real God wins still drive the milestone and
+// the seen tier.
 export const CREATOR_USER_IDS: readonly string[] = ["f190b27b-a23b-4464-8445-023edbee28b2"];
 
 export const isCreator = (userId: string | null | undefined) => !!userId && CREATOR_USER_IDS.includes(userId);
@@ -37,8 +39,9 @@ export function displayTier(userId: string | null | undefined, earned: GodWinsTi
   return isCreator(userId) ? "creator" : (earned ?? null);
 }
 
-// Tiers drawn burning: the black tier's flames, embers and glow.
-export const hasFlames = (tier: WingsTier) => tier === "black" || tier === "creator";
+// Tiers drawn burning: the black tier's flames, embers and glow. Black only:
+// the creator's ears don't burn.
+export const hasFlames = (tier: WingsTier) => tier === "black";
 
 // The next tier up, or null at the top.
 export function nextTier(count: number) {
@@ -140,14 +143,14 @@ export function wingsBox(d: number, scale: number) {
   return { width, height, left: (d - width) / 2, top: d / 2 - height * WINGS_CENTRE_Y };
 }
 
-// Each tier's art, by file name. The creator's is green; its flames and glow
-// are the black tier's own (emberUrl, FLAMES_URL).
+// Each tier's art, by file name. The creator's is the ears (full-ears.webp,
+// mini-ears.webp), on the same canvas and anchors as the wings.
 const WINGS_ART: Record<WingsTier, string> = {
   white: "white",
   silver: "silver",
   gold: "gold",
   black: "black",
-  creator: "green",
+  creator: "ears",
 };
 export const ALL_WINGS_TIERS: readonly WingsTier[] = [...WINGS_TIERS.map((t) => t.tier), "creator"];
 
@@ -164,7 +167,8 @@ export function wingsAssets(): string[] {
   ];
 }
 
-// The badge's colour, and the soft glow behind full wings.
+// The badge's colour (the creator keeps the emerald dot), and the soft glow
+// behind full wings: none for the ears.
 export const WINGS_BADGE: Record<WingsTier, string> = {
   white: "#ffffff",
   silver: "#cfe0ff",
@@ -172,13 +176,12 @@ export const WINGS_BADGE: Record<WingsTier, string> = {
   black: "#ff5a14",
   creator: "#2ee07a",
 };
-export const WINGS_HALO: Record<WingsTier, string> = {
+export const WINGS_HALO: Record<WingsTier, string | null> = {
   white: "rgb(255 246 216 / 0.3)",
   silver: "rgb(207 224 255 / 0.3)",
   gold: "rgb(255 210 74 / 0.3)",
   black: "rgb(255 90 20 / 0.38)",
-  // The creator's flames are orange too: the same warm glow as black's.
-  creator: "rgb(255 90 20 / 0.38)",
+  creator: null,
 };
 
 // THE FLAMES ON A PHONE: a touch screen gets every back flame, half the front

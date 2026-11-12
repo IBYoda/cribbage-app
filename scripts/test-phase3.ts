@@ -14,6 +14,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import {
   WINGS_ASPECT,
   WINGS_BADGE,
+  WINGS_HALO,
   WINGS_CENTRE_Y,
   WINGS_PLACEMENT,
   WINGS_SETTING_KEY,
@@ -4062,18 +4063,26 @@ check("wings: the creator -- a count never earns it, and the milestone rules don
   strictEqual(shouldCelebrate(100, "gold"), true);
   strictEqual(shouldCelebrate(10, "white"), false);
 });
-check("wings: the creator -- green art, black's flames and glow, an emerald dot", () => {
-  strictEqual(wingsUrl("creator", "full"), "/wings/full-green.webp");
-  strictEqual(wingsUrl("creator", "mini"), "/wings/mini-green.webp");
+check("wings: the creator -- the ears art, no flames or glow, an emerald dot", () => {
+  strictEqual(wingsUrl("creator", "full"), "/wings/full-ears.webp");
+  strictEqual(wingsUrl("creator", "mini"), "/wings/mini-ears.webp");
   strictEqual(wingsUrl("black", "full"), "/wings/full-black.webp"); // unchanged
-  strictEqual(wingsAssets().includes("/wings/full-green.webp"), true);
-  strictEqual(wingsAssets().includes("/wings/mini-green.webp"), true);
-  strictEqual(existsSync("public/wings/full-green.webp"), true);
-  strictEqual(existsSync("public/wings/mini-green.webp"), true);
+  strictEqual(wingsAssets().includes("/wings/full-ears.webp"), true);
+  strictEqual(wingsAssets().includes("/wings/mini-ears.webp"), true);
+  strictEqual(existsSync("public/wings/full-ears.webp"), true);
+  strictEqual(existsSync("public/wings/mini-ears.webp"), true);
+  // The old green wings are gone, and nothing points at them.
+  strictEqual(existsSync("public/wings/full-green.webp"), false);
+  strictEqual(existsSync("public/wings/mini-green.webp"), false);
+  strictEqual(wingsAssets().some((url) => url.includes("green")), false);
   strictEqual(WINGS_BADGE.creator, "#2ee07a");
-  strictEqual(hasFlames("creator"), true);
+  strictEqual(hasFlames("creator"), false);
   strictEqual(hasFlames("black"), true);
   for (const t of ["white", "silver", "gold"] as const) strictEqual(hasFlames(t), false);
+  // No glow behind the ears; every earned tier keeps its own.
+  strictEqual(WINGS_HALO.creator, null);
+  strictEqual(WINGS_HALO.black, "rgb(255 90 20 / 0.38)");
+  for (const t of ["white", "silver", "gold", "black"] as const) strictEqual(typeof WINGS_HALO[t], "string", t);
   deepStrictEqual([...ALL_WINGS_TIERS], ["white", "silver", "gold", "black", "creator"]);
   // The creator takes no splash words: WINGS_SPLASH is the earned tiers only.
   strictEqual("creator" in WINGS_SPLASH, false);

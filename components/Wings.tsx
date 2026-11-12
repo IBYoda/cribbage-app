@@ -76,8 +76,8 @@ function artBox(size: number, scale: number): CSSProperties {
   return { width, height, left, top };
 }
 
-// At a table burning wings (black, the creator's) only breathe: the ember
-// layer's slow pulse.
+// At a table burning wings (black only) just breathe: the ember layer's slow
+// pulse. The creator's ears are the plain picture.
 function MiniArt({ tier }: { tier: WingsTier }) {
   const motion = useAmbientMotion();
   return (
@@ -92,19 +92,21 @@ function MiniArt({ tier }: { tier: WingsTier }) {
   );
 }
 
+// Full size: burning wings get the flames; the others their art over a soft
+// glow -- except the creator's ears, which have no glow (WINGS_HALO null).
 function FullArt({ tier }: { tier: WingsTier }) {
   if (hasFlames(tier)) return <FlamingWingsFx tier={tier} />;
+  const halo = WINGS_HALO[tier];
   return (
     <>
-      <span className="wings-halo" style={{ "--wings-halo": WINGS_HALO[tier] } as CSSProperties} />
+      {halo && <span className="wings-halo" style={{ "--wings-halo": halo } as CSSProperties} />}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={wingsUrl(tier, "full")} alt="" className="wings-img" />
     </>
   );
 }
 
-// BURNING WINGS AT FULL SIZE (the black tier, and the creator's green wings
-// with the same flames): Profile and the milestone only, because it is
+// BURNING WINGS AT FULL SIZE (the black tier only): Profile and the milestone only, because it is
 // about 160 moving shapes (about 100 on a touch screen). Fetched rather than bundled, so a table never carries
 // the flames it doesn't draw. Until they arrive, or if they don't, it is the
 // wings and their glow. Motion off: the same picture, still.
@@ -174,7 +176,7 @@ function FlamingWingsFx({ tier }: { tier: WingsTier }) {
   );
   return (
     <>
-      <span className="wings-halo" style={{ "--wings-halo": WINGS_HALO[tier] } as CSSProperties} />
+      <span className="wings-halo" style={{ "--wings-halo": WINGS_HALO[tier] ?? undefined } as CSSProperties} />
       <svg
         viewBox="0 0 1075 695"
         className={`wings-fx ${motion ? "wings-fx--on" : ""}`}
