@@ -3,7 +3,7 @@
 import { setSoundOn, useSoundOn } from "@/components/SoundProvider";
 
 // THE QUICK MUTE in the table header, beside the Counts toggle: the same
-// device-only setting as Profile's Sound switch, saved at once. An icon, so it
+// device-only setting as the Settings page's Sound switch, saved at once. An icon, so it
 // takes 24px from the header: on a phone the across player's name gives way
 // first (.sq-header). The tap target is 40px tall (tap-40), and the name and
 // aria-pressed never change, so a screen reader hears "Sound, pressed".

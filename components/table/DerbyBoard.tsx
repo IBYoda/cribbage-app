@@ -71,7 +71,7 @@ export function DerbyBoard({
   const size = useMemo(() => (fixedW && fixedH ? { w: fixedW, h: fixedH } : measured), [fixedW, fixedH, measured]);
   const onClient = useSyncExternalStore(subscribeNothing, clientSnapshot, serverSnapshot);
 
-  // For the Profile's preview, where the table's own preload hasn't run.
+  // For the Settings page's preview, where the table's own preload hasn't run.
   useEffect(() => {
     preload(board.image, { as: "image" });
   }, [board.image]);

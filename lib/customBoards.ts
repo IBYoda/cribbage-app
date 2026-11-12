@@ -1,5 +1,5 @@
 // CUSTOM BOARDS: complete boards, each with its own look, as opposed to a
-// pattern in a skin's colours (lib/boardSkins.ts). The Profile's "Custom"
+// pattern in a skin's colours (lib/boardSkins.ts). The Settings page's "Custom"
 // pattern lists them. A new LOOK on an existing track is one entry in
 // CUSTOM_BOARDS (and, for new art or a new peg, one drawing in
 // components/table/CribbageBoard.tsx). A new TRACK is more: its own geometry

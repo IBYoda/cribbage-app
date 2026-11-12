@@ -81,30 +81,53 @@ export function AppearanceSettings() {
   const [draft, setDraft] = useState<Appearance | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
+  // DIRTY: the player changed something on this page since it opened or
+  // since the last Save Settings -- ANY setting, the instant ones included.
+  // It only lights the Save Settings button; it never changes how a setting
+  // saves. No diffing: changing a setting back still counts.
+  const [dirty, setDirty] = useState(false);
 
   const shown = draft ?? saved;
   const changed =
     draft !== null &&
     (draft.surface !== saved.surface || draft.back !== saved.back || draft.hideCounts !== saved.hideCounts);
 
-  function pick(next: Partial<Appearance>) {
-    setDraft({ ...shown, ...next });
+  // Every change handler on the page calls this (Test sound doesn't: it
+  // changes nothing). It lights the button and clears "Saved." or an error.
+  function markDirty() {
+    setDirty(true);
     setStatus("idle");
     setMessage(null);
   }
 
+  function pick(next: Partial<Appearance>) {
+    setDraft({ ...shown, ...next });
+    markDirty();
+  }
+
   async function handleSave() {
-    if (!draft || !changed) return;
+    // Only instant settings changed (or the account picks were set back to
+    // what's saved): nothing to write -- no database request, just the same
+    // confirmation a real save shows.
+    if (!draft || !changed) {
+      setDraft(null);
+      setDirty(false);
+      setStatus("saved");
+      setMessage(null);
+      return;
+    }
     setStatus("saving");
     setMessage(null);
     const error = await appearance.save(draft);
     if (error) {
-      // The saved look stays applied; the picks stay on screen to retry.
+      // The saved look stays applied; the picks stay on screen to retry, and
+      // the button stays lit.
       setStatus("error");
       setMessage(`Couldn't save your appearance: ${error}`);
       return;
     }
     setDraft(null);
+    setDirty(false);
     setStatus("saved");
   }
 
@@ -189,7 +212,7 @@ export function AppearanceSettings() {
 
       {/* COUNT NUMBERS: Hide counts, for this player's own screen only. The
           table header has the same switch, which saves at once; this one is
-          saved with the rest by Save Appearance. */}
+          saved with the rest by Save Settings. */}
       <fieldset className="flex flex-col gap-2" disabled={!appearance.ready || status === "saving"}>
         <legend className="mb-2 text-sm font-medium">Count numbers</legend>
         <div className="flex items-center gap-3">
@@ -213,7 +236,7 @@ export function AppearanceSettings() {
 
       {/* CARD ANIMATIONS (the deal and the discard toss): this device only
           (localStorage, no account column), so it saves at once, not with
-          Save Appearance. Off: a new hand just appears and discards go
+          Save Settings. Off: a new hand just appears and discards go
           straight to the crib, as with the system's reduced motion. */}
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-2 text-sm font-medium">Animations</legend>
@@ -224,7 +247,10 @@ export function AppearanceSettings() {
             role="switch"
             aria-checked={dealAnimationOn}
             aria-describedby="deal-animation-hint"
-            onClick={() => setDealAnimationOn(!dealAnimationOn)}
+            onClick={() => {
+              setDealAnimationOn(!dealAnimationOn);
+              markDirty();
+            }}
             className="felt-switch"
           />
           <label htmlFor="deal-animation-switch" className="cursor-pointer text-sm">
@@ -249,7 +275,10 @@ export function AppearanceSettings() {
             role="switch"
             aria-checked={soundOn}
             aria-describedby="sound-hint"
-            onClick={() => setSoundOn(!soundOn)}
+            onClick={() => {
+              setSoundOn(!soundOn);
+              markDirty();
+            }}
             className="felt-switch"
           />
           <label htmlFor="sound-switch" className="cursor-pointer text-sm">
@@ -268,7 +297,10 @@ export function AppearanceSettings() {
             step={0.05}
             value={soundVolume}
             disabled={!soundOn}
-            onChange={(event) => setSoundVolume(Number(event.target.value))}
+            onChange={(event) => {
+              setSoundVolume(Number(event.target.value));
+              markDirty();
+            }}
             className="felt-range"
           />
           <button
@@ -296,7 +328,10 @@ export function AppearanceSettings() {
             role="switch"
             aria-checked={wingsOn}
             aria-describedby="wings-hint"
-            onClick={() => setWingsOn(!wingsOn)}
+            onClick={() => {
+              setWingsOn(!wingsOn);
+              markDirty();
+            }}
             className="felt-switch"
           />
           <label htmlFor="wings-switch" className="cursor-pointer text-sm">
@@ -333,6 +368,7 @@ export function AppearanceSettings() {
                   onChange={() => {
                     setCustomBoard(null);
                     setBoardPattern(choice.id);
+                    markDirty();
                   }}
                   className="peer sr-only"
                 />
@@ -357,7 +393,10 @@ export function AppearanceSettings() {
                 name="board-pattern"
                 value="custom"
                 checked={!!customBoard}
-                onChange={() => setCustomBoard(CUSTOM_BOARDS[0].id)}
+                onChange={() => {
+                  setCustomBoard(CUSTOM_BOARDS[0].id);
+                  markDirty();
+                }}
                 className="peer sr-only"
               />
               <span
@@ -382,7 +421,10 @@ export function AppearanceSettings() {
                     name="board-custom"
                     value={board.id}
                     checked={customBoard.id === board.id}
-                    onChange={() => setCustomBoard(board.id)}
+                    onChange={() => {
+                      setCustomBoard(board.id);
+                      markDirty();
+                    }}
                     className="peer sr-only"
                   />
                   <span
@@ -407,7 +449,10 @@ export function AppearanceSettings() {
                     name="board-skin"
                     value={skin.id}
                     checked={boardSkin.id === skin.id}
-                    onChange={() => setBoardSkin(skin.id)}
+                    onChange={() => {
+                      setBoardSkin(skin.id);
+                      markDirty();
+                    }}
                     className="peer sr-only"
                   />
                   <span
@@ -433,14 +478,21 @@ export function AppearanceSettings() {
         </p>
       </fieldset>
 
+      {/* SAVE SETTINGS: grey until the player changes anything on this page
+          (dirty), then lit; grey again after a save, and while one is in
+          flight. It writes only the account settings above -- table
+          surface, card back, Hide counts -- and only when one of them
+          changed; if only instant settings changed it writes nothing and
+          just confirms. A failed save leaves it lit, with the error. */}
       <button
         type="button"
         onClick={handleSave}
-        disabled={!changed || status === "saving" || !appearance.ready}
+        disabled={!dirty || status === "saving"}
         className="peg-btn peg-btn--brass disabled:opacity-60"
       >
-        {status === "saving" ? "Saving..." : "Save Appearance"}
+        {status === "saving" ? "Saving..." : "Save Settings"}
       </button>
+      <p className="-mt-2 text-sm">Sounds, animations, wings and boards save as you change them.</p>
 
       <p role="status" className="min-h-5 text-sm">
         {status === "saved" && <span className="text-[var(--success-on-felt)]">Saved.</span>}

@@ -176,7 +176,7 @@ function stopSource(source: AudioBufferSourceNode) {
   }
 }
 
-// The Profile's Test sound: at once, not through a burst. Called from the tap,
+// The Settings page's Test sound: at once, not through a burst. Called from the tap,
 // which is also what unlocks audio. A first test may have to load the clip.
 export async function playTestSound(url: string) {
   await unlockAudio();

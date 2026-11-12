@@ -4049,6 +4049,10 @@ check("wings: the creator -- green art, black's flames and glow, an emerald dot"
 check("wings: every tier has its splash words", () => {
   for (const t of WINGS_TIERS) strictEqual(WINGS_SPLASH[t.tier].length > 0, true, t.tier);
   strictEqual(wingsSplashSub(25), "25 wins against God");
+  // Profile's "Creator · N wins against God" line: singular for one.
+  strictEqual(wingsSplashSub(1), "1 win against God");
+  strictEqual(wingsSplashSub(2), "2 wins against God");
+  strictEqual(wingsSplashSub(0), "0 wins against God");
 });
 check("wings: a player with no tier carries nothing, so no plate or board changes", () => {
   const row: PlateRow = { user_id: "a", name: "A", avatar_url: null, score: 0, last_points: null, last_reason: null, last_awarded_at: null };

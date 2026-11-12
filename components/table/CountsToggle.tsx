@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 // THE HIDE COUNTS TOGGLE in the table header, beside Leave: the player's own
-// Hide counts setting (lib/appearance.ts), the same one as on the Profile
+// Hide counts setting (lib/appearance.ts), the same one as on the Settings
 // page. A tap saves at once -- there is no separate Save. The label shows the
 // current state; it changes only once the save succeeds, so a failed save
 // leaves the old value showing, with a short "Couldn't save" note under the

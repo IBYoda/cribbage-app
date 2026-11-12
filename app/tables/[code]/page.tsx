@@ -611,11 +611,11 @@ export default function TablePage() {
   });
   // ?layout= (see THE LAYOUT PARAM above). Drawing only.
   const layoutParam = useSyncExternalStore(subscribeToLocation, layoutParamFromUrl, layoutParamOnServer);
-  // The dealing animation's off switches: the Profile setting (this device)
+  // The dealing animation's off switches: the Settings switch (this device)
   // and the system's reduced motion.
   const dealAnimationOn = useDealAnimationOn();
   const reducedMotion = usePrefersReducedMotion();
-  // The board THIS player picked in Profile (this device only): the square
+  // The board THIS player picked in Settings (this device only): the square
   // table's board strip, lane rings and self-scoring banner.
   const boardSkin = useTableBoardSkin(table?.max_players ?? 2);
   // ...and its pattern (Straight or S), likewise this device only.
@@ -2533,7 +2533,7 @@ export default function TablePage() {
   // hand after the cut, a New Game. Compared during render (as the pegging
   // hold above), and keyed to the hand, so a re-render or a realtime echo
   // can never replay it; dealDoneKey marks it finished or skipped. Off with
-  // reduced motion or the Profile switch off -- decided when the hand
+  // reduced motion or the Settings switch off -- decided when the hand
   // arrives, so turning either back on mid-discard can't start a late deal.
   const dealHandKey = isActive ? currentHandKey : null;
   const dealStep = liveDealStep({

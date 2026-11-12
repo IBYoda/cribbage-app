@@ -2153,6 +2153,13 @@ section.felt-panel {
   border-radius: 10px;
   font-size: 0.875rem;
 }
+/* The main menu's Profile / Settings pair: two small buttons side by side in
+   the 160px the single "Update Profile and Visuals" button took, so the
+   greeting row keeps its height. Tighter sides so "Settings" fits on one
+   line. */
+.peg-btn--pair {
+  padding-inline: 0.5rem;
+}
 
 /* TABLE OPTIONS (app/tables/new): each choice is a card -- a real radio
    (visually hidden, still focusable and announced) inside its label, with a

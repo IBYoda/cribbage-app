@@ -59,7 +59,7 @@ import type { ScorePlate } from "@/components/table/ScoreStrip";
 
 // THE BOARD STRIP (PRD item 31): a 3-lane cribbage board, drawn in SVG at the
 // strip's own size (lib/boardLayout.ts), its look from a skin
-// (lib/boardSkins.ts -- the one THIS player picked in Profile: useBoardSkin).
+// (lib/boardSkins.ts -- the one THIS player picked in Settings: useBoardSkin).
 // All three lanes always show, as on a real board; a lane nobody sits in has
 // no pegs. Not interactive.
 //
@@ -71,7 +71,7 @@ import type { ScorePlate } from "@/components/table/ScoreStrip";
 // .board-peg).
 //
 // fixedSize: draw the board for that strip size and scale the picture to the
-// box's width (the Profile picker's previews), instead of measuring the box.
+// box's width (the Settings picker's previews), instead of measuring the box.
 //
 // pattern: the board's shape -- "straight" (out and back), "s" (one long S
 // lane each) or "snake" (one long lane each, in three bands); the S and the
@@ -81,8 +81,8 @@ import type { ScorePlate } from "@/components/table/ScoreStrip";
 //
 // custom: a complete board (lib/customBoards.ts) drawn instead of skin and
 // pattern: its layout, colours, art and pegs. Left out: this player's own
-// choice in Profile (useCustomBoard), so every table screen gets it from here.
-// null: never one (the Profile's previews of the normal boards).
+// choice in Settings (useCustomBoard), so every table screen gets it from here.
+// null: never one (the Settings previews of the normal boards).
 //
 // plates: the lane-coloured score plates, for a board that replaces them (the
 // Beer Board, which draws from them and never from players). Every other board

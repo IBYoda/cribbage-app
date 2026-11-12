@@ -2,7 +2,8 @@
 -- Run this in the Supabase Dashboard -> SQL Editor. Kept here for
 -- reference/history; this project has no Supabase CLI/migrations set up yet.
 --
--- STATUS: NOT RUN YET.
+-- STATUS: RUN in production on 2026-11-11 (PR #101); its verification
+-- (solo-stats-verification.sql) passed the same day.
 --
 -- RUN ORDER:
 --   1. docs/sql/solo-stats-precheck.sql      (read-only)
