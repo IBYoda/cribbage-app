@@ -100,6 +100,14 @@ export function HomeMenu({
             Create Multiplayer Table
           </Link>
           <JoinTableForm />
+          {/* The Hand Calculator: the small outlined pill (the header's
+              Leaderboard look), centred under Join, so it reads as an extra
+              rather than a way to play. 32px tall: at 375x667 with Open Tables
+              full, a 40px button made the menu scroll by 7px; this keeps it
+              one screen (measured). */}
+          <Link href="/calculator" className="header-pill self-center">
+            Hand Calculator
+          </Link>
         </section>
       </main>
       <SiteFooter />
