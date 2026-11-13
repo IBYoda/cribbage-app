@@ -313,6 +313,9 @@ import {
   rankWithTies,
   toggledSet,
 } from "../lib/follows";
+import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
+import { scoreHand } from "../lib/scoring";
+import { suitSymbol } from "../lib/cards";
 
 let passed = 0;
 function check(name: string, fn: () => void) {
@@ -4357,6 +4360,112 @@ check("follow outcomes: success, the cap message, and the failure message", () =
   strictEqual(followMessage(true, "not_allowed"), FOLLOW_FAILED_MESSAGE);
   strictEqual(followMessage(true, "error"), "Couldn't update that just now.");
   strictEqual(followMessage(false, "error"), "Couldn't update that just now.");
+});
+
+// ---- Hand calculator (lib/handBreakdown.ts) --------------------------------
+const H = (cards: string, starter: string, crib = false) => handBreakdown(cards.split(" "), starter, crib);
+const lineOf = (b: HandBreakdown, category: string) => b.lines.find((l) => l.category === category);
+const sym = (b: HandBreakdown, category: string) =>
+  (lineOf(b, category)?.combos ?? []).map((c) => comboText(c, suitSymbol));
+check("calculator: the 29 -- three fives and the right jack, the fourth five cut", () => {
+  const b = H("5H 5D 5C JS", "5S");
+  strictEqual(b.total, 29);
+  deepStrictEqual(b.lines.map((l) => [l.label, l.points]), [["Fifteens", 16], ["Pairs", 12], ["Nobs", 1]]);
+  strictEqual(lineOf(b, "fifteens")!.combos.length, 8);
+  strictEqual(lineOf(b, "pairs")!.combos.length, 6);
+  deepStrictEqual(sym(b, "nobs"), ["J♠+5♠"]);
+});
+check("calculator: a 0 hand has no lines", () => {
+  const b = H("2C 4D 6S 8H", "TC");
+  strictEqual(b.total, 0);
+  deepStrictEqual(b.lines, []);
+});
+check("calculator: 28 -- four of a kind (six pairs) and the fifteens", () => {
+  const b = H("5H 5D 5C 5S", "JD");
+  strictEqual(b.total, 28);
+  deepStrictEqual(b.lines.map((l) => [l.label, l.points, l.combos.length]), [["Fifteens", 16, 8], ["Pairs", 12, 6]]);
+});
+check("calculator: runs are one category -- each run listed with its own cards, pairs on their own line", () => {
+  const show = (b: HandBreakdown) => b.lines.filter((l) => l.category === "runs" || l.category === "pairs").map((l) => [l.label, l.points, l.combos.length]);
+  // 3-4-4-5: two runs of 3 (one with each 4) = Runs 6, and the pair of 4s = Pairs 2. Never "double run".
+  let b = H("3H 4D 4S 5C", "KD");
+  deepStrictEqual(show(b), [["Pairs", 2, 1], ["Runs", 6, 2]]);
+  deepStrictEqual(sym(b, "runs"), ["3♥+4♦+5♣", "3♥+4♠+5♣"]);
+  // 3-4-4-4-5: three runs of 3 = Runs 9; three of a kind = 3 pairs = Pairs 6.
+  b = H("3H 4D 4C 4S", "5D");
+  deepStrictEqual(show(b), [["Pairs", 6, 3], ["Runs", 9, 3]]);
+  // 3-3-4-4-5: four runs of 3 = Runs 12; two pairs = Pairs 4.
+  b = H("3H 3D 4C 4S", "5D");
+  deepStrictEqual(show(b), [["Pairs", 4, 2], ["Runs", 12, 4]]);
+  // A run of 4 and a run of 5: one run each, worth its length.
+  b = H("3H 4D 5C 6S", "KD");
+  deepStrictEqual(show(b), [["Runs", 4, 1]]);
+  deepStrictEqual(sym(b, "runs"), ["3♥+4♦+5♣+6♠"]);
+  b = H("AH 2D 3C 4S", "5D");
+  deepStrictEqual(show(b), [["Runs", 5, 1]]);
+  deepStrictEqual(sym(b, "runs"), ["A♥+2♦+3♣+4♠+5♦"]);
+  // 3-4-5-6-6: two runs of 4 = Runs 8, Pairs 2.
+  b = H("3H 4D 5C 6S", "6D");
+  deepStrictEqual(show(b), [["Pairs", 2, 1], ["Runs", 8, 2]]);
+  // A run ending at the king.
+  deepStrictEqual(show(H("JH QD KC 2S", "4D")), [["Runs", 3, 1]]);
+  // Only the five category names, ever.
+  strictEqual(
+    [b, H("5H 5D 5C JS", "5S"), H("2H 4H 6H 8H", "TH")].every((x) =>
+      x.lines.every((l) => ["Fifteens", "Pairs", "Runs", "Flush", "Nobs"].includes(l.label))
+    ),
+    true
+  );
+});
+check("calculator: 4-card vs 5-card flush, and a crib's 4-card flush scores 0", () => {
+  deepStrictEqual(lineOf(H("2H 4H 6H 8H", "TC"), "flush"), {
+    category: "flush", label: "Flush", points: 4, combos: [["2H", "4H", "6H", "8H"]],
+  });
+  strictEqual(lineOf(H("2H 4H 6H 8H", "TH"), "flush")!.points, 5);
+  strictEqual(lineOf(H("2H 4H 6H 8H", "TH"), "flush")!.combos[0].length, 5);
+  strictEqual(lineOf(H("2H 4H 6H 8H", "TC", true), "flush"), undefined);
+  strictEqual(H("2H 4H 6H 8H", "TC", true).total, 0);
+  strictEqual(lineOf(H("2H 4H 6H 8H", "TH", true), "flush")!.points, 5);
+});
+check("calculator: nobs is the hand's jack of the starter's suit; a jack starter is not nobs", () => {
+  const b = H("JH 2C 4D 6S", "8H");
+  deepStrictEqual(lineOf(b, "nobs"), { category: "nobs", label: "Nobs", points: 1, combos: [["JH", "8H"]] });
+  strictEqual(lineOf(H("2C 4D 6S 8H", "JH"), "nobs"), undefined);
+});
+check("calculator: card names for screen readers", () => {
+  strictEqual(cardName("AC"), "Ace of clubs");
+  strictEqual(cardName("TD"), "Ten of diamonds");
+  strictEqual(cardName("QH"), "Queen of hearts");
+  strictEqual(cardName("7S"), "Seven of spades");
+});
+check("calculator: 40,000 random deals -- the pieces add up to scoreHand, as a hand and as a crib", () => {
+  let seed = 20261112;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const deck = ["S", "H", "D", "C"].flatMap((s) => ["A", "2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K"].map((r) => r + s));
+  for (let n = 0; n < 20000; n++) {
+    const pick: string[] = [];
+    while (pick.length < 5) {
+      const card = deck[Math.floor(rand() * 52)];
+      if (!pick.includes(card)) pick.push(card);
+    }
+    for (const crib of [false, true]) {
+      const hand = pick.slice(0, 4);
+      const want = scoreHand(hand, pick[4], crib);
+      const got = handBreakdown(hand, pick[4], crib);
+      strictEqual(got.total, want.points, pick.join(" "));
+      strictEqual(got.lines.reduce((sum, l) => sum + l.points, 0), want.points, pick.join(" "));
+      const pts = (c: string) => lineOf(got, c)?.points ?? 0;
+      const count = (c: string) => lineOf(got, c)?.combos.length ?? 0;
+      strictEqual(count("fifteens") * 2, want.fifteens, `fifteens ${pick.join(" ")}`);
+      strictEqual(count("pairs") * 2, want.pairs, `pairs ${pick.join(" ")}`);
+      const runs = lineOf(got, "runs");
+      strictEqual(runs ? runs.combos.length * runs.combos[0].length : 0, want.runs, `runs ${pick.join(" ")}`);
+      strictEqual(lineOf(got, "flush")?.combos[0].length ?? 0, want.flush, `flush ${pick.join(" ")}`);
+      strictEqual(pts("nobs"), want.nobs);
+      strictEqual(got.lines.every((l) => l.points > 0), true);
+      strictEqual(got.lines.every((l) => ["Fifteens", "Pairs", "Runs", "Flush", "Nobs"].includes(l.label)), true);
+    }
+  }
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

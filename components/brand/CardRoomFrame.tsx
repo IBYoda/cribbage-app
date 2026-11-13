@@ -20,6 +20,8 @@ export function CardRoomFrame({
   backHome = true,
   followDeviceScheme = false,
   compact = false,
+  wide = false,
+  edgeToEdge = false,
 }: {
   title?: string;
   children: ReactNode;
@@ -30,11 +32,18 @@ export function CardRoomFrame({
   // the taller pages -- Start a Table, the opponent chooser -- so they fit a
   // phone screen without scrolling. Off: exactly as before.
   compact?: boolean;
+  // A wider page (768px instead of 448px), for the Hand Calculator's rows of
+  // 13 cards on a big screen. Off: exactly as before.
+  wide?: boolean;
+  // On a phone, an 8px side margin instead of 20px, so the panel (and the
+  // Hand Calculator's fan of 13 cards) gets as much of the width as it can.
+  // From 640px up, the usual margin. Off: exactly as before.
+  edgeToEdge?: boolean;
 }) {
   return (
     <div className="card-room" data-scheme={followDeviceScheme ? undefined : "dark"}>
       <main
-        className={`mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center px-5 ${
+        className={`mx-auto flex w-full ${wide ? "max-w-3xl" : "max-w-md"} flex-1 flex-col items-center justify-center ${edgeToEdge ? "px-2 sm:px-5" : "px-5"} ${
           compact ? "gap-4 py-3" : "gap-6 py-8"
         }`}
       >
