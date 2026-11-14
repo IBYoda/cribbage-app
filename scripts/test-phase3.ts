@@ -3775,6 +3775,32 @@ check("sounds: the speaker sits above the deal overlay, so it works mid-deal", (
   strictEqual(readFileSync("components/table/SoundToggle.tsx", "utf8").includes('className="sound-toggle '), true);
 });
 
+// THE HEADER (header-room): Hide counts in the "⋯" menu, no Muggins label
+// on the right, and "Reconnecting..." a dot on narrow screens.
+check("header: Hide counts sits in an accessible ⋯ menu that opens over the speaker", () => {
+  const src = readFileSync("components/table/CountsToggle.tsx", "utf8");
+  for (const needle of ['aria-haspopup="true"', "aria-expanded={open}", 'aria-label="Table options"', 'role="menu"', 'role="menuitem"', "min-h-10", '"Escape"', "pointerdown"]) {
+    strictEqual(src.includes(needle), true, needle);
+  }
+  // Locked (Muggins): nothing in the header -- the tag line says Self-Scoring.
+  strictEqual(src.includes("if (locked) return null;"), true);
+  strictEqual(src.includes("Self-Scoring (Muggins)"), false);
+  // The popover sits above the speaker, which sits above the deal overlay.
+  const css = readFileSync("app/globals.css", "utf8");
+  const speaker = Number(css.match(/\.sound-toggle \{[^}]*z-index: (\d+)/)?.[1]);
+  const popover = Number(src.match(/z-\[(\d+)\]/)?.[1]);
+  strictEqual(popover > speaker, true, `${popover} > ${speaker}`);
+});
+check("header: Reconnecting is a dot under 400px, the words kept for screen readers", () => {
+  const src = readFileSync("components/table/ReconnectingNote.tsx", "utf8");
+  for (const needle of ['role="status"', 'title="Reconnecting..."', "max-[399px]:sr-only", "min-[400px]:hidden", "max-[399px]:hidden"]) {
+    strictEqual(src.includes(needle), true, needle);
+  }
+  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  strictEqual(page.includes('realtimeStatus === "disconnected" && <ReconnectingNote beside={leaveConfirming} />'), true);
+  strictEqual(page.includes(">Reconnecting...</span>"), false);
+});
+
 check("sounds: a 19 hand has its own clip list, and SHOT! stays in the skunk tier", () => {
   deepStrictEqual(CORE_SOUNDS.zeroHand, ["/sounds/skunk-3-shot.mp3"]);
   strictEqual(CORE_SOUNDS.skunk.includes("/sounds/skunk-3-shot.mp3"), true);
