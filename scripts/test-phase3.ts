@@ -53,6 +53,8 @@ import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_
 import { godLossAlt, godLossSplash, hideRejoinedScores, lossTier, scoreFromThisGame } from "../lib/resultScores";
 import {
   BURST_WINDOW_MS,
+  CARD_FADE_IN_S,
+  CARD_TICK_S,
   CORE_SOUNDS,
   DEFAULT_SOUND_VOLUME,
   SHUFFLE_LEAD_MS,
@@ -63,6 +65,7 @@ import {
   SOUND_SET_MAX_BYTES,
   SOUND_VOLUME_KEY,
   audioRepair,
+  clipTiming,
   clipsFor,
   cueAllowed,
   heardZeroKeys,
@@ -3419,6 +3422,29 @@ check("sounds: no event plays points -- nothing exists for a score to trigger", 
 check("sounds: the deal's lead-in is the shuffle's length, and a burst is a few ms", () => {
   strictEqual(SHUFFLE_LEAD_MS, 650);
   strictEqual(BURST_WINDOW_MS <= 50, true);
+});
+check("sounds: the card clip starts so its tick meets the card landing", () => {
+  const card = CORE_SOUNDS.card[0];
+  // The tick's onset in card.mp3 is ~358 ms of 460: the offset stops just short.
+  strictEqual(CARD_TICK_S > 0.3 && CARD_TICK_S < 0.358, true);
+  strictEqual(CARD_FADE_IN_S > 0 && CARD_FADE_IN_S <= 0.358 - CARD_TICK_S, true);
+  // Already on screen (a pegging play, a cut): the slide is skipped.
+  deepStrictEqual(clipTiming(card, 0), { delayS: 0, offsetS: CARD_TICK_S });
+  deepStrictEqual(clipTiming(card, -0.04), { delayS: 0, offsetS: CARD_TICK_S });
+  // A toss's flight: the whole clip, held back so the tick is at the landing.
+  const toss = clipTiming(card, 0.55);
+  strictEqual(toss.offsetS, 0);
+  strictEqual(Math.abs(toss.delayS + CARD_TICK_S - 0.55) < 1e-9, true);
+  // Landing sooner than the tick: at once, part of the slide skipped.
+  const soon = clipTiming(card, 0.1);
+  strictEqual(soon.delayS, 0);
+  strictEqual(Math.abs(soon.offsetS - (CARD_TICK_S - 0.1)) < 1e-9, true);
+  // Every other clip plays from its start, at once, as before.
+  for (const url of clipsFor(null).filter((u) => u !== card)) {
+    deepStrictEqual(clipTiming(url, 0), { delayS: 0, offsetS: 0 });
+    deepStrictEqual(clipTiming(url, 0.55), { delayS: 0, offsetS: 0 });
+  }
+  deepStrictEqual(clipTiming("/boards/x/card.mp3", 0.55), { delayS: 0, offsetS: 0 });
 });
 check("sounds: soundFor falls back to the core sound; no board has sounds yet", () => {
   for (const event of SOUND_EVENTS) {

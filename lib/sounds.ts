@@ -61,6 +61,35 @@ export const SHUFFLE_LEAD_MS = 650;
 // Two discarded cards, a beat apart: the toss's own stagger (TOSS_STAGGER_MS).
 export const DISCARD_GAP_MS = 90;
 
+// THE CARD'S TICK. card.mp3 (460 ms) is a short slide, then the sharp tick of
+// the card landing: its onset is at ~358 ms, its peak ~359 ms, ~100 ms of
+// tail after. The tick is what should meet the card on screen, so the clip
+// is started at an offset into it (the file itself is never edited: it has a
+// licence). TUNE HERE: raise it to start nearer the tick, lower it to keep
+// more of the slide. 0.35 leaves ~8 ms of quiet scrape before the onset, so
+// the short fade-in (CARD_FADE_IN_S) never touches the tick itself.
+export const CARD_TICK_S = 0.35;
+// Starting mid-clip, the first few ms are faded in, so it can't click.
+export const CARD_FADE_IN_S = 0.004;
+
+// The clips that have a tick to line up, and where it is. Only the core card
+// clip: a board's own card clip (soundFor) plays from its start, at once, as
+// it always has.
+const CLIP_TICK_S: Record<string, number> = { [clip("card")]: CARD_TICK_S };
+
+// WHEN A CARD CLIP STARTS, so its tick meets the card landing landInS from
+// now (0: it's on screen already, as a pegging play or a cut is). Landing
+// later than the tick is into the clip: the whole clip, held back, so the
+// slide plays as the card flies (a discard tossed to the crib). Sooner: at
+// once, skipping that much of the slide (all of it at 0). A clip with no
+// known tick plays from its start, at once.
+export function clipTiming(url: string, landInS: number): { delayS: number; offsetS: number } {
+  const tick = CLIP_TICK_S[url];
+  if (tick === undefined) return { delayS: 0, offsetS: 0 };
+  const land = Math.max(0, landInS);
+  return land >= tick ? { delayS: land - tick, offsetS: 0 } : { delayS: 0, offsetS: tick - land };
+}
+
 // How long the player collects cues before it plays the burst's winner.
 export const BURST_WINDOW_MS = 40;
 
@@ -224,7 +253,9 @@ export const SOUND_PRIORITY: Record<SoundEvent, number> = {
   card: 0,
 };
 
-export type SoundCue = { steps: { event: SoundEvent; url: string }[]; gapMs: number | null };
+// landInMs: card cues only, when the (first) card lands on screen, from the
+// moment the cue is asked for; 0 or missing, it's there already (clipTiming).
+export type SoundCue = { steps: { event: SoundEvent; url: string }[]; gapMs: number | null; landInMs?: number };
 
 const cuePriority = (cue: SoundCue) => Math.max(...cue.steps.map((s) => SOUND_PRIORITY[s.event]));
 

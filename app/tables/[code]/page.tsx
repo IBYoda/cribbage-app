@@ -27,7 +27,7 @@ import { useTableSounds } from "@/components/table/useTableSounds";
 import { preloadFullWings, useWingsOn } from "@/components/Wings";
 import { getGodWins, type GodWins } from "@/lib/godWins";
 import { displayTier, initSeenTier, isCreator, readSeenTier, shouldCelebrate, writeSeenTier, type GodWinsTier } from "@/lib/wings";
-import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, discardKeys, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
+import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
 import { mugginsPlateStates } from "@/lib/mugginsPlates";
@@ -78,6 +78,7 @@ import {
 } from "@/components/table/DealAnimation";
 import {
   STARTER_SLIDE_MS,
+  TOSS_CARD_MS,
   dealPlan,
   discardShown,
   fireDiscardShow,
@@ -2072,9 +2073,13 @@ export default function TablePage() {
           // heard instead (see soundCatchUpRef).
           if (!soundCatchUpRef.current) {
             for (const key of cutKeys(updatedGame.id, updatedGame.deal_cut)) tableSound.card(key);
+            // Another player's cards fly to the crib here when the toss is
+            // on, so the tick waits for them to land; mine are heard on the
+            // tap (handleDiscard), and this key stays quiet.
             const cards = sizesFor(updatedGame.players).discard;
-            for (const key of discardKeys(updatedGame.id, updatedGame.hand_no, updatedGame.discarded_by)) {
-              tableSound.card(key, cards);
+            for (const id of updatedGame.discarded_by ?? []) {
+              const landIn = id === myHandRef.current?.userId ? 0 : tableSound.tossLanding();
+              tableSound.card(discardKey(updatedGame.id, updatedGame.hand_no, id), cards, landIn);
             }
           }
 
@@ -2616,7 +2621,11 @@ export default function TablePage() {
     writeDiscardShown(handKey);
     // Its cards' sound, now that they're seen to go. The same key as the real
     // discard's, which stays quiet when it comes.
-    if (activeGame) tableSound.card(discardKey(activeGame.id, activeGame.hand_no, shownComputerId), sizes.discard);
+    // Landing as the toss below does, when it's thrown.
+    if (activeGame) {
+      const key = discardKey(activeGame.id, activeGame.hand_no, shownComputerId);
+      tableSound.card(key, sizes.discard, cardAnimationsOn ? TOSS_CARD_MS : 0);
+    }
     // Its two cards thrown to the crib, as a real discard is (animations on).
     if (cardAnimationsOn) {
       const id = `${handKey}:shown`;
@@ -2642,6 +2651,10 @@ export default function TablePage() {
     }
     setDiscardSeen(discardStep.seen);
   }
+  // Another player's discard lands here after the toss's flight while the
+  // tosses are on (the same rule as discardStep above), for the realtime
+  // handler's card sound. Idempotent: a value, not an event.
+  tableSound.setTossLanding(cardAnimationsOn && !dealInFlight ? TOSS_CARD_MS : 0);
   // A throw from an earlier hand can't still be in flight.
   if (tosses.some((t) => t.handKey !== dealHandKey)) {
     setTosses((current) => current.filter((t) => t.handKey === dealHandKey));
@@ -2649,6 +2662,17 @@ export default function TablePage() {
   // My discard, thrown as I tap Send to Crib: the picked cards fly from my
   // hand to the crib, turning face-down.
   const startMyToss = () => {
+    // My discard's sound, on the tap: its tick when my cards land in the
+    // crib (the toss's flight), or at once with no toss. The games row
+    // brings this same key back, so the event stays quiet here, as the cut's
+    // does; every other screen hears it from that row.
+    if (activeGame && canDiscard && selectedCards.length === sizes.discard) {
+      tableSound.card(
+        discardKey(activeGame.id, activeGame.hand_no, session.user.id),
+        selectedCards.length,
+        cardAnimationsOn && dealHandKey ? TOSS_CARD_MS : 0
+      );
+    }
     if (!cardAnimationsOn || !dealHandKey || !canDiscard) return;
     const id = `${dealHandKey}:mine`;
     const seat: TossSeat = {
