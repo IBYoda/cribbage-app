@@ -24,6 +24,8 @@ import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { SoundToggle } from "@/components/table/SoundToggle";
 import { ReconnectingNote } from "@/components/table/ReconnectingNote";
+import { useTableChat } from "@/components/table/useTableChat";
+import { ChatAnnouncer, ChatButton, ChatComposer, ChatStack } from "@/components/table/TableChat";
 import { useTableSounds } from "@/components/table/useTableSounds";
 import { preloadFullWings, useWingsOn } from "@/components/Wings";
 import { getGodWins, type GodWins } from "@/lib/godWins";
@@ -2317,6 +2319,33 @@ export default function TablePage() {
     },
   });
 
+  // TABLE CHAT (PRD item 39): only at an OPEN, HUMAN table (never a
+  // computer table) I am seated at, on the table screen (no error -- an
+  // ended table shows one -- and not mid-leave). The server's rules
+  // (chat_topic_allows) say the same; this keeps the channels from even
+  // being tried elsewhere. Off removes every channel and message.
+  const chatOn =
+    !!session &&
+    !!table &&
+    table.status === "open" &&
+    !table.computer_level &&
+    !error &&
+    leaveStatus !== "leaving" &&
+    members.some((m) => m.user_id === session.user.id);
+  const chat = useTableChat({
+    enabled: chatOn,
+    tableId: table?.id ?? null,
+    myUserId,
+    roster: members,
+  });
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState("");
+  const chatButtonRef = useRef<HTMLButtonElement>(null);
+  const closeChat = useCallback(() => {
+    setChatOpen(false);
+    chatButtonRef.current?.focus();
+  }, []);
+
   // .table-loading: painted in this device's cached surface from the first
   // paint (app/globals.css), so a refresh doesn't flash Classic.
   if (loading || !appearance.ready || toNickname) {
@@ -2992,6 +3021,18 @@ export default function TablePage() {
   // The header's controls -- the same in the square view's header.
   const headerRight = (
         <>
+          {/* CHAT, beside the speaker, the same size. Only while chat is
+              available (an open, human table I'm seated at, my channel
+              joined); not while Leave is asking to confirm. The composer
+              is a fixed bar at the top of the screen (a portal), and the
+              announcer reads new messages to a screen reader. */}
+          {chat.available && !leaveConfirming && (
+            <ChatButton open={chatOpen} onToggle={() => setChatOpen((o) => !o)} buttonRef={chatButtonRef} />
+          )}
+          {chat.available && chatOpen && (
+            <ChatComposer draft={chatDraft} onDraft={setChatDraft} onSend={chat.send} onClose={closeChat} />
+          )}
+          <ChatAnnouncer newest={chat.messages[0]} />
           {/* The quick mute. Not while Leave is asking to confirm, for the
               same reason as Hide counts. */}
           {!leaveConfirming && <SoundToggle />}
@@ -3055,10 +3096,21 @@ export default function TablePage() {
 
   // Overlays: never part of the flow, so they can't grow the table. The same
   // in the square view's middle.
+  // Chat's room in the middle: with no hand dealt and no result showing (the
+  // waiting room, a table waiting for a game) all of it below the banner;
+  // in a game, half of it and never over a control (ChatStack).
+  const chatRoom: "game" | "full" = inWaitingRoom || (!activeGame && !finishedGame) ? "full" : "game";
   const middleOverlays = (
     <>
+      {/* Incoming chat: cards at the top of the middle, newest on top. */}
+      <ChatStack
+        messages={chat.messages}
+        onDismiss={chat.dismiss}
+        onCloseAll={chat.closeAll}
+        room={chatRoom}
+      />
       {gameEndedNotice && (
-        <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">
+        <div data-table-notice="" className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">
           <span>{gameEndedNotice}</span>
           <button onClick={() => setGameEndedNotice(null)} className="tap-40 px-1 underline">
             Dismiss
