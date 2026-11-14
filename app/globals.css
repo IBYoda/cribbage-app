@@ -2723,3 +2723,46 @@ section.felt-panel {
     transition: none;
   }
 }
+
+/* TABLE CHAT (components/table/TableChat.tsx). A new card slides in a
+   little, unless reduced motion is asked for. During a deal the stack is
+   hidden: the deal overlay covers the screen and takes every tap (a tap
+   skips the deal), so a card under it couldn't be closed anyway; the cards
+   come back as the deal ends, and the announcer still speaks meanwhile. */
+@keyframes chat-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-card {
+    animation: chat-card-in 160ms ease-out;
+  }
+}
+/* The cards are a layer on <body> (above every table element), so the deal
+   reaches them with :has -- hidden while the cards fly in, back after. */
+body:has(.sq-dealing) .chat-stack {
+  visibility: hidden;
+}
+/* The middle out of sight: no cards over nothing. */
+.chat-stack[data-off] {
+  display: none;
+}
+/* A chat pill is drawn 32px tall and tapped 44px tall. */
+.chat-tap {
+  position: relative;
+}
+.chat-tap::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
+}

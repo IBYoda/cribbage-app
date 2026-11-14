@@ -318,6 +318,22 @@ import {
 } from "../lib/follows";
 import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
 import { scoreHand } from "../lib/scoring";
+import {
+  CHAT_LAYER_Z,
+  CHAT_MAX_CARDS,
+  CHAT_MAX_LENGTH,
+  CHAT_MEMORY,
+  addChatMessage,
+  chatSenderId,
+  chatStackRoom,
+  chatThrottleAllows,
+  chatTopic,
+  cleanChatText,
+  createChatThrottle,
+  createPerSenderThrottle,
+  visibleChatCards,
+  type ChatMessage,
+} from "../lib/tableChat";
 import { suitSymbol } from "../lib/cards";
 
 let passed = 0;
@@ -4518,6 +4534,194 @@ check("calculator: 40,000 random deals -- the pieces add up to scoreHand, as a h
       strictEqual(got.lines.every((l) => ["Fifteens", "Pairs", "Runs", "Flush", "Nobs"].includes(l.label)), true);
     }
   }
+});
+
+// TABLE CHAT (PRD item 39): lib/tableChat.ts, and the hook and UI around it.
+check("chat: the topic is chat:<table>:<sender>, both ids lowercased", () => {
+  const t = "1B4E28BA-2FA1-11D2-883F-0016D3CCA427";
+  const u = "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b";
+  strictEqual(chatTopic(t, u), "chat:1b4e28ba-2fa1-11d2-883f-0016d3cca427:6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b");
+  strictEqual(chatSenderId(chatTopic(t, u), t), u);
+  strictEqual(chatSenderId("realtime:" + chatTopic(t, u), t), u);
+  strictEqual(chatSenderId(chatTopic(t, u), u), null); // another table
+  strictEqual(chatSenderId(chatTopic(t, u) + "x", t), null);
+  strictEqual(chatSenderId("chat:not-a-uuid:" + u, t), null);
+});
+check("chat: cleanChatText trims, folds line breaks, strips controls, cuts to 140", () => {
+  const nl = String.fromCharCode(10);
+  const cr = String.fromCharCode(13);
+  const ls = String.fromCharCode(0x2028);
+  const rlo = String.fromCharCode(0x202e);
+  strictEqual(cleanChatText("  hello  "), "hello");
+  strictEqual(cleanChatText(`one${cr}${nl}${nl}  two${ls}three`), "one two three");
+  strictEqual(cleanChatText(`a${String.fromCharCode(0)}b${String.fromCharCode(7)}c${String.fromCharCode(9)}d${String.fromCharCode(0x7f)}e`), "abcde");
+  strictEqual(cleanChatText(`gg ${rlo}wp`), "gg wp");
+  strictEqual(cleanChatText("x".repeat(200))?.length, 140);
+  strictEqual(CHAT_MAX_LENGTH, 140);
+  // Emoji count as one character each, and are never cut in half.
+  const emoji = String.fromCodePoint(0x1f0cf);
+  strictEqual(Array.from(cleanChatText(emoji.repeat(150)) ?? "").length, 140);
+  strictEqual(cleanChatText(`${"y".repeat(139)} z`), "y".repeat(139)); // cut, then trimmed
+  for (const bad of [null, undefined, 42, {}, ["hi"], "", "   ", `${nl}${nl}`, String.fromCharCode(0)]) {
+    strictEqual(cleanChatText(bad), null, JSON.stringify(bad));
+  }
+  // Markup stays plain text (React draws it as text, never as HTML).
+  strictEqual(cleanChatText("<b>hi</b> https://x.y"), "<b>hi</b> https://x.y");
+});
+check("chat: the throttle allows 1 per 2 s and 3 per 10 s", () => {
+  const t = createChatThrottle();
+  strictEqual(t.take(0), true);
+  strictEqual(t.take(1999), false); // inside 2 s
+  strictEqual(t.take(2000), true);
+  strictEqual(t.take(4000), true);
+  strictEqual(t.take(6000), false); // a 4th inside 10 s
+  strictEqual(t.take(9999), false);
+  strictEqual(t.take(10000), true); // the first has aged out
+  strictEqual(chatThrottleAllows([], 0), true);
+  strictEqual(chatThrottleAllows([0, 2500, 5000], 7600), false);
+  strictEqual(chatThrottleAllows([0, 2500, 5000], 10001), true);
+});
+check("chat: the receiving throttle counts each sender apart and drops extras", () => {
+  const r = createPerSenderThrottle();
+  strictEqual(r.take("a", 0), true);
+  strictEqual(r.take("b", 0), true);
+  strictEqual(r.take("a", 500), false);
+  strictEqual(r.take("b", 2000), true);
+  strictEqual(r.take("a", 2000), true);
+});
+check("chat: newest first, memory capped, at most 3 cards and +N more", () => {
+  let list: ChatMessage[] = [];
+  for (let i = 0; i < CHAT_MEMORY + 5; i++) {
+    list = addChatMessage(list, { id: `m${i}`, senderId: "s", name: "N", avatarUrl: null, text: `t${i}`, at: i });
+  }
+  strictEqual(list.length, CHAT_MEMORY);
+  strictEqual(list[0].id, `m${CHAT_MEMORY + 4}`);
+  const v = visibleChatCards(list);
+  strictEqual(v.shown.length, CHAT_MAX_CARDS);
+  strictEqual(v.more, CHAT_MEMORY - CHAT_MAX_CARDS);
+  deepStrictEqual(visibleChatCards(list.slice(0, 2)), { shown: list.slice(0, 2), more: 0 });
+});
+check("chat: nothing reads a sender name or id from the message payload", () => {
+  const sources = ["components/table/useTableChat.ts", "components/table/TableChat.tsx", "lib/tableChat.ts"].map((f) =>
+    readFileSync(f, "utf8")
+  );
+  const hook = sources[0];
+  for (const src of sources) {
+    for (const bad of [/payload\??\.(name|nickname|sender|senderId|sender_id|user|userId|user_id|avatar|avatarUrl|avatar_url|id)\b/, /payload\s*as\s*\{[^}]*(name|sender|user|avatar)/]) {
+      strictEqual(bad.test(src), false, `${bad} in chat code`);
+    }
+  }
+  // The only field read from a payload is text, and the sender is the
+  // channel's own player, looked up in the roster.
+  strictEqual(hook.includes("(payload as { text?: unknown }).text"), true);
+  strictEqual(hook.includes("rosterRef.current.find((m) => m.user_id === senderId)"), true);
+  strictEqual(hook.includes("payload: { text }"), true); // what is sent
+  strictEqual(hook.includes("private: true, broadcast: { self: false, ack: true }"), true);
+  strictEqual(hook.includes("supabase.realtime.setAuth()"), true);
+  // The table page never passes a computer table or an unseated player.
+  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  for (const needle of ['table.status === "open"', "!table.computer_level", "members.some((m) => m.user_id === session.user.id)", "messages={chat.messages}"]) {
+    strictEqual(page.includes(needle), true, needle);
+  }
+  // Text is drawn as text: no HTML injection anywhere in the chat UI.
+  strictEqual(sources[1].includes("dangerouslySetInnerHTML"), false);
+});
+
+// The fold bug (3-player test, Nov 14): after a player left, the amber
+// "game was ended" banner's Dismiss counted as a control at the very top
+// of the middle, so the room came out as 0 and every message folded -- on
+// both screens -- with the fold line in the banner's row.
+check("chat: the banner never folds the stack; the cards go below it; the waiting room has the whole middle", () => {
+  const middle = { top: 100, bottom: 700 }; // 600 tall
+  const banner = { top: 100, bottom: 140 };
+  const dismiss = { top: 104, bottom: 136 };
+  const seat = { top: 150, bottom: 190 }; // a waiting-room seat button
+  // The waiting room: below the banner, all the rest, controls or not.
+  let room = chatStackRoom({ middle, notices: [banner], controls: [dismiss, seat], mode: "full", expanded: false });
+  deepStrictEqual(room, { top: 144, budget: 552, limit: 552 });
+  // No banner: from the middle's top.
+  room = chatStackRoom({ middle, notices: [], controls: [seat], mode: "full", expanded: false });
+  strictEqual(room.top, 100);
+  strictEqual(room.budget, 596);
+  strictEqual(room.limit, 596);
+  // In a game, the banner's own Dismiss (above the cards' top) is never in
+  // the way: half the middle, the newest card down to the middle's bottom.
+  room = chatStackRoom({ middle, notices: [banner], controls: [dismiss], mode: "game", expanded: false });
+  deepStrictEqual(room, { top: 144, budget: 300, limit: 552 });
+  // A real control lower down limits the room (Next Hand at 260).
+  room = chatStackRoom({ middle, notices: [], controls: [{ top: 260, bottom: 300 }], mode: "game", expanded: false });
+  deepStrictEqual(room, { top: 100, budget: 156, limit: 156 });
+  // Only a control right at the cards' top leaves truly no room: that folds.
+  room = chatStackRoom({ middle, notices: [], controls: [{ top: 102, bottom: 140 }], mode: "game", expanded: false });
+  strictEqual(room.budget, 0);
+  strictEqual(room.limit, 0);
+  // A control below the half still stops the newest card (it once ran on
+  // over Confirm Count at 320 px).
+  room = chatStackRoom({ middle, notices: [], controls: [{ top: 420, bottom: 460 }], mode: "game", expanded: false });
+  deepStrictEqual(room, { top: 100, budget: 300, limit: 316 });
+  // The banner never pushes the cards past the middle's bottom.
+  room = chatStackRoom({ middle: { top: 100, bottom: 300 }, notices: [{ top: 100, bottom: 240 }], controls: [], mode: "game", expanded: false });
+  deepStrictEqual(room, { top: 244, budget: 52, limit: 52 });
+  // Show tapped: the half, controls or not.
+  room = chatStackRoom({ middle, notices: [], controls: [{ top: 102, bottom: 140 }], mode: "game", expanded: true });
+  strictEqual(room.budget, 300);
+  strictEqual(room.limit, 596);
+  // The table page marks the banner and gives the waiting room the whole
+  // middle; the stack skips a notice's controls.
+  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  strictEqual(/<div data-table-notice="" [^>]*>\s*<span>\{gameEndedNotice\}/.test(page), true, "banner marked");
+  strictEqual(page.includes('const chatRoom: "game" | "full" = inWaitingRoom || (!activeGame && !finishedGame) ? "full" : "game";'), true);
+  strictEqual(page.includes("room={chatRoom}"), true);
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes('middle.querySelectorAll("[data-table-notice]")'), true);
+  strictEqual(ui.includes("if (notices.some((n) => n.contains(control))) continue;"), true);
+});
+
+// Stacking (same test): the cards were drawn behind the crib and the starter
+// that hang over the top of the middle (.sq-opponent-row, z 5, over the
+// middle's z 4). Now they are a layer on <body>, above every table z-index.
+check("chat: the cards are a layer above every table element, below the deal and the composer", () => {
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  const stack = ui.slice(ui.indexOf("export function ChatStack"), ui.indexOf("export function ChatAnnouncer"));
+  strictEqual(/createPortal\(\s*<div\s+ref=\{stackRef\}/.test(stack), true, "the stack is a portal");
+  strictEqual(stack.includes("document.body"), true);
+  strictEqual(stack.includes("chat-stack pointer-events-none fixed"), true);
+  strictEqual(stack.includes("style={{ zIndex: CHAT_LAYER_Z }}"), true);
+  // Every z-index the table draws with, in the CSS and the table's
+  // components: all below the chat layer, except the few meant to be above
+  // it -- the deal overlay, the header buttons over it, the counts menu, the
+  // composer.
+  const above = new Map([
+    [".deal-overlay", 60],
+    [".sound-toggle", 61],
+    ["CountsToggle menu", 62],
+    ["composer", 70],
+  ]);
+  const sources = [
+    readFileSync("app/globals.css", "utf8"),
+    readFileSync("app/tables/[code]/page.tsx", "utf8"),
+    ...readdirSync("components/table")
+      .filter((f) => f.endsWith(".tsx") && f !== "TableChat.tsx")
+      .map((f) => readFileSync(`components/table/${f}`, "utf8")),
+  ];
+  const allowed = new Set(above.values());
+  for (const src of sources) {
+    for (const m of src.matchAll(/z-index:\s*(\d+)|\bz-\[(\d+)\]|\bz-(\d+)\b/g)) {
+      const z = Number(m[1] ?? m[2] ?? m[3]);
+      if (allowed.has(z)) continue;
+      strictEqual(z < CHAT_LAYER_Z, true, `z ${z} (${m[0]}) is not below the chat layer`);
+    }
+  }
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/\.deal-overlay \{[^}]*z-index: 60;/.test(css), true);
+  strictEqual(CHAT_LAYER_Z > 40 && CHAT_LAYER_Z < 60, true); // over the splash, under the deal
+  strictEqual(ui.includes("z-[70]"), true); // the composer
+  // The deal still hides the cards (they no longer sit inside .sq-dealing).
+  strictEqual(/body:has\(\.sq-dealing\) \.chat-stack \{\s*visibility: hidden;/.test(css), true);
+  // Rounded: cards like the app's panels (12px), pills fully round.
+  strictEqual(stack.includes("chat-card pointer-events-auto flex items-start gap-2 rounded-xl"), true);
+  strictEqual(stack.includes("rounded-full"), true);
+  strictEqual(stack.includes("h-11 w-11"), true); // the x: 44px
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
