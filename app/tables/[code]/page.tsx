@@ -23,6 +23,7 @@ import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { SoundToggle } from "@/components/table/SoundToggle";
+import { ReconnectingNote } from "@/components/table/ReconnectingNote";
 import { useTableSounds } from "@/components/table/useTableSounds";
 import { preloadFullWings, useWingsOn } from "@/components/Wings";
 import { getGodWins, type GodWins } from "@/lib/godWins";
@@ -2994,9 +2995,10 @@ export default function TablePage() {
           {/* The quick mute. Not while Leave is asking to confirm, for the
               same reason as Hide counts. */}
           {!leaveConfirming && <SoundToggle />}
-          {/* Hide counts, saved at once. Not while Leave is asking to
-              confirm, so the header's right side never grows past one
-              line. On a Muggins table it is locked: nothing to show, so
+          {/* Hide counts, in the "⋯" menu, saved at once. Not while Leave
+              is asking to confirm, so the header's right side never grows
+              past one line. On a Muggins table it is locked and shows
+              nothing (the tag line under the header says Self-Scoring):
               nothing to hide, and nothing is saved. */}
           {appearance.ready && !leaveConfirming && (
             <CountsToggle
@@ -3011,9 +3013,10 @@ export default function TablePage() {
               }
             />
           )}
-          {realtimeStatus === "disconnected" && (
-            <span className="text-xs text-amber-600 dark:text-amber-500 surface:text-amber-200">Reconnecting...</span>
-          )}
+          {/* Under 400px wide a dot, the words for screen readers and as
+              its tooltip: the full words don't fit there beside Leave (and
+              a chat icon later). */}
+          {realtimeStatus === "disconnected" && <ReconnectingNote beside={leaveConfirming} />}
           {leaveConfirming ? (
             <>
               <button
