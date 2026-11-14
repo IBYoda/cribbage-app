@@ -3,8 +3,10 @@
 import { useEffect, useSyncExternalStore } from "react";
 import {
   BURST_WINDOW_MS,
+  CARD_FADE_IN_S,
   DEFAULT_SOUND_VOLUME,
   audioRepair,
+  clipTiming,
   cueAllowed,
   pickBurst,
   readSoundOn,
@@ -117,46 +119,71 @@ export function canPlayNow(urls: string[] = []): boolean {
   });
 }
 
-function startClip(ctx: AudioContext, url: string, at: number) {
+// offset: seconds into the clip (the card's tick, clipTiming). Played to its
+// end either way; a start mid-clip fades in over CARD_FADE_IN_S so it can't
+// click, through a gain of its own, so a quick second card is its own source
+// and fade and never cuts the first.
+function startClip(ctx: AudioContext, url: string, at: number, offset = 0) {
   const buffer = decoded.get(url);
   if (!buffer || !master) return;
   const source = ctx.createBufferSource();
   source.buffer = buffer;
-  source.connect(master);
+  let fade: GainNode | null = null;
+  if (offset > 0) {
+    fade = ctx.createGain();
+    fade.gain.setValueAtTime(0, at);
+    fade.gain.linearRampToValueAtTime(1, at + CARD_FADE_IN_S);
+    source.connect(fade);
+    fade.connect(master);
+  } else {
+    source.connect(master);
+  }
   const entry = { source, url };
   playing.add(entry);
   source.onended = () => {
     source.disconnect();
+    fade?.disconnect();
     playing.delete(entry);
   };
-  source.start(at);
+  source.start(at, Math.min(offset, buffer.duration));
 }
 
-// A cue's steps, together: one after the other, or a set gap apart.
-function startCue(cue: SoundCue) {
+// A cue's steps, together: one after the other, or a set gap apart. A card
+// cue is moved as a whole so its first tick meets the first card landing
+// (clipTiming); the gap keeps the rest with theirs. elapsedMs: how long the
+// cue waited for its burst, already gone from its landInMs.
+function startCue(cue: SoundCue, elapsedMs = 0) {
   const urls = cue.steps.map((s) => s.url);
   if (!canPlayNow(urls) || !context || !master) return;
   master.gain.value = readSoundVolume();
-  let at = context.currentTime;
-  for (const { url } of cue.steps) {
-    startClip(context, url, at);
+  const first = cue.steps[0];
+  const { delayS, offsetS } =
+    first?.event === "card"
+      ? clipTiming(first.url, ((cue.landInMs ?? 0) - elapsedMs) / 1000)
+      : { delayS: 0, offsetS: 0 };
+  let at = context.currentTime + delayS;
+  for (const { url, event } of cue.steps) {
+    startClip(context, url, at, event === "card" ? offsetS : 0);
     at += cue.gapMs === null ? (decoded.get(url)?.duration ?? 0) : cue.gapMs / 1000;
   }
 }
 
 // THE BURST: cues landing together wait out a moment, then only the winner
-// plays (pickBurst).
+// plays (pickBurst). Each remembers when it was asked for (landInMs counts
+// from then).
 let pending: SoundCue[] = [];
+const askedAt = new WeakMap<SoundCue, number>();
 let burstTimer: number | null = null;
 
 export function playCue(cue: SoundCue) {
   pending.push(cue);
+  askedAt.set(cue, performance.now());
   if (burstTimer !== null) return;
   burstTimer = window.setTimeout(() => {
     const winner = pickBurst(pending);
     pending = [];
     burstTimer = null;
-    if (winner) startCue(winner);
+    if (winner) startCue(winner, performance.now() - (askedAt.get(winner) ?? performance.now()));
   }, BURST_WINDOW_MS);
 }
 

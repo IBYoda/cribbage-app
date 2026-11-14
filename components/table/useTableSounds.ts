@@ -57,6 +57,10 @@ export function useTableSounds(options: TableSoundOptions) {
   // The deal's lead-in by key, so a second run of the animation's start (dev's
   // double effects, a remount) gets the same answer and plays nothing.
   const dealLeadRef = useRef(new Map<string, number>());
+  // How long another player's discard takes to land here: the toss's flight
+  // while this screen throws discards to the crib, else 0. Set as the page
+  // renders (tossLanding), read by its realtime handler.
+  const tossLandingRef = useRef(0);
 
   return useMemo(() => {
     // True if this key is new (and marks it handled).
@@ -71,9 +75,13 @@ export function useTableSounds(options: TableSoundOptions) {
       writeLastClip(event, url);
       return url;
     };
-    const card = (count: number) => {
+    const card = (count: number, landInMs: number) => {
       const url = urlFor("card");
-      playCue({ steps: Array.from({ length: count }, () => ({ event: "card" as const, url })), gapMs: DISCARD_GAP_MS });
+      playCue({
+        steps: Array.from({ length: count }, () => ({ event: "card" as const, url })),
+        gapMs: DISCARD_GAP_MS,
+        landInMs,
+      });
     };
 
     return {
@@ -81,9 +89,19 @@ export function useTableSounds(options: TableSoundOptions) {
       heard(keys: string[]) {
         for (const key of keys) handledRef.current.add(key);
       },
-      // count: a discard's cards, one sound each.
-      card(key: string, count = 1) {
-        if (claim(key)) card(count);
+      // count: a discard's cards, one sound each. landInMs: when the first
+      // card lands on screen, from now, so the clip's tick meets it
+      // (clipTiming, lib/sounds.ts): a toss's flight; 0, it's there already.
+      card(key: string, count = 1, landInMs = 0) {
+        if (claim(key)) card(count, landInMs);
+      },
+      // What another player's discard would take to land, as the page now
+      // shows it (TOSS_CARD_MS with the discard toss on, else 0).
+      setTossLanding(ms: number) {
+        tossLandingRef.current = ms;
+      },
+      tossLanding(): number {
+        return tossLandingRef.current;
       },
       shuffle(key: string) {
         if (claim(key)) playCue({ steps: [{ event: "shuffle", url: urlFor("shuffle") }], gapMs: null });
