@@ -29,7 +29,7 @@ import { ChatAnnouncer, ChatButton, ChatComposer, ChatStack } from "@/components
 import { useTableSounds } from "@/components/table/useTableSounds";
 import { preloadFullWings, useWingsOn } from "@/components/Wings";
 import { getGodWins, type GodWins } from "@/lib/godWins";
-import { displayTier, initSeenTier, isCreator, readSeenTier, shouldCelebrate, writeSeenTier, type GodWinsTier } from "@/lib/wings";
+import { claimWingsMoment, displayTier, initSeenTier, type GodWinsTier } from "@/lib/wings";
 import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
@@ -659,8 +659,10 @@ export default function TablePage() {
   // THE WINGS MILESTONE: is this won game my moment? Claimed first, so the live
   // win and the catch-up on its result can't both ask. Past the cache, because
   // this win has just changed the count. The seen tier is written before the
-  // moment shows, so a refresh can't show it again; a device that has never
-  // read my count just notes it, silently (shouldCelebrate, lib/wings.ts).
+  // moment shows, so a refresh can't show it again, and Home won't either
+  // (claimWingsMoment, lib/wings.ts: the seen tier is the same one). A device
+  // that has never read my count notes it first: silently, except on one of
+  // the ten-tier ladder's new milestones, whose splash it leaves due.
   const wingsClaimRef = useRef(new Set<string>());
   const wingsMoment = useCallback(
     async (gameId: string) => {
@@ -671,19 +673,14 @@ export default function TablePage() {
       const mine = found.get(myId);
       if (!mine) return null;
       applyWings(found);
-      if (!shouldCelebrate(mine.count, readSeenTier(myId)) || !mine.tier) {
-        initSeenTier(myId, mine.count);
-        return null;
-      }
-      writeSeenTier(myId, mine.tier);
-      // The creator's wings always show as the creator's: no splash for a God
-      // tier they never see. The seen tier above still moves, as for anyone.
-      if (isCreator(myId)) return null;
+      // Claimed (the seen tier written) before it shows; null for the creator.
+      const tier = claimWingsMoment(myId, mine.count);
+      if (!tier) return null;
       const [{ data: profile }] = await Promise.all([
         supabase.from("profiles").select("nickname, avatar_url").eq("id", myId).maybeSingle(),
-        preloadFullWings(mine.tier),
+        preloadFullWings(tier),
       ]);
-      return { tier: mine.tier, count: mine.count, name: profile?.nickname ?? "", url: profile?.avatar_url ?? null };
+      return { tier, count: mine.count, name: profile?.nickname ?? "", url: profile?.avatar_url ?? null };
     },
     [applyWings]
   );

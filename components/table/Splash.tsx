@@ -21,9 +21,10 @@ import { WINGS_SPLASH, placementFor, wingsSplashSub, type GodWinsTier } from "@/
 //     a stinkhole (godLossSplash, lib/resultScores.ts): the same image (3s).
 //   * GO -- a player said Go (or was auto-gone): a giant "GO" (1.2s). The
 //     small amber Go label by the seat stays as it is.
-//   * Wings -- a win against God made the count exactly 10, 25, 50 or 100: the
-//     full wings round the player's avatar, their tier and count (3s). If God
-//     was skunked by the same win, that image follows when this one is over.
+//   * Wings -- a win against God made the count exactly a tier's number (every
+//     10, from 10 to 100: WINGS_TIERS, lib/wings.ts): the full wings round
+//     the player's avatar, their tier and count (3s). If God was skunked by
+//     the same win, that image follows when this one is over.
 //
 // LATER, A SOUND: the wings moment has none yet. It goes where showWings is
 // called on the table page: a new SoundEvent in lib/sounds.ts, claimed with the

@@ -7,13 +7,32 @@
 
 // The tiers a God-win count earns, and what a player's wings show: one of
 // those, or the creator's own (displayTier).
-export type GodWinsTier = "white" | "silver" | "gold" | "black";
+export type GodWinsTier =
+  | "white"
+  | "bronze"
+  | "silver"
+  | "gold"
+  | "emerald"
+  | "sapphire"
+  | "ruby"
+  | "diamond"
+  | "prismatic"
+  | "black";
 export type WingsTier = GodWinsTier | "creator";
 
+// THE LADDER: one tier every 10 God wins, lowest first. The one table: every
+// threshold, name and milestone comes from here. (Until Nov 2026 it was four
+// tiers: white 10, silver 25, gold 50, black 100.)
 export const WINGS_TIERS: readonly { tier: GodWinsTier; wins: number; name: string }[] = [
   { tier: "white", wins: 10, name: "white" },
-  { tier: "silver", wins: 25, name: "silver" },
-  { tier: "gold", wins: 50, name: "gold" },
+  { tier: "bronze", wins: 20, name: "bronze" },
+  { tier: "silver", wins: 30, name: "silver" },
+  { tier: "gold", wins: 40, name: "gold" },
+  { tier: "emerald", wins: 50, name: "emerald" },
+  { tier: "sapphire", wins: 60, name: "sapphire" },
+  { tier: "ruby", wins: 70, name: "ruby" },
+  { tier: "diamond", wins: 80, name: "diamond" },
+  { tier: "prismatic", wins: 90, name: "prismatic" },
   { tier: "black", wins: 100, name: "black" },
 ];
 
@@ -48,13 +67,16 @@ export function nextTier(count: number) {
   return WINGS_TIERS.find((t) => count < t.wins) ?? null;
 }
 
-// Where a player stands, for the Profile.
+// Where a player stands, for the Profile. At the top: the top tier's name.
+const TOP_TIER = WINGS_TIERS[WINGS_TIERS.length - 1];
+const capitalised = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+
 export function progress(count: number): { count: number; tier: GodWinsTier | null; text: string } {
   const next = nextTier(count);
   return {
     count,
     tier: tierForCount(count),
-    text: next ? `${count} / ${next.wins} to ${next.name} wings` : "Black wings. Legend.",
+    text: next ? `${count} / ${next.wins} to ${next.name} wings` : `${capitalised(TOP_TIER.name)} wings. Legend.`,
   };
 }
 
@@ -144,16 +166,32 @@ export function wingsBox(d: number, scale: number) {
 }
 
 // Each tier's art, by file name. The creator's is the ears (full-ears.webp,
-// mini-ears.webp), on the same canvas and anchors as the wings.
+// mini-ears.webp), on the same canvas and anchors as the wings. Emerald comes
+// from the old creator's green wings (removed in PR #107), without flames.
+// Bronze, sapphire, ruby, diamond and prismatic are made from silver's art, and
+// silver, gold and emerald remade from their own originals, by
+// scripts/make-wings-tiers.mjs (sources in docs/art/sources; docs/wings-art.md).
 const WINGS_ART: Record<WingsTier, string> = {
   white: "white",
+  bronze: "bronze",
   silver: "silver",
   gold: "gold",
+  emerald: "emerald",
+  sapphire: "sapphire",
+  ruby: "ruby",
+  diamond: "diamond",
+  prismatic: "prismatic",
   black: "black",
   creator: "ears",
 };
 export const ALL_WINGS_TIERS: readonly WingsTier[] = [...WINGS_TIERS.map((t) => t.tier), "creator"];
 
+// No version in the URL, on purpose: public/ files are served with
+// "Cache-Control: public, max-age=0, must-revalidate" and an ETag of the file's
+// hash (checked on the live site, Nov 15, 2026; next.config.ts sets no headers
+// and there is no service worker), so a browser re-checks each image and a
+// changed file under the same name reaches every player on their next load.
+// If a long or immutable cache is ever added for /wings, add a version here.
 export const wingsUrl = (tier: WingsTier, size: "full" | "mini") => `/wings/${size}-${WINGS_ART[tier]}.webp`;
 export const emberUrl = (size: "full" | "mini") => `/wings/${size}-black-ember.webp`;
 export const FLAMES_URL = "/wings/black-flames.json";
@@ -167,19 +205,34 @@ export function wingsAssets(): string[] {
   ];
 }
 
-// The badge's colour (the creator keeps the emerald dot), and the soft glow
-// behind full wings: none for the ears.
+// The badge's colour, as a CSS background (so a gradient works), and the soft
+// glow behind full wings: none for the ears. The badge is an 11px dot with a
+// dark edge, so white, silver (pale blue) and diamond (white into ice blue)
+// must stay apart there. The creator keeps its bright green dot; emerald's is
+// a deeper green.
 export const WINGS_BADGE: Record<WingsTier, string> = {
   white: "#ffffff",
+  bronze: "#b8733a",
   silver: "#cfe0ff",
   gold: "#ffd24a",
+  emerald: "#0f9d58",
+  sapphire: "#2f5fe8",
+  ruby: "#d4143c",
+  diamond: "linear-gradient(135deg, #ffffff 0%, #ffffff 30%, #8fe3ff 65%, #3fb4e6 100%)",
+  prismatic: "conic-gradient(#ff4d4d, #ffb84d, #f5e94d, #4ddc6a, #4dc3ff, #6a5cff, #d04dff, #ff4d4d)",
   black: "#ff5a14",
   creator: "#2ee07a",
 };
 export const WINGS_HALO: Record<WingsTier, string | null> = {
   white: "rgb(255 246 216 / 0.3)",
+  bronze: "rgb(205 127 50 / 0.3)",
   silver: "rgb(207 224 255 / 0.3)",
   gold: "rgb(255 210 74 / 0.3)",
+  emerald: "rgb(46 200 120 / 0.28)",
+  sapphire: "rgb(80 130 255 / 0.3)",
+  ruby: "rgb(230 40 80 / 0.28)",
+  diamond: "rgb(190 236 255 / 0.32)",
+  prismatic: "rgb(215 175 255 / 0.3)",
   black: "rgb(255 90 20 / 0.38)",
   creator: null,
 };
@@ -205,8 +258,14 @@ export const badgeSize = (d: number) => Math.round((d * 11) / 28);
 // THE MILESTONE SPLASH's words. The creator has no splash.
 export const WINGS_SPLASH: Record<GodWinsTier, string> = {
   white: "YOU'VE GOT WINGS, MY CHILD",
+  bronze: "BRONZE WINGS, MY CHILD",
   silver: "SILVER WINGS, MY CHILD",
   gold: "GOLD WINGS, MY CHILD",
+  emerald: "EMERALD WINGS, MY CHILD",
+  sapphire: "SAPPHIRE WINGS, MY CHILD",
+  ruby: "RUBY WINGS, MY CHILD",
+  diamond: "DIAMOND WINGS, MY CHILD",
+  prismatic: "PRISMATIC WINGS, MY CHILD",
   black: "EVEN GOD FEARS YOU",
 };
 export const wingsSplashSub = (count: number) => `${count} ${count === 1 ? "win" : "wins"} against God`;
@@ -222,7 +281,12 @@ export function idBatches(ids: readonly string[], size = 50): string[][] {
 // THE SEEN TIER: the highest tier this device has celebrated. "none" is a real
 // answer (seen, nothing earned yet), null means never read. Every read and
 // write is guarded: storage can be missing or blocked.
-export const wingsSeenKey = (userId: string) => `nobs:wings-seen:${userId}`;
+//
+// v2 since the ten-tier ladder. The old key (nobs:wings-seen:<user>) held a
+// tier of the four-tier ladder, whose rank no longer matches the counts: an old
+// "silver" at 27 wins would have hidden the silver splash at 30. It is simply
+// no longer read.
+export const wingsSeenKey = (userId: string) => `nobs:wings-seen:v2:${userId}`;
 
 export function readSeenTier(userId: string): GodWinsTier | "none" | null {
   try {
@@ -241,16 +305,56 @@ export function writeSeenTier(userId: string, tier: GodWinsTier | null) {
   }
 }
 
+// The milestones the ten-tier ladder brought: every threshold but white's 10
+// and black's 100, which the four-tier ladder already had at the same count.
+const FOUR_TIER_MILESTONES: readonly number[] = [10, 100];
+
+export function isNewLadderMilestone(count: number): boolean {
+  return isMilestone(count) && !FOUR_TIER_MILESTONES.includes(count);
+}
+
 // The first time a player's count is read here, their tier is simply noted. That
 // is how launch stays silent: anyone already past a threshold just has wings.
+// One exception, for the ten-tier ladder: a count of exactly one of its new
+// milestones (20, 30 ... 90) notes the tier below, so that splash, which the
+// old ladder never gave, still shows once: when the won game's result is next
+// on screen, or at once if this read is the win's own (the table page).
 export function initSeenTier(userId: string, count: number) {
-  if (readSeenTier(userId) === null) writeSeenTier(userId, tierForCount(count));
+  if (readSeenTier(userId) !== null) return;
+  writeSeenTier(userId, tierForCount(isNewLadderMilestone(count) ? count - 1 : count));
 }
 
 // Whether this count is the moment. Never read (or no storage): no celebration,
 // because the moment can't be kept to once.
 export function shouldCelebrate(count: number, seen: GodWinsTier | "none" | null): boolean {
   return seen !== null && isMilestone(count) && tierRank(tierForCount(count)) > tierRank(seen);
+}
+
+// CLAIMING THE MOMENT, for whoever shows it (the table page, Home): notes a
+// first read, asks, and writes the seen tier before anything shows, so the
+// moment is claimed once on this device, wherever it is shown first. The tier
+// to show, or null. The creator's seen tier moves as anyone's, but the ears
+// always show as the creator's: no splash for a tier they never see. Hidden
+// and test accounts never get here with a count: get_god_wins leaves them out.
+export function claimWingsMoment(userId: string, count: number): GodWinsTier | null {
+  initSeenTier(userId, count);
+  const tier = tierForCount(count);
+  if (!tier || !shouldCelebrate(count, readSeenTier(userId))) return null;
+  writeSeenTier(userId, tier);
+  return isCreator(userId) ? null : tier;
+}
+
+// HOME'S CATCH-UP: only for a count of exactly one of the ten-tier ladder's
+// new milestones (20, 30 ... 90), the splash the old ladder never gave. The
+// table's result screen is the other catch-up, but only while the won game is
+// still the table's latest; this one needs nothing but the count. Every other
+// count, white's 10 and black's 100 included, is the table's alone.
+export function claimHomeWingsMoment(userId: string, count: number): GodWinsTier | null {
+  if (!isNewLadderMilestone(count)) {
+    initSeenTier(userId, count);
+    return null;
+  }
+  return claimWingsMoment(userId, count);
 }
 
 // THE SETTINGS PAGE'S "Show wings": this device only, on unless turned
