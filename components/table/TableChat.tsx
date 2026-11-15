@@ -7,6 +7,9 @@ import {
   CHAT_LAYER_Z,
   CHAT_MAX_CARDS,
   CHAT_MAX_LENGTH,
+  OWN_CARD_FADE_MS,
+  OWN_CARD_MS,
+  chatStackCounts,
   chatStackRoom,
   cleanChatText,
   visibleChatCards,
@@ -217,21 +220,30 @@ export function ChatStack({
   onDismiss,
   onCloseAll,
   room = "game",
+  own = null,
+  onDismissOwn,
 }: {
   messages: readonly ChatMessage[];
   onDismiss: (id: string) => void;
   onCloseAll: () => void;
   room?: "game" | "full";
+  // My own last message (useTableChat), on top for OWN_CARD_MS. Extra: it
+  // shows only if it fits below the others' cards, never displacing one,
+  // and never counts in the fold or "+N more".
+  own?: ChatMessage | null;
+  onDismissOwn?: () => void;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
   const stackRef = useRef<HTMLDivElement>(null);
   const onClient = useOnClient();
   const [fit, setFit] = useState(CHAT_MAX_CARDS);
+  const [ownFits, setOwnFits] = useState(true);
   // Show was tapped while the newest message was this one; a newer message,
   // or closing that one, folds the stack again if it must.
   const [shownFor, setShownFor] = useState<string | null>(null);
   const expanded = shownFor !== null && messages.some((m) => m.id === shownFor);
-  // The newest three; fewer of them may show (fit), the rest are "+N more".
+  // The newest CHAT_MAX_CARDS (5); fewer of them may show (fit), the rest are
+  // "+N more".
   const candidates = visibleChatCards(messages).shown;
 
   // Places the layer over the middle (below its notices) and works out how
@@ -279,7 +291,7 @@ export function ChatStack({
       const controlsRow = stack.querySelector<HTMLElement>("[data-chat-controls]");
       let used = controlsRow ? controlsRow.offsetHeight + 2 * STACK_GAP : 0;
       let count = 0;
-      for (const card of stack.querySelectorAll<HTMLElement>("[data-chat-card]")) {
+      for (const card of stack.querySelectorAll<HTMLElement>("[data-chat-card]:not([data-chat-own])")) {
         const h = card.offsetHeight + STACK_GAP;
         // The newest card may run past the budget, never past the limit.
         if (used + h > (count === 0 ? place.limit : place.budget)) break;
@@ -287,6 +299,10 @@ export function ChatStack({
         count++;
       }
       setFit(count);
+      // My own card: on top of the others, if it fits below the limit with
+      // them; else it just doesn't show (it never folds or pushes).
+      const ownCard = stack.querySelector<HTMLElement>("[data-chat-own]");
+      setOwnFits(!ownCard || used + ownCard.offsetHeight + STACK_GAP <= place.limit);
     };
     const soon = () => {
       if (!frame) frame = requestAnimationFrame(measure);
@@ -309,12 +325,10 @@ export function ChatStack({
       vv?.removeEventListener("resize", soon);
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [messages, expanded, room, onClient]);
+  }, [messages, own, expanded, room, onClient]);
 
-  if (messages.length === 0) return null;
-  const shown = Math.min(fit, candidates.length);
-  const folded = shown === 0;
-  const more = messages.length - shown;
+  if (messages.length === 0 && !own) return null;
+  const { shown, folded, more } = chatStackCounts(messages, fit);
   // The pills: "+N more", "Close all" and the folded line. 32px drawn,
   // 44px to tap (.chat-tap).
   const pill =
@@ -359,40 +373,74 @@ export function ChatStack({
                   )}
                 </div>
               )}
+              {own && (
+                <ChatCard
+                  key={own.id}
+                  message={own}
+                  hidden={!ownFits}
+                  onClose={() => onDismissOwn?.()}
+                  own
+                />
+              )}
               {candidates.map((m, i) => (
-                <div
-                  key={m.id}
-                  data-chat-card=""
-                  aria-hidden={i >= shown || undefined}
-                  className={`chat-card pointer-events-auto flex items-start gap-2 rounded-xl border border-zinc-300 bg-background/95 py-1 pl-2.5 text-sm shadow-md dark:border-zinc-700 ${
-                    i >= shown ? "invisible absolute inset-x-0" : ""
-                  }`}
-                >
-                  <span className="mt-1 shrink-0">
-                    <Avatar name={m.name} url={m.avatarUrl} size="xs" tone="table" />
-                  </span>
-                  {/* Plain text: a React text node, so nothing in it is ever HTML or a link. */}
-                  <p className="min-w-0 flex-1 self-center py-0.5 [overflow-wrap:anywhere]">
-                    <span className="font-semibold">{m.name}</span>: {m.text}
-                  </p>
-                  <button
-                    type="button"
-                    aria-label={`Close message from ${m.name}`}
-                    onClick={() => onDismiss(m.id)}
-                    tabIndex={i >= shown ? -1 : undefined}
-                    className="-my-1.5 flex h-11 w-11 shrink-0 items-center justify-center self-center rounded-full text-zinc-600 dark:text-zinc-400"
-                  >
-                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                      <path d="m4 4 8 8m0-8-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                </div>
+                <ChatCard key={m.id} message={m} hidden={i >= shown} onClose={() => onDismiss(m.id)} />
               ))}
             </div>
           </div>,
           document.body
         )}
     </>
+  );
+}
+
+// One message card: avatar, "Name: text" as plain text, and its x (44px).
+// `hidden`: laid out (so it can be measured) but invisible and out of the
+// flow. `own`: my own message, which fades out over the end of OWN_CARD_MS
+// (the hook removes it at OWN_CARD_MS; with reduced motion it just goes).
+function ChatCard({
+  message: m,
+  hidden,
+  onClose,
+  own = false,
+}: {
+  message: ChatMessage;
+  hidden: boolean;
+  onClose: () => void;
+  own?: boolean;
+}) {
+  return (
+    <div
+      data-chat-card=""
+      data-chat-own={own ? "" : undefined}
+      aria-hidden={hidden || undefined}
+      style={
+        own
+          ? ({ "--own-fade-delay": `${OWN_CARD_MS - OWN_CARD_FADE_MS}ms`, "--own-fade": `${OWN_CARD_FADE_MS}ms` } as React.CSSProperties)
+          : undefined
+      }
+      className={`chat-card pointer-events-auto flex items-start gap-2 rounded-xl border border-zinc-300 bg-background/95 py-1 pl-2.5 text-sm shadow-md dark:border-zinc-700 ${
+        own ? "chat-card--own" : ""
+      } ${hidden ? "invisible absolute inset-x-0" : ""}`}
+    >
+      <span className="mt-1 shrink-0">
+        <Avatar name={m.name} url={m.avatarUrl} size="xs" tone="table" />
+      </span>
+      {/* Plain text: a React text node, so nothing in it is ever HTML or a link. */}
+      <p className="min-w-0 flex-1 self-center py-0.5 [overflow-wrap:anywhere]">
+        <span className="font-semibold">{m.name}</span>: {m.text}
+      </p>
+      <button
+        type="button"
+        aria-label={own ? "Close your message" : `Close message from ${m.name}`}
+        onClick={onClose}
+        tabIndex={hidden ? -1 : undefined}
+        className="-my-1.5 flex h-11 w-11 shrink-0 items-center justify-center self-center rounded-full text-zinc-600 dark:text-zinc-400"
+      >
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+          <path d="m4 4 8 8m0-8-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      </button>
+    </div>
   );
 }
 

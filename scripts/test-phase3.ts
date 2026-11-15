@@ -323,14 +323,19 @@ import {
   CHAT_MAX_CARDS,
   CHAT_MAX_LENGTH,
   CHAT_MEMORY,
+  OWN_CARD_FADE_MS,
+  OWN_CARD_MS,
   addChatMessage,
   chatSenderId,
+  chatStackCounts,
   chatStackRoom,
   chatThrottleAllows,
   chatTopic,
   cleanChatText,
   createChatThrottle,
   createPerSenderThrottle,
+  ownCardShowing,
+  ownChatCard,
   visibleChatCards,
   type ChatMessage,
 } from "../lib/tableChat";
@@ -4589,7 +4594,7 @@ check("chat: the receiving throttle counts each sender apart and drops extras", 
   strictEqual(r.take("b", 2000), true);
   strictEqual(r.take("a", 2000), true);
 });
-check("chat: newest first, memory capped, at most 3 cards and +N more", () => {
+check("chat: newest first, memory capped, at most CHAT_MAX_CARDS cards and +N more", () => {
   let list: ChatMessage[] = [];
   for (let i = 0; i < CHAT_MEMORY + 5; i++) {
     list = addChatMessage(list, { id: `m${i}`, senderId: "s", name: "N", avatarUrl: null, text: `t${i}`, at: i });
@@ -4600,6 +4605,24 @@ check("chat: newest first, memory capped, at most 3 cards and +N more", () => {
   strictEqual(v.shown.length, CHAT_MAX_CARDS);
   strictEqual(v.more, CHAT_MEMORY - CHAT_MAX_CARDS);
   deepStrictEqual(visibleChatCards(list.slice(0, 2)), { shown: list.slice(0, 2), more: 0 });
+});
+check("chat: up to 5 of the others' cards stack; the room still wins; +N more beyond", () => {
+  strictEqual(CHAT_MAX_CARDS, 5);
+  const msgs = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `m${i}`, senderId: "s", name: "Elsa", avatarUrl: null, text: "x", at: i }));
+  // Room for everything: 5 show, the 6th and 7th are "+2 more".
+  deepStrictEqual(visibleChatCards(msgs(5)), { shown: msgs(5), more: 0 });
+  deepStrictEqual(chatStackCounts(msgs(7), 99), { shown: 5, folded: false, more: 2 });
+  deepStrictEqual(chatStackCounts(msgs(5), 5), { shown: 5, folded: false, more: 0 });
+  // The room holds fewer: those show, the rest are "+N more"; a fold only at 0.
+  deepStrictEqual(chatStackCounts(msgs(5), 3), { shown: 3, folded: false, more: 2 });
+  deepStrictEqual(chatStackCounts(msgs(5), 1), { shown: 1, folded: false, more: 4 });
+  deepStrictEqual(chatStackCounts(msgs(5), 0), { shown: 0, folded: true, more: 5 });
+  // The stack starts by trying them all and measures down from there.
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes("useState(CHAT_MAX_CARDS)"), true);
+  strictEqual(ui.includes("const candidates = visibleChatCards(messages).shown;"), true);
+  // "Close all" still from 2 of the others' messages.
+  strictEqual(ui.includes("{messages.length >= 2 && ("), true);
 });
 check("chat: nothing reads a sender name or id from the message payload", () => {
   const sources = ["components/table/useTableChat.ts", "components/table/TableChat.tsx", "lib/tableChat.ts"].map((f) =>
@@ -4722,6 +4745,72 @@ check("chat: the cards are a layer above every table element, below the deal and
   strictEqual(stack.includes("chat-card pointer-events-auto flex items-start gap-2 rounded-xl"), true);
   strictEqual(stack.includes("rounded-full"), true);
   strictEqual(stack.includes("h-11 w-11"), true); // the x: 44px
+});
+
+// MY OWN MESSAGE, ECHOED (Walt: "you see what you sent").
+check("chat: my own message becomes a card only after an OK ack", () => {
+  const me = { nickname: "Walt", avatar_url: "https://x/walt.png" };
+  const card = ownChatCard({ result: "ok", text: "gg", me, myUserId: "u1", now: 5000, id: "own-1" });
+  deepStrictEqual(card, { id: "own-1", senderId: "u1", name: "Walt", avatarUrl: "https://x/walt.png", text: "gg", at: 5000 });
+  // A failed or throttled send: "Couldn't send" / "Slow down", and no card.
+  strictEqual(ownChatCard({ result: "failed", text: "gg", me, myUserId: "u1", now: 5000, id: "x" }), null);
+  strictEqual(ownChatCard({ result: "throttled", text: "gg", me, myUserId: "u1", now: 5000, id: "x" }), null);
+  strictEqual(ownChatCard({ result: "ok", text: null, me, myUserId: "u1", now: 5000, id: "x" }), null);
+  strictEqual(ownChatCard({ result: "ok", text: "hi", me: undefined, myUserId: "u1", now: 0, id: "x" })?.name, "Unnamed player");
+  // The hook makes the card from the ack's result, after the send.
+  const hook = readFileSync("components/table/useTableChat.ts", "utf8").replace(/\r\n/g, "\n");
+  const send = hook.slice(hook.indexOf("const send = useCallback"), hook.indexOf("const dismiss = useCallback"));
+  strictEqual(send.includes('const result: ChatSendResult = ack === "ok" ? "ok" : "failed";'), true);
+  strictEqual(send.indexOf("await channel.send(") < send.indexOf("ownChatCard({"), true);
+  strictEqual(send.includes("if (card) setOwn(card);"), true);
+  strictEqual(send.includes("setMessages"), false); // never one of the others' messages
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes(`{note === "throttled" ? "Slow down" : "Couldn't send"}`), true);
+});
+check("chat: my own card goes by itself at 2 s, fading over the last 0.3 s", () => {
+  strictEqual(OWN_CARD_MS, 2000);
+  strictEqual(OWN_CARD_FADE_MS, 300);
+  const own = { id: "o", senderId: "u1", name: "Walt", avatarUrl: null, text: "gg", at: 1000 };
+  strictEqual(ownCardShowing(own, 1000), true);
+  strictEqual(ownCardShowing(own, 2999), true);
+  strictEqual(ownCardShowing(own, 3000), false);
+  strictEqual(ownCardShowing(null, 0), false);
+  const hook = readFileSync("components/table/useTableChat.ts", "utf8");
+  strictEqual(hook.includes("setOwn((cur) => (cur?.id === own.id ? null : cur)), OWN_CARD_MS);"), true);
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes('"--own-fade-delay": `${OWN_CARD_MS - OWN_CARD_FADE_MS}ms`'), true);
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/chat-own-out var\(--own-fade\) ease-in var\(--own-fade-delay\) forwards/.test(css), true);
+  // It fades only with motion allowed (inside the no-preference block).
+  const block = css.slice(css.lastIndexOf("@media (prefers-reduced-motion: no-preference)", css.indexOf(".chat-card--own {")), css.indexOf(".chat-card--own {"));
+  strictEqual(block.length > 0 && block.length < 80, true);
+});
+check("chat: my own card is never counted in the fold or +N more, and never pushes a card out", () => {
+  const msgs = Array.from({ length: 5 }, (_, i) => ({ id: `m${i}`, senderId: "s", name: "Elsa", avatarUrl: null, text: "x", at: i }));
+  deepStrictEqual(chatStackCounts([], 3), { shown: 0, folded: false, more: 0 }); // only my own card: no fold
+  deepStrictEqual(chatStackCounts(msgs, 2), { shown: 2, folded: false, more: 3 });
+  deepStrictEqual(chatStackCounts(msgs, 0), { shown: 0, folded: true, more: 5 });
+  deepStrictEqual(chatStackCounts(msgs.slice(0, 1), 3), { shown: 1, folded: false, more: 0 });
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  const stack = ui.slice(ui.indexOf("export function ChatStack"), ui.indexOf("export function ChatAnnouncer"));
+  strictEqual(stack.includes("const { shown, folded, more } = chatStackCounts(messages, fit);"), true);
+  // The others' fit is measured without my card; mine shows only if it
+  // fits below the limit with them, else not at all (no fold, no push).
+  strictEqual(stack.includes('stack.querySelectorAll<HTMLElement>("[data-chat-card]:not([data-chat-own])")'), true);
+  strictEqual(stack.includes("setOwnFits(!ownCard || used + ownCard.offsetHeight + STACK_GAP <= place.limit);"), true);
+  strictEqual(stack.includes("hidden={!ownFits}"), true);
+  // One at a time: the hook holds a single own message, replaced by the next.
+  const hook = readFileSync("components/table/useTableChat.ts", "utf8");
+  strictEqual(hook.includes("useState<ChatMessage | null>(null)"), true);
+});
+check("chat: my own message is never announced to the screen reader", () => {
+  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  strictEqual(page.includes("<ChatAnnouncer newest={chat.messages[0]} />"), true);
+  strictEqual(page.includes("own={chat.own}"), true);
+  strictEqual((page.match(/chat\.own\b/g) ?? []).length, 1); // only to the stack
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  const announcer = ui.slice(ui.indexOf("export function ChatAnnouncer"));
+  strictEqual(announcer.includes("own"), false);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
