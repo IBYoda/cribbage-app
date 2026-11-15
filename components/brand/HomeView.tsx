@@ -8,9 +8,10 @@ import { HomeMenu, type OpenTablesState } from "@/components/brand/HomeMenu";
 import { LandingView } from "@/components/brand/LandingView";
 import { NicknameStep } from "@/components/brand/NicknameStep";
 import { needsNickname } from "@/lib/nickname";
-import { useWingsOn } from "@/components/Wings";
+import { preloadFullWings, useWingsOn } from "@/components/Wings";
+import { Splash, useSplash } from "@/components/table/Splash";
 import { getGodWins } from "@/lib/godWins";
-import { displayTier, initSeenTier, type GodWinsTier, type WingsTier } from "@/lib/wings";
+import { claimHomeWingsMoment, displayTier, type GodWinsTier, type WingsTier } from "@/lib/wings";
 
 // How often Open Tables re-reads while the tab is visible (was 15 s; 45 s
 // to cut request volume -- the Refresh button reads at once).
@@ -81,22 +82,42 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
 
   const openTables = useOpenTables(userId);
 
-  // My wings for the greeting. A player's first read here is what sets the
-  // milestone's starting point (initSeenTier).
+  // My wings for the greeting, and my God-win count. A player's first read
+  // anywhere is what sets the milestone's starting point (initSeenTier).
   const wingsOn = useWingsOn();
   const [myWings, setMyWings] = useState<GodWinsTier | null>(null);
+  const [myCount, setMyCount] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
     getGodWins([userId]).then((found) => {
       const mine = found.get(userId);
       if (cancelled || !mine) return;
-      initSeenTier(userId, mine.count);
       setMyWings(mine.tier);
+      setMyCount(mine.count);
     });
     return () => {
       cancelled = true;
     };
   }, [userId]);
+
+  // HOME'S WINGS CATCH-UP (claimHomeWingsMoment, lib/wings.ts): a count of
+  // exactly one of the ten-tier ladder's new milestones whose splash this
+  // device hasn't shown, at a table or here, shows it once, over the menu
+  // (never over the nickname step). Claimed, the seen tier written, before it
+  // shows. Like the table's milestone, not held back by "Show wings": it is
+  // the player's own. Every other count is only noted, silently. Not cancelled
+  // with the effect: the claim is already made, and the key stops a repeat.
+  const { splash, showWings, dismiss: dismissSplash } = useSplash({ noZero: true });
+  const homeMomentRef = useRef(false);
+  const menuShown = gate === "ok";
+  useEffect(() => {
+    if (!menuShown || myCount === null || homeMomentRef.current) return;
+    homeMomentRef.current = true;
+    const tier = claimHomeWingsMoment(userId, myCount);
+    if (!tier) return;
+    const moment = { tier, count: myCount, name: nickname ?? emailName, url: avatarUrl };
+    preloadFullWings(tier).then(() => showWings(`wings:home:${userId}:${myCount}`, moment));
+  }, [menuShown, myCount, userId, nickname, emailName, avatarUrl, showWings]);
 
   // Until the profile read answers: the card room as it was while the
   // session was read (LandingView, buttons held back), so a player without
@@ -117,14 +138,17 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
   }
 
   return (
-    <HomeMenu
-      name={nickname ?? emailName}
-      avatarUrl={avatarUrl}
-      wings={wingsOn ? displayTier(userId, myWings) : null}
-      isAdmin={isAdmin}
-      openTables={openTables}
-      onLogout={onLogout}
-    />
+    <>
+      <HomeMenu
+        name={nickname ?? emailName}
+        avatarUrl={avatarUrl}
+        wings={wingsOn ? displayTier(userId, myWings) : null}
+        isAdmin={isAdmin}
+        openTables={openTables}
+        onLogout={onLogout}
+      />
+      <Splash splash={splash} onDone={dismissSplash} />
+    </>
   );
 }
 

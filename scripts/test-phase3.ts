@@ -11,6 +11,7 @@
 
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import {
   WINGS_ASPECT,
   WINGS_BADGE,
@@ -23,6 +24,8 @@ import {
   ALL_WINGS_TIERS,
   CREATOR_USER_IDS,
   badgeSize,
+  claimHomeWingsMoment,
+  claimWingsMoment,
   displayTier,
   flamesForPointer,
   hasFlames,
@@ -31,6 +34,7 @@ import {
   wingsUrl,
   initSeenTier,
   isMilestone,
+  isNewLadderMilestone,
   nextTier,
   placementFor,
   plateSpot,
@@ -3887,62 +3891,88 @@ const withStorage = (run: (store: Map<string, string>) => void) => {
   }
 };
 
+const LADDER: [number, string][] = [
+  [10, "white"], [20, "bronze"], [30, "silver"], [40, "gold"], [50, "emerald"],
+  [60, "sapphire"], [70, "ruby"], [80, "diamond"], [90, "prismatic"], [100, "black"],
+];
+check("wings: the ladder -- ten tiers, one every 10 God wins", () => {
+  deepStrictEqual(WINGS_TIERS.map((t) => [t.wins, t.tier]), LADDER);
+  for (const t of WINGS_TIERS) strictEqual(t.name, t.tier); // the Profile line's word
+});
 check("wings: a tier at every threshold, and either side of it", () => {
-  const expected: [number, string | null][] = [
-    [0, null], [9, null],
-    [10, "white"], [24, "white"],
-    [25, "silver"], [49, "silver"],
-    [50, "gold"], [99, "gold"],
-    [100, "black"], [101, "black"],
-  ];
-  for (const [count, tier] of expected) strictEqual(tierForCount(count), tier, String(count));
+  // Every boundary, both sides: 9|10, 19|20 ... 99|100.
+  for (let i = 0; i < LADDER.length; i++) {
+    const [wins, tier] = LADDER[i];
+    strictEqual(tierForCount(wins - 1), i === 0 ? null : LADDER[i - 1][1], String(wins - 1));
+    strictEqual(tierForCount(wins), tier, String(wins));
+  }
+  for (const [count, tier] of [[0, null], [25, "bronze"], [101, "black"], [150, "black"], [250, "black"]] as const) {
+    strictEqual(tierForCount(count), tier, String(count));
+  }
 });
 check("wings: the next tier, and the Profile's progress line", () => {
   strictEqual(nextTier(0)?.tier, "white");
   strictEqual(nextTier(9)?.wins, 10);
-  strictEqual(nextTier(10)?.tier, "silver");
+  strictEqual(nextTier(10)?.tier, "bronze");
+  strictEqual(nextTier(25)?.tier, "silver");
   strictEqual(nextTier(99)?.tier, "black");
   strictEqual(nextTier(100), null);
   strictEqual(nextTier(101), null);
   strictEqual(progress(7).text, "7 / 10 to white wings");
   strictEqual(progress(0).text, "0 / 10 to white wings");
-  strictEqual(progress(10).text, "10 / 25 to silver wings");
-  strictEqual(progress(49).text, "49 / 50 to gold wings");
+  strictEqual(progress(10).text, "10 / 20 to bronze wings");
+  strictEqual(progress(27).text, "27 / 30 to silver wings");
+  strictEqual(progress(49).text, "49 / 50 to emerald wings");
+  strictEqual(progress(85).text, "85 / 90 to prismatic wings");
   strictEqual(progress(99).text, "99 / 100 to black wings");
   strictEqual(progress(100).text, "Black wings. Legend.");
   strictEqual(progress(250).text, "Black wings. Legend.");
   strictEqual(progress(30).tier, "silver");
+  strictEqual(progress(65).tier, "sapphire");
 });
 check("wings: a milestone is exactly a tier's count", () => {
-  for (const count of [10, 25, 50, 100]) strictEqual(isMilestone(count), true, String(count));
-  for (const count of [0, 9, 11, 24, 26, 49, 51, 99, 101, 200]) strictEqual(isMilestone(count), false, String(count));
+  for (let n = 0; n <= 200; n++) strictEqual(isMilestone(n), n >= 10 && n <= 100 && n % 10 === 0, String(n));
 });
-check("wings: the seen tier -- saved per player, safe with nothing stored", () => {
+check("wings: the ten-tier ladder's new milestones are 20 to 90, not 10 or 100", () => {
+  for (let n = 0; n <= 200; n++) strictEqual(isNewLadderMilestone(n), n >= 20 && n <= 90 && n % 10 === 0, String(n));
+});
+check("wings: the seen tier -- saved per player under the v2 key, safe with nothing stored", () => {
   strictEqual(readSeenTier("a"), null); // no localStorage at all, as here in Node
   writeSeenTier("a", "gold"); // and doesn't throw
   initSeenTier("a", 50);
   withStorage((store) => {
     strictEqual(readSeenTier("a"), null);
     writeSeenTier("a", "gold");
-    strictEqual(store.get(wingsSeenKey("a")), "gold");
-    strictEqual(wingsSeenKey("a"), "nobs:wings-seen:a");
+    strictEqual(wingsSeenKey("a"), "nobs:wings-seen:v2:a");
+    strictEqual(store.get("nobs:wings-seen:v2:a"), "gold");
     strictEqual(readSeenTier("a"), "gold");
     strictEqual(readSeenTier("b"), null); // per player
     writeSeenTier("a", null);
     strictEqual(readSeenTier("a"), "none");
+    for (const t of WINGS_TIERS) {
+      writeSeenTier("a", t.tier);
+      strictEqual(readSeenTier("a"), t.tier); // every tier reads back
+    }
     store.set(wingsSeenKey("a"), "purple");
     strictEqual(readSeenTier("a"), null); // an edited value is no value
+    strictEqual(store.has("nobs:wings-seen:a"), false); // the old key is never written
+  });
+});
+check("wings: the old key is ignored -- a stale value never suppresses a splash", () => {
+  withStorage((store) => {
+    store.set("nobs:wings-seen:a", "black"); // the four-tier ladder's key, at its top
+    strictEqual(readSeenTier("a"), null); // not read
+    initSeenTier("a", 19);
+    strictEqual(readSeenTier("a"), "white");
+    strictEqual(shouldCelebrate(20, readSeenTier("a")), true);
   });
 });
 check("wings: launch is silent -- the first read notes the tier, and never celebrates", () => {
   withStorage(() => {
-    // A player already on 30, seen for the first time.
-    initSeenTier("a", 30);
+    // A player already on 34, seen for the first time.
+    initSeenTier("a", 34);
     strictEqual(readSeenTier("a"), "silver");
-    strictEqual(shouldCelebrate(30, readSeenTier("a")), false);
-    // Exactly on a milestone at launch: still silent.
-    initSeenTier("b", 50);
-    strictEqual(shouldCelebrate(50, readSeenTier("b")), false);
+    strictEqual(shouldCelebrate(34, readSeenTier("a")), false);
     // No wins yet: "none", so the first tier will be the moment.
     initSeenTier("c", 3);
     strictEqual(readSeenTier("c"), "none");
@@ -3955,13 +3985,22 @@ check("wings: launch is silent -- the first read notes the tier, and never celeb
 });
 check("wings: the moment fires once -- on the milestone, for a tier above the seen one", () => {
   strictEqual(shouldCelebrate(10, "none"), true);
-  strictEqual(shouldCelebrate(25, "white"), true);
-  strictEqual(shouldCelebrate(50, "silver"), true);
-  strictEqual(shouldCelebrate(100, "gold"), true);
+  strictEqual(shouldCelebrate(20, "white"), true);
+  strictEqual(shouldCelebrate(30, "bronze"), true);
+  strictEqual(shouldCelebrate(30, "white"), true); // a skipped splash never blocks the next
+  strictEqual(shouldCelebrate(40, "silver"), true);
+  strictEqual(shouldCelebrate(50, "gold"), true);
+  strictEqual(shouldCelebrate(60, "emerald"), true);
+  strictEqual(shouldCelebrate(70, "sapphire"), true);
+  strictEqual(shouldCelebrate(80, "ruby"), true);
+  strictEqual(shouldCelebrate(90, "diamond"), true);
+  strictEqual(shouldCelebrate(100, "prismatic"), true);
   strictEqual(shouldCelebrate(10, "white"), false); // a refresh: seen is written first
+  strictEqual(shouldCelebrate(20, "bronze"), false);
   strictEqual(shouldCelebrate(11, "none"), false); // not a milestone
+  strictEqual(shouldCelebrate(25, "white"), false); // the four-tier ladder's 25 is no milestone now
   strictEqual(shouldCelebrate(9, "none"), false);
-  strictEqual(shouldCelebrate(25, "gold"), false); // never down
+  strictEqual(shouldCelebrate(30, "gold"), false); // never down
   strictEqual(shouldCelebrate(10, null), false); // never read, or no storage
   withStorage(() => {
     initSeenTier("a", 9);
@@ -3969,6 +4008,88 @@ check("wings: the moment fires once -- on the milestone, for a tier above the se
     writeSeenTier("a", tierForCount(10));
     strictEqual(shouldCelebrate(10, readSeenTier("a")), false);
   });
+});
+
+// The table page's milestone check (wingsMoment, app/tables/[code]/page.tsx)
+// claims through this: note a first read, ask, write the seen tier, and only
+// then show.
+const wingsMomentFor = claimWingsMoment;
+check("wings v2: exactly on a new milestone at the first read -- that splash once (BK on 20)", () => {
+  withStorage(() => {
+    // Home or Profile reads first: notes white, not bronze.
+    initSeenTier("bk", 20);
+    strictEqual(readSeenTier("bk"), "white");
+    // Home again, then the table's roster read: nothing moves.
+    initSeenTier("bk", 20);
+    strictEqual(readSeenTier("bk"), "white");
+    // The won game's result on screen: the catch-up asks, and gets bronze.
+    strictEqual(wingsMomentFor("bk", 20), "bronze");
+    strictEqual(readSeenTier("bk"), "bronze");
+    // Dismissed, then a refresh and every later read: never again.
+    strictEqual(wingsMomentFor("bk", 20), null);
+    initSeenTier("bk", 20);
+    strictEqual(wingsMomentFor("bk", 20), null);
+    // The next win is 21: silent. Silver is next, at 30.
+    strictEqual(wingsMomentFor("bk", 21), null);
+    strictEqual(wingsMomentFor("bk", 30), "silver");
+  });
+  withStorage(() => {
+    // The catch-up is this device's very first read: it notes and fires at once.
+    strictEqual(wingsMomentFor("bk", 20), "bronze");
+    strictEqual(wingsMomentFor("bk", 20), null);
+  });
+  // Every new milestone, 20 to 90, the same: the tier below noted, its splash due.
+  for (const [wins, tier] of LADDER.slice(1, -1)) {
+    withStorage(() => {
+      initSeenTier("p", wins);
+      strictEqual(readSeenTier("p"), tierForCount(wins - 1), String(wins));
+      strictEqual(wingsMomentFor("p", wins), tier, String(wins));
+      strictEqual(wingsMomentFor("p", wins), null, String(wins));
+    });
+  }
+});
+check("wings v2: one past a new milestone (21) -- silent, the tier just noted", () => {
+  withStorage(() => {
+    initSeenTier("a", 21);
+    strictEqual(readSeenTier("a"), "bronze");
+    strictEqual(wingsMomentFor("a", 21), null);
+  });
+  withStorage(() => strictEqual(wingsMomentFor("a", 21), null));
+});
+check("wings v2: 10 and 100 at the first read -- silent, as at the first launch", () => {
+  for (const [count, tier] of [[10, "white"], [100, "black"]] as const) {
+    withStorage(() => {
+      initSeenTier("a", count);
+      strictEqual(readSeenTier("a"), tier);
+      strictEqual(wingsMomentFor("a", count), null);
+    });
+    withStorage(() => strictEqual(wingsMomentFor("a", count), null)); // the win's own read
+  }
+});
+check("wings v2: 25-29 wins with an old silver -- bronze silently now, the silver splash at 30", () => {
+  for (let count = 25; count <= 29; count++) {
+    withStorage((store) => {
+      store.set("nobs:wings-seen:a", "silver"); // the four-tier ladder's value
+      initSeenTier("a", count);
+      strictEqual(readSeenTier("a"), "bronze", String(count));
+      strictEqual(wingsMomentFor("a", count), null, String(count));
+      for (let n = count + 1; n < 30; n++) strictEqual(wingsMomentFor("a", n), null, String(n));
+      strictEqual(wingsMomentFor("a", 30), "silver", String(count));
+      strictEqual(wingsMomentFor("a", 30), null);
+    });
+  }
+});
+check("wings v2: blocked storage still never celebrates, even on a new milestone", () => {
+  const g = globalThis as unknown as { localStorage?: unknown };
+  const blocked = () => {
+    throw new Error("blocked");
+  };
+  g.localStorage = { getItem: blocked, setItem: blocked };
+  try {
+    strictEqual(wingsMomentFor("bk", 20), null);
+  } finally {
+    delete g.localStorage;
+  }
 });
 check("wings: blocked storage never throws, and never celebrates", () => {
   const g = globalThis as unknown as { localStorage?: unknown };
@@ -4072,8 +4193,20 @@ check("wings: the art's place -- mini 2.0 x and full 2.62 x, centred, the avatar
   near(full.top + full.height * (475 / 695), 48);
   near(full.height, full.width * (695 / 1075));
 });
-check("wings: the badge -- the five colours, 11px on a 28px avatar", () => {
-  deepStrictEqual(WINGS_BADGE, { white: "#ffffff", silver: "#cfe0ff", gold: "#ffd24a", black: "#ff5a14", creator: "#2ee07a" });
+check("wings: the badge -- eleven colours (ten tiers and the creator), 11px on a 28px avatar", () => {
+  // The four-tier ladder's dots, unchanged.
+  for (const [t, c] of [["white", "#ffffff"], ["silver", "#cfe0ff"], ["gold", "#ffd24a"], ["black", "#ff5a14"], ["creator", "#2ee07a"]] as const) {
+    strictEqual(WINGS_BADGE[t], c, t);
+  }
+  deepStrictEqual(Object.keys(WINGS_BADGE).sort(), [...ALL_WINGS_TIERS].sort());
+  // All ten tiers' dots are different, and none is the creator's.
+  const tierDots = WINGS_TIERS.map((t) => WINGS_BADGE[t.tier]);
+  strictEqual(new Set(tierDots).size, 10);
+  strictEqual(tierDots.includes(WINGS_BADGE.creator), false);
+  // Diamond is a pale ice-blue gradient, so it can't read as white or silver;
+  // prismatic a rainbow.
+  strictEqual(WINGS_BADGE.diamond.startsWith("linear-gradient("), true);
+  strictEqual(WINGS_BADGE.prismatic.startsWith("conic-gradient("), true);
   strictEqual(badgeSize(28), 11);
   strictEqual(badgeSize(24), 9);
   strictEqual(badgeSize(48), 19);
@@ -4089,6 +4222,7 @@ check("wings: every asset exists, nothing on disk is unlisted, and the flames ar
   for (const url of wingsAssets()) strictEqual(existsSync(`public${url}`), true, url);
   const listed = new Set(wingsAssets().map((url) => url.split("/").pop()));
   for (const file of readdirSync("public/wings")) strictEqual(listed.has(file), true, file);
+  strictEqual(new Set(wingsAssets()).size, wingsAssets().length); // each file once
   strictEqual(existsSync("docs/wings-art.md"), true); // the notes aren't served
   const flames = JSON.parse(readFileSync("public/wings/black-flames.json", "utf8"));
   strictEqual(flames.back.length + flames.front.length, 136);
@@ -4120,12 +4254,15 @@ check("wings: the creator -- creator wings at any count, or none to read", () =>
     strictEqual(displayTier(walt, earned), "creator");
   }
   strictEqual(displayTier(walt, "black"), "creator"); // wins over any God-win tier
+  for (const t of WINGS_TIERS) strictEqual(displayTier(walt, t.tier), "creator", t.tier); // every new tier too
+  for (let n = 0; n <= 150; n++) strictEqual(displayTier(walt, tierForCount(n)), "creator", String(n));
 });
 check("wings: the creator -- everyone else is exactly as before", () => {
   for (const id of ["a", "00000000-0000-0000-0000-000000000000", "F190B27B-A23B-4464-8445-023EDBEE28B2"]) {
     strictEqual(isCreator(id), false, id);
     strictEqual(displayTier(id, null), null);
     strictEqual(displayTier(id, "gold"), "gold");
+    for (const t of WINGS_TIERS) strictEqual(displayTier(id, t.tier), t.tier, t.tier);
   }
   strictEqual(isCreator(null), false);
   strictEqual(isCreator(undefined), false);
@@ -4133,12 +4270,161 @@ check("wings: the creator -- everyone else is exactly as before", () => {
 });
 check("wings: the creator -- a count never earns it, and the milestone rules don't change", () => {
   for (let n = 0; n <= 250; n++) strictEqual(tierForCount(n) === ("creator" as unknown), false);
-  deepStrictEqual(WINGS_TIERS.map((t) => t.tier), ["white", "silver", "gold", "black"]);
-  for (const count of [10, 25, 50, 100]) strictEqual(isMilestone(count), true);
+  deepStrictEqual(
+    WINGS_TIERS.map((t) => t.tier),
+    ["white", "bronze", "silver", "gold", "emerald", "sapphire", "ruby", "diamond", "prismatic", "black"]
+  );
+  for (let count = 10; count <= 100; count += 10) strictEqual(isMilestone(count), true);
   strictEqual(shouldCelebrate(10, "none"), true);
-  strictEqual(shouldCelebrate(100, "gold"), true);
+  strictEqual(shouldCelebrate(100, "prismatic"), true);
   strictEqual(shouldCelebrate(10, "white"), false);
 });
+check("wings: the creator -- the seen tier moves as for anyone, and the ears stay", () => {
+  const walt = CREATOR_USER_IDS[0];
+  withStorage((store) => {
+    initSeenTier(walt, 20); // a new milestone at the first read: due, as for anyone
+    strictEqual(readSeenTier(walt), "white");
+    strictEqual(store.has(`nobs:wings-seen:v2:${walt}`), true);
+    // The claim writes the seen tier, but there is no splash for the creator.
+    strictEqual(wingsMomentFor(walt, 20), null);
+    strictEqual(readSeenTier(walt), "bronze");
+    strictEqual(wingsMomentFor(walt, 20), null);
+    strictEqual(displayTier(walt, tierForCount(20)), "creator");
+  });
+});
+
+// HOME'S CATCH-UP (claimHomeWingsMoment, used by components/brand/HomeView.tsx).
+check("wings home: exactly 20 with the tier unseen -- Bronze once, never after dismissal or a refresh", () => {
+  withStorage((store) => {
+    // Home is this device's first read: notes white, and claims bronze.
+    strictEqual(claimHomeWingsMoment("bk", 20), "bronze");
+    strictEqual(store.get("nobs:wings-seen:v2:bk"), "bronze"); // written before it shows
+    // Dismissed, then a refresh, then Home again later: nothing.
+    strictEqual(claimHomeWingsMoment("bk", 20), null);
+    strictEqual(claimHomeWingsMoment("bk", 20), null);
+    // Nor at the table's catch-up afterwards: the seen tier is shared.
+    strictEqual(claimWingsMoment("bk", 20), null);
+  });
+  withStorage(() => {
+    // Profile (or anything) read first and noted white: Home still claims it.
+    initSeenTier("bk", 20);
+    strictEqual(readSeenTier("bk"), "white");
+    strictEqual(claimHomeWingsMoment("bk", 20), "bronze");
+    strictEqual(claimHomeWingsMoment("bk", 20), null);
+  });
+  // Every new milestone the same, 20 to 90.
+  for (const [wins, tier] of LADDER.slice(1, -1)) {
+    withStorage(() => {
+      strictEqual(claimHomeWingsMoment("p", wins), tier, String(wins));
+      strictEqual(claimHomeWingsMoment("p", wins), null, String(wins));
+    });
+  }
+});
+check("wings home: 21, or any count that is not a new milestone -- nothing, only noted", () => {
+  withStorage(() => {
+    strictEqual(claimHomeWingsMoment("a", 21), null);
+    strictEqual(readSeenTier("a"), "bronze");
+  });
+  for (let n = 0; n <= 150; n++) {
+    if (isNewLadderMilestone(n)) continue;
+    withStorage(() => strictEqual(claimHomeWingsMoment("a", n), null, String(n)));
+  }
+});
+check("wings home: 10 and 100 stay the table's -- silent at the first read, and never claimed by Home", () => {
+  for (const [count, below] of [[10, "none"], [100, "prismatic"]] as const) {
+    withStorage(() => {
+      strictEqual(claimHomeWingsMoment("a", count), null); // a first read: silent
+      strictEqual(readSeenTier("a"), tierForCount(count));
+    });
+    withStorage(() => {
+      // Seen below it (the win's splash missed at the table): Home leaves it
+      // due for the table's result screen, and doesn't write it.
+      writeSeenTier("a", below === "none" ? null : below);
+      strictEqual(claimHomeWingsMoment("a", count), null);
+      strictEqual(readSeenTier("a"), below);
+      strictEqual(claimWingsMoment("a", count), tierForCount(count));
+    });
+  }
+});
+check("wings home: never for the creator, whose seen tier still moves", () => {
+  const walt = CREATOR_USER_IDS[0];
+  withStorage(() => {
+    strictEqual(claimHomeWingsMoment(walt, 20), null);
+    strictEqual(readSeenTier(walt), "bronze");
+    strictEqual(claimHomeWingsMoment(walt, 30), null);
+    strictEqual(readSeenTier(walt), "silver");
+    strictEqual(displayTier(walt, tierForCount(30)), "creator");
+  });
+});
+check("wings home: a splash already shown at the table is not shown again on Home", () => {
+  withStorage(() => {
+    initSeenTier("a", 19);
+    strictEqual(claimWingsMoment("a", 20), "bronze"); // the live win, at the table
+    strictEqual(claimHomeWingsMoment("a", 20), null);
+  });
+  withStorage(() => {
+    initSeenTier("a", 20);
+    strictEqual(claimWingsMoment("a", 20), "bronze"); // the result screen's catch-up
+    strictEqual(claimHomeWingsMoment("a", 20), null);
+  });
+  withStorage(() => {
+    // Blocked or missing storage: no claim can be kept, so none shows.
+    const g = globalThis as unknown as { localStorage?: unknown };
+    const keep = g.localStorage;
+    g.localStorage = undefined;
+    strictEqual(claimHomeWingsMoment("a", 20), null);
+    g.localStorage = keep;
+  });
+});
+check("wings home: God's skunk splash still follows only the table's live win", () => {
+  // The follow-up waits out the wings splash, exactly as before.
+  strictEqual(splashDurationMs("wings"), SPLASH_MS);
+  strictEqual(godLossSplash("hard", true, 90), "skunk");
+  // Home shows the wings splash alone: no God's splash is passed with it.
+  const home = readFileSync("components/brand/HomeView.tsx", "utf8");
+  const calls = home.match(/showWings\([^;]*;/g) ?? [];
+  strictEqual(calls.length, 1);
+  strictEqual(/showWings\(`wings:home:\$\{userId\}:\$\{myCount\}`, moment\)/.test(calls[0]), true);
+  strictEqual(home.includes("showGodLoss"), false);
+  // The table still passes it, from the live win only.
+  const table = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  strictEqual(table.includes("showWings(`wings:${wonGameId}`, wings, loss ? { key: lossKey, loss } : undefined)"), true);
+  strictEqual(table.includes("showWings(`wings:${myGodWinId}`, moment)"), true);
+});
+// THE MADE ART (scripts/make-wings-tiers.mjs): every made tier's alpha must be
+// its source original's, byte for byte (docs/art/sources/). Decoded once here
+// with sharp (it comes with Next), before the synchronous checks below.
+const MADE_FROM: Record<string, string> = {
+  bronze: "silver",
+  silver: "silver",
+  gold: "gold",
+  emerald: "emerald",
+  sapphire: "silver",
+  ruby: "silver",
+  diamond: "silver",
+  prismatic: "silver",
+};
+const madeAlpha: Record<string, boolean> = await (async () => {
+  const sharp = createRequire(import.meta.url)("sharp");
+  const alphaOf = async (file: string) => {
+    const { data } = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const out = Buffer.alloc(data.length / 4);
+    for (let i = 0; i < out.length; i++) out[i] = data[i * 4 + 3];
+    return out;
+  };
+  const result: Record<string, boolean> = {};
+  for (const [tier, source] of Object.entries(MADE_FROM)) {
+    for (const size of ["full", "mini"]) {
+      const [made, original] = await Promise.all([
+        alphaOf(`public/wings/${size}-${tier}.webp`),
+        alphaOf(`docs/art/sources/${size}-${source}-original.webp`),
+      ]);
+      result[`${size}-${tier}`] = made.equals(original);
+    }
+  }
+  return result;
+})();
+
 check("wings: the creator -- the ears art, no flames or glow, an emerald dot", () => {
   strictEqual(wingsUrl("creator", "full"), "/wings/full-ears.webp");
   strictEqual(wingsUrl("creator", "mini"), "/wings/mini-ears.webp");
@@ -4147,24 +4433,87 @@ check("wings: the creator -- the ears art, no flames or glow, an emerald dot", (
   strictEqual(wingsAssets().includes("/wings/mini-ears.webp"), true);
   strictEqual(existsSync("public/wings/full-ears.webp"), true);
   strictEqual(existsSync("public/wings/mini-ears.webp"), true);
-  // The old green wings are gone, and nothing points at them.
+  // The old green wings are back as emerald, under emerald's own name; nothing
+  // points at the green files.
   strictEqual(existsSync("public/wings/full-green.webp"), false);
   strictEqual(existsSync("public/wings/mini-green.webp"), false);
   strictEqual(wingsAssets().some((url) => url.includes("green")), false);
+  strictEqual(wingsUrl("emerald", "full"), "/wings/full-emerald.webp");
+  strictEqual(wingsUrl("emerald", "mini"), "/wings/mini-emerald.webp");
+  // The restored green wings are emerald's source now, kept as they came back
+  // from bc1ee3b^:public/wings/full-green.webp and mini-green.webp.
+  strictEqual(statSync("docs/art/sources/full-emerald-original.webp").size, 69964);
+  strictEqual(statSync("docs/art/sources/mini-emerald-original.webp").size, 7188);
   strictEqual(WINGS_BADGE.creator, "#2ee07a");
+  // Flames are the black tier's only: not the ears, not emerald, not any new tier.
   strictEqual(hasFlames("creator"), false);
   strictEqual(hasFlames("black"), true);
-  for (const t of ["white", "silver", "gold"] as const) strictEqual(hasFlames(t), false);
-  // No glow behind the ears; every earned tier keeps its own.
+  for (const t of WINGS_TIERS) strictEqual(hasFlames(t.tier), t.tier === "black", t.tier);
+  // No glow behind the ears; every earned tier has its own, all different.
   strictEqual(WINGS_HALO.creator, null);
   strictEqual(WINGS_HALO.black, "rgb(255 90 20 / 0.38)");
-  for (const t of ["white", "silver", "gold", "black"] as const) strictEqual(typeof WINGS_HALO[t], "string", t);
-  deepStrictEqual([...ALL_WINGS_TIERS], ["white", "silver", "gold", "black", "creator"]);
+  for (const t of WINGS_TIERS) strictEqual(typeof WINGS_HALO[t.tier], "string", t.tier);
+  strictEqual(new Set(WINGS_TIERS.map((t) => WINGS_HALO[t.tier])).size, 10);
+  deepStrictEqual(
+    [...ALL_WINGS_TIERS],
+    ["white", "bronze", "silver", "gold", "emerald", "sapphire", "ruby", "diamond", "prismatic", "black", "creator"]
+  );
+  // Every tier has art of its own, full and mini, under its own name, at the
+  // art's sizes; no tier borrows another's; wingsAssets lists every one.
+  const webpSize = (file: string) => {
+    // A VP8X WebP keeps its canvas size, less one, in bytes 24-29.
+    const b = readFileSync(file);
+    strictEqual(b.toString("ascii", 12, 16), "VP8X", file);
+    return [1 + b.readUIntLE(24, 3), 1 + b.readUIntLE(27, 3)];
+  };
+  for (const t of WINGS_TIERS) {
+    for (const [size, wh] of [["full", [860, 556]], ["mini", [168, 109]]] as const) {
+      const url = `/wings/${size}-${t.tier}.webp`;
+      strictEqual(wingsUrl(t.tier, size), url, `${t.tier} ${size}`);
+      strictEqual(existsSync(`public${url}`), true, url);
+      deepStrictEqual(webpSize(`public${url}`), [...wh], url);
+      strictEqual(wingsAssets().includes(url), true, url);
+    }
+  }
+  strictEqual(new Set(WINGS_TIERS.map((t) => wingsUrl(t.tier, "full"))).size, 10);
+  strictEqual(new Set(WINGS_TIERS.map((t) => wingsUrl(t.tier, "mini"))).size, 10);
+  // Every file in public/wings is listed, once (no stray copies, nothing shared).
+  deepStrictEqual(readdirSync("public/wings").filter((f) => f.endsWith(".webp")).sort(), wingsAssets().filter((u) => u.endsWith(".webp")).map((u) => u.slice(7)).sort());
+  // The made tiers come from the committed script, from Walt's originals in
+  // docs/art/sources, at the art's sizes; each made file's alpha is its
+  // original's, byte for byte. White, black and the ears are not made.
+  strictEqual(existsSync("scripts/make-wings-tiers.mjs"), true);
+  deepStrictEqual(Object.keys(MADE_FROM).sort(), WINGS_TIERS.map((t) => t.tier).filter((t) => t !== "white" && t !== "black").sort());
+  for (const source of ["silver", "gold", "emerald"]) {
+    for (const [size, wh] of [["full", [860, 556]], ["mini", [168, 109]]] as const) {
+      deepStrictEqual(webpSize(`docs/art/sources/${size}-${source}-original.webp`), [...wh], `${size}-${source}-original`);
+    }
+  }
+  for (const [key, same] of Object.entries(madeAlpha)) strictEqual(same, true, `${key}: alpha differs from its original`);
+  strictEqual(Object.keys(madeAlpha).length, 16);
+  // Nothing from docs/art is served: the sources, the approval sheets.
+  deepStrictEqual(readdirSync("docs/art/sources").sort(), ["full-emerald-original.webp", "full-gold-original.webp", "full-silver-original.webp", "mini-emerald-original.webp", "mini-gold-original.webp", "mini-silver-original.webp"]);
+  for (const v of [1, 2, 3]) strictEqual(existsSync(`docs/art/wings-ladder-preview-v${v}.png`), true, `preview v${v}`);
+  strictEqual(readdirSync("public/wings").some((f) => /original|preview|polished|crystal|candidate|\.png$/.test(f)), false);
+  strictEqual(existsSync("public/art"), false);
   // The creator takes no splash words: WINGS_SPLASH is the earned tiers only.
   strictEqual("creator" in WINGS_SPLASH, false);
 });
 check("wings: every tier has its splash words", () => {
   for (const t of WINGS_TIERS) strictEqual(WINGS_SPLASH[t.tier].length > 0, true, t.tier);
+  strictEqual(new Set(Object.values(WINGS_SPLASH)).size, 10); // no two the same
+  deepStrictEqual(WINGS_SPLASH, {
+    white: "YOU'VE GOT WINGS, MY CHILD",
+    bronze: "BRONZE WINGS, MY CHILD",
+    silver: "SILVER WINGS, MY CHILD",
+    gold: "GOLD WINGS, MY CHILD",
+    emerald: "EMERALD WINGS, MY CHILD",
+    sapphire: "SAPPHIRE WINGS, MY CHILD",
+    ruby: "RUBY WINGS, MY CHILD",
+    diamond: "DIAMOND WINGS, MY CHILD",
+    prismatic: "PRISMATIC WINGS, MY CHILD",
+    black: "EVEN GOD FEARS YOU",
+  });
   strictEqual(wingsSplashSub(25), "25 wins against God");
   // Profile's "Creator · N wins against God" line: singular for one.
   strictEqual(wingsSplashSub(1), "1 win against God");
