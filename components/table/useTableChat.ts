@@ -5,11 +5,13 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
   CHAT_EVENT,
+  OWN_CARD_MS,
   addChatMessage,
   chatTopic,
   cleanChatText,
   createChatThrottle,
   createPerSenderThrottle,
+  ownChatCard,
   type ChatMessage,
 } from "@/lib/tableChat";
 
@@ -38,6 +40,9 @@ import {
 // (the server's rule). Name and avatar come from the roster as it arrives --
 // nothing is read from the message but `text`, which is cleaned
 // (cleanChatText) and throttled per sender; anything else is dropped.
+//
+// MY OWN MESSAGE: once a send is ACKed "ok", `own` holds it for OWN_CARD_MS
+// (lib/tableChat.ts) -- one at a time, apart from `messages`.
 //
 // NEVER BREAKS THE GAME: a channel that can't join or errors only makes chat
 // unavailable (my own channel) or quiet for that player (theirs). Nothing is
@@ -80,11 +85,24 @@ export function useTableChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [available, setAvailable] = useState(false);
   const [signedOut, setSignedOut] = useState(false);
+  // My own last message, echoed for OWN_CARD_MS after an OK ack (apart from
+  // `messages`, which are only the others': the stack never counts it and
+  // the announcer never reads it).
+  const [own, setOwn] = useState<ChatMessage | null>(null);
 
   const rosterRef = useRef(roster);
+  const meRef = useRef(myUserId);
   useEffect(() => {
     rosterRef.current = roster;
-  }, [roster]);
+    meRef.current = myUserId;
+  }, [roster, myUserId]);
+
+  // My own card goes by itself after OWN_CARD_MS (a newer one restarts it).
+  useEffect(() => {
+    if (!own) return;
+    const t = window.setTimeout(() => setOwn((cur) => (cur?.id === own.id ? null : cur)), OWN_CARD_MS);
+    return () => window.clearTimeout(t);
+  }, [own]);
 
   // Signing out anywhere (this tab or another) turns chat off at once.
   useEffect(() => {
@@ -132,6 +150,7 @@ export function useTableChat({
       setAvailable(false);
       // Chat off (or another table): every message is forgotten.
       setMessages([]);
+      setOwn(null);
       if (ownRef.current === channel) ownRef.current = null;
       if (channel) removeChatChannel(topic, channel);
     };
@@ -217,8 +236,22 @@ export function useTableChat({
     if (text === null || !channel || channel.state !== "joined") return "failed";
     if (!sendThrottle.current.take(Date.now())) return "throttled";
     try {
-      const result = await channel.send({ type: "broadcast", event: CHAT_EVENT, payload: { text } });
-      return result === "ok" ? "ok" : "failed";
+      const ack = await channel.send({ type: "broadcast", event: CHAT_EVENT, payload: { text } });
+      const result: ChatSendResult = ack === "ok" ? "ok" : "failed";
+      // Delivered: I see it too, briefly (a failed send shows no card).
+      const myUserId = meRef.current;
+      const card = myUserId
+        ? ownChatCard({
+            result,
+            text,
+            me: rosterRef.current.find((m) => m.user_id === myUserId),
+            myUserId,
+            now: Date.now(),
+            id: `own-${Date.now()}-${++idSeq}`,
+          })
+        : null;
+      if (card) setOwn(card);
+      return result;
     } catch {
       return "failed";
     }
@@ -228,6 +261,7 @@ export function useTableChat({
     setMessages((list) => list.filter((m) => m.id !== id));
   }, []);
   const closeAll = useCallback(() => setMessages([]), []);
+  const dismissOwn = useCallback(() => setOwn(null), []);
 
-  return { messages, send, dismiss, closeAll, available: on && available };
+  return { messages, own: on ? own : null, send, dismiss, closeAll, dismissOwn, available: on && available };
 }

@@ -15,8 +15,10 @@ export const CHAT_MAX_LENGTH = 140;
 export const CHAT_EVENT = "msg";
 // How many messages a screen keeps in memory (closed ones are gone at once).
 export const CHAT_MEMORY = 50;
-// How many cards show at once; the rest are "+N more".
-export const CHAT_MAX_CARDS = 3;
+// The most of the others' cards that stack at once (fewer when the room,
+// chatStackRoom, holds fewer); the rest are "+N more". My own echoed card is
+// extra and never counts.
+export const CHAT_MAX_CARDS = 5;
 
 // The topic for one sender at one table. Lowercase, as the server's rule
 // requires (it refuses an uppercase id rather than guess).
@@ -168,4 +170,45 @@ export function chatStackRoom({
   }
   const limit = Math.min(room, controlTop);
   return { top, budget: Math.min(half, limit), limit };
+}
+
+// MY OWN MESSAGE, ECHOED: after a send the server ACKed as delivered, the
+// sender sees it too, as a card like everyone else's -- but only briefly
+// (OWN_CARD_MS, fading out over the last OWN_CARD_FADE_MS) and apart from
+// the others' messages: at most one at a time (a new one replaces it), never
+// counted in "N new messages" or "+N more", never pushing anyone's card out,
+// never read out by the screen reader (I just typed it). A send that failed
+// or was throttled shows no card.
+export const OWN_CARD_MS = 2000;
+export const OWN_CARD_FADE_MS = 300;
+
+export function ownChatCard({
+  result,
+  text,
+  me,
+  myUserId,
+  now,
+  id,
+}: {
+  result: "ok" | "throttled" | "failed";
+  text: string | null;
+  me: { nickname: string | null; avatar_url: string | null } | undefined;
+  myUserId: string;
+  now: number;
+  id: string;
+}): ChatMessage | null {
+  if (result !== "ok" || text === null) return null;
+  return { id, senderId: myUserId, name: me?.nickname || "Unnamed player", avatarUrl: me?.avatar_url ?? null, text, at: now };
+}
+
+// Whether my own card still shows at `now` (it goes at exactly OWN_CARD_MS).
+export function ownCardShowing(own: ChatMessage | null, now: number): boolean {
+  return own !== null && now - own.at < OWN_CARD_MS;
+}
+
+// THE STACK'S COUNTS, from the others' messages only (my own card is never
+// one of them): how many cards show, whether it folds, and "+N more".
+export function chatStackCounts(messages: readonly ChatMessage[], fit: number) {
+  const shown = Math.min(fit, visibleChatCards(messages).shown.length);
+  return { shown, folded: messages.length > 0 && shown === 0, more: messages.length - shown };
 }

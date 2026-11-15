@@ -2746,6 +2746,20 @@ section.felt-panel {
 }
 /* The cards are a layer on <body> (above every table element), so the deal
    reaches them with :has -- hidden while the cards fly in, back after. */
+/* My own echoed message fades out at the end of its time (OWN_CARD_MS);
+   with reduced motion it simply goes when the time is up. */
+@keyframes chat-own-out {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-card--own {
+    animation:
+      chat-card-in 160ms ease-out,
+      chat-own-out var(--own-fade) ease-in var(--own-fade-delay) forwards;
+  }
+}
 body:has(.sq-dealing) .chat-stack {
   visibility: hidden;
 }

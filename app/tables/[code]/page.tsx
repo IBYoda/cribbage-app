@@ -3107,6 +3107,8 @@ export default function TablePage() {
         messages={chat.messages}
         onDismiss={chat.dismiss}
         onCloseAll={chat.closeAll}
+        own={chat.own}
+        onDismissOwn={chat.dismissOwn}
         room={chatRoom}
       />
       {gameEndedNotice && (
