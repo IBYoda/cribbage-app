@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { loadJoinableTables, loadMyTables, type JoinableTable, type MyTable } from "@/lib/openTables";
+import { clearLobbyNotice, peekLobbyNotice } from "@/lib/lobbyNotice";
+import {
+  loadJoinableTables,
+  loadMyTables,
+  loadWatchableTables,
+  type JoinableTable,
+  type MyTable,
+  type WatchableTable,
+} from "@/lib/openTables";
 import { HomeMenu, type OpenTablesState } from "@/components/brand/HomeMenu";
 import { LandingView } from "@/components/brand/LandingView";
 import { NicknameStep } from "@/components/brand/NicknameStep";
@@ -139,6 +147,7 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
 
   return (
     <>
+      <LobbyNotice />
       <HomeMenu
         name={nickname ?? emailName}
         avatarUrl={avatarUrl}
@@ -159,6 +168,7 @@ export function HomeView({ session, onLogout }: { session: Session; onLogout: ()
 function useOpenTables(userId: string): OpenTablesState {
   const [mine, setMine] = useState<MyTable[] | null>(null);
   const [joinable, setJoinable] = useState<JoinableTable[] | null>(null);
+  const [watchable, setWatchable] = useState<WatchableTable[] | null>(null);
   const [hostWings, setHostWings] = useState<Record<string, WingsTier | null>>({});
   const wingsOn = useWingsOn();
   const [failed, setFailed] = useState(false);
@@ -175,26 +185,36 @@ function useOpenTables(userId: string): OpenTablesState {
     inFlight.current = true;
     Promise.all([
       loadMyTables(userId).catch(() => null),
-      // With their wings, so each row arrives whole.
-      loadJoinableTables(userId)
-        .catch(() => null)
-        .then(async (rows) => ({ rows, wins: await getGodWins((rows ?? []).flatMap((t) => t.hostId ?? [])) })),
-    ]).then(([nextMine, { rows: nextJoinable, wins }]) => {
+      // With their wings, so each row arrives whole: the hosts of the
+      // joinable and the watchable rows (PRD item 40), in one read.
+      Promise.all([loadJoinableTables(userId).catch(() => null), loadWatchableTables(userId).catch(() => null)]).then(
+        async ([rows, watchRows]) => ({
+          rows,
+          watchRows,
+          wins: await getGodWins([...(rows ?? []), ...(watchRows ?? [])].flatMap((t) => t.hostId ?? [])),
+        })
+      ),
+    ]).then(([nextMine, { rows: nextJoinable, watchRows: nextWatchable, wins }]) => {
       inFlight.current = false;
       if (!mounted.current) return;
       setRefreshing(false);
       if (nextMine) setMine(nextMine);
-      if (nextJoinable) {
+      if (nextJoinable || nextWatchable) {
         // Every host, so the creator's show even when the count can't be read.
         setHostWings(
           Object.fromEntries(
-            nextJoinable.flatMap((t) => (t.hostId ? [[t.hostId, displayTier(t.hostId, wins.get(t.hostId)?.tier)]] : []))
+            [...(nextJoinable ?? []), ...(nextWatchable ?? [])].flatMap((t) =>
+              t.hostId ? [[t.hostId, displayTier(t.hostId, wins.get(t.hostId)?.tier)]] : []
+            )
           )
         );
+      }
+      if (nextJoinable) {
         setJoinable(nextJoinable);
         setReadAt(Date.now());
       }
-      setFailed(nextMine === null || nextJoinable === null);
+      if (nextWatchable) setWatchable(nextWatchable);
+      setFailed(nextMine === null || nextJoinable === null || nextWatchable === null);
     });
   }, [userId]);
 
@@ -235,5 +255,27 @@ function useOpenTables(userId: string): OpenTablesState {
     };
   }, [refresh]);
 
-  return { mine, joinable, failed, refreshing, readAt, onRefresh, hostWings: wingsOn ? hostWings : {} };
+  return { mine, joinable, watchable, failed, refreshing, readAt, onRefresh, hostWings: wingsOn ? hostWings : {} };
+}
+
+// A ONE-TIME MESSAGE from the page that sent the player home (lib/
+// lobbyNotice.ts) -- e.g. the watch page: "The host removed you from this
+// table." Read once when the menu first shows, cleared at once, gone after a
+// few seconds or on a tap. Over the menu, so nothing below moves.
+function LobbyNotice() {
+  const [text, setText] = useState<string | null>(() => peekLobbyNotice());
+  useEffect(() => {
+    clearLobbyNotice();
+    const t = window.setTimeout(() => setText(null), 8000);
+    return () => window.clearTimeout(t);
+  }, []);
+  if (!text) return null;
+  return (
+    <div role="status" className="lobby-notice">
+      <span>{text}</span>
+      <button type="button" onClick={() => setText(null)} className="tap-40 px-1 text-sm underline" aria-label="Dismiss">
+        OK
+      </button>
+    </div>
+  );
 }

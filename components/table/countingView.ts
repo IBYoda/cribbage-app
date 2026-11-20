@@ -39,6 +39,10 @@ export type CountingInput = {
   // The table page's one hideCountNumbers value (the player's Hide counts
   // setting). Optional: absent means numbers shown, as before.
   hideNumbers?: boolean;
+  // A SPECTATOR (PRD item 40): myId is Seat 1, drawn at the bottom, named
+  // viewerName -- never "you"; nothing to confirm; the bottom hand
+  // face-down until myHand holds it.
+  viewerName?: string;
 };
 
 export type CardSlot =
@@ -83,9 +87,14 @@ export function countingView(input: CountingInput): CountingView {
   const { myId, dealerId, oppName, phase, step, myHand, oppCards, cribCards, starter, hideNumbers } = input;
   const done = phase === "done";
   const iAmDealer = myId === dealerId;
+  const watching = input.viewerName !== undefined;
+  const your = watching ? `${input.viewerName}'s` : "your";
+  const Your = watching ? `${input.viewerName}'s` : "Your";
 
-  // Whose count is up: the pone at step 0, the dealer at steps 1 and 2.
-  const myTurn = !done && (step === 0 ? !iAmDealer : iAmDealer);
+  // Whose count is up: the pone at step 0, the dealer at steps 1 and 2. The
+  // bottom seat's; MY turn only for a player.
+  const bottomTurn = !done && (step === 0 ? !iAmDealer : iAmDealer);
+  const myTurn = !watching && bottomTurn;
 
   // A hand is counted once the step has moved past it.
   const ponesCounted = done || step >= 1;
@@ -100,9 +109,9 @@ export function countingView(input: CountingInput): CountingView {
   if (done) {
     headline = "Every hand and the crib are counted.";
   } else if (step === 2) {
-    headline = iAmDealer ? "Counting: your crib" : `Counting: ${oppName}'s crib`;
+    headline = iAmDealer ? `Counting: ${your} crib` : `Counting: ${oppName}'s crib`;
   } else {
-    headline = myTurn ? "Counting: your hand" : `Counting: ${oppName}'s hand`;
+    headline = bottomTurn ? `Counting: ${your} hand` : `Counting: ${oppName}'s hand`;
   }
   if (myTurn) {
     hint = "Count it out loud, then Confirm Count.";
@@ -118,21 +127,21 @@ export function countingView(input: CountingInput): CountingView {
   };
   const oppLabel = `${oppName}'s`;
   const recap = [
-    ponesCounted ? line(`${iAmDealer ? oppLabel : "Your"} hand`, iAmDealer ? oppCards : myHand, false) : null,
-    dealersCounted ? line(`${iAmDealer ? "Your" : oppLabel} hand`, iAmDealer ? myHand : oppCards, false) : null,
-    done ? line(`${iAmDealer ? "Your" : oppLabel} crib`, cribCards, true) : null,
+    ponesCounted ? line(`${iAmDealer ? oppLabel : Your} hand`, iAmDealer ? oppCards : myHand, false) : null,
+    dealersCounted ? line(`${iAmDealer ? Your : oppLabel} hand`, iAmDealer ? myHand : oppCards, false) : null,
+    done ? line(`${iAmDealer ? Your : oppLabel} crib`, cribCards, true) : null,
   ].filter((l): l is string => l !== null);
 
   return {
     myTurn,
-    myRow: { kind: "full", cards: myHand },
-    myRowCounting: myTurn && step < 2,
+    myRow: watching && myHand.length === 0 ? { kind: "faceDown", count: 4 } : { kind: "full", cards: myHand },
+    myRowCounting: bottomTurn && step < 2,
     middle: oppCards ? { kind: "full", cards: oppCards } : { kind: "faceDown", count: 4 },
     middleLabel: `${oppName}'s hand`,
     cribFan: cribUp && cribCards ? cribCards : null,
     headline,
     hint,
-    waitingOn: done || myTurn ? null : `${oppName} is counting`,
+    waitingOn: done || myTurn ? null : `${bottomTurn ? input.viewerName : oppName} is counting`,
     canConfirm: myTurn,
     recap,
   };

@@ -38,6 +38,7 @@ export function CutForDealView({
   nameFor,
   onDraw,
   onAcknowledge,
+  spectating = false,
 }: {
   // Full history. The round in progress is always the last element -- there is
   // no separate pointer, so these cannot drift apart.
@@ -53,6 +54,10 @@ export function CutForDealView({
   // screen, so anything the page renders underneath would be invisible.
   onDraw: () => Promise<string | null>;
   onAcknowledge: () => Promise<string | null>;
+  // A SPECTATOR (PRD item 40): myUserId is Seat 1, drawn at the bottom and
+  // named; the cut is watched, never made -- no deck to tap, no Redraw or
+  // Deal button.
+  spectating?: boolean;
 }) {
   const [tappedIndex, setTappedIndex] = useState<number | null>(null);
   const [drawPending, setDrawPending] = useState(false);
@@ -80,7 +85,7 @@ export function CutForDealView({
     .map(nameFor);
 
   async function handleDraw(index: number) {
-    if (iHaveDrawn || drawPending) return;
+    if (spectating || iHaveDrawn || drawPending) return;
     setTappedIndex(index);
     setDrawPending(true);
     setError(null);
@@ -95,6 +100,7 @@ export function CutForDealView({
   }
 
   async function handleAcknowledge() {
+    if (spectating) return;
     setAckPending(true);
     setError(null);
     const message = await onAcknowledge();
@@ -140,7 +146,7 @@ export function CutForDealView({
         )}
         <div className="flex justify-center px-2">
           {Array.from({ length: FAN_SIZE }).map((_, i) => {
-            const interactive = !iHaveDrawn && !drawPending;
+            const interactive = !spectating && !iHaveDrawn && !drawPending;
             return (
               <button
                 key={i}
@@ -166,17 +172,30 @@ export function CutForDealView({
         {/* A minimum height keeps the deck and seats from jumping as the
             message changes (dropped in a flat window -- see .cut-view). */}
         <div className="cut-view__status">
-          {!iHaveDrawn && (
+          {spectating && (
+            // Watching: who still has to cut, then the result. No buttons.
+            <p className="text-lg text-zinc-300">
+              {!roundComplete
+                ? `Waiting for ${players
+                    .filter((id) => !round.some((entry) => entry.user_id === id))
+                    .map(nameFor)
+                    .join(", ")} to cut...`
+                : isTie
+                  ? "A tie -- cutting again..."
+                  : `${nameFor(dealerId!)} deals`}
+            </p>
+          )}
+          {!spectating && !iHaveDrawn && (
             <p className="text-lg font-medium">
               {drawPending ? "Cutting..." : "Tap the deck to cut for deal"}
             </p>
           )}
 
-          {iHaveDrawn && !roundComplete && (
+          {!spectating && iHaveDrawn && !roundComplete && (
             <p className="text-lg text-zinc-300">Waiting for {stillToDraw.join(", ")} to cut...</p>
           )}
 
-          {isTie && (
+          {!spectating && isTie && (
             <>
               <p className="text-xl font-semibold">
                 Tie — both cut {withArticle(rankLabel(myEntry!.card))}
@@ -197,7 +216,7 @@ export function CutForDealView({
             </>
           )}
 
-          {isDecisive && (
+          {!spectating && isDecisive && (
             <>
               <p className="text-xl font-semibold">
                 {dealerId === myUserId ? "You deal" : `${nameFor(dealerId!)} deals`}
@@ -226,11 +245,16 @@ export function CutForDealView({
       {/* YOU -- bottom, same convention. */}
       <div className="flex flex-col items-center gap-1">
         {myEntry ? (
-          <FlipCard card={myEntry.card} revealed label="your cut card" sizing={CUT_CARD} />
+          <FlipCard
+            card={myEntry.card}
+            revealed
+            label={spectating ? `${nameFor(myUserId)}'s cut card` : "your cut card"}
+            sizing={CUT_CARD}
+          />
         ) : (
           <EmptySlot />
         )}
-        <p className="text-sm text-zinc-300">You</p>
+        <p className="text-sm text-zinc-300">{spectating ? nameFor(myUserId) : "You"}</p>
       </div>
     </div>
   );

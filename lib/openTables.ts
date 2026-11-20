@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { isStaleWaitingTable } from "@/lib/tableListing";
+import { isWatchableTable } from "@/lib/spectators";
 
 // OPEN TABLES -- the reads behind the home page's "Open Tables" list
 // (components/brand/HomeView.tsx). Two independent reads, each returning
@@ -145,6 +146,98 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
     .from("profiles")
     .select("id, nickname, avatar_url")
     .in("id", hostIds);
+  const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
+
+  return shown.map((t) => {
+    const host = byId.get(t.host);
+    return {
+      code: t.code,
+      isMuggins: t.isMuggins,
+      hostId: t.host,
+      hostName: host?.nickname?.trim() || "A player",
+      hostAvatar: host?.avatar_url ?? null,
+      createdAt: t.createdAt,
+      seated: t.seated,
+      capacity: t.capacity,
+    };
+  });
+}
+
+// A public table with a live game that the viewer could watch (PRD item 40).
+export type WatchableTable = {
+  code: string;
+  isMuggins: boolean;
+  hostId?: string; // the first seated player
+  hostName: string;
+  hostAvatar: string | null;
+  createdAt: string;
+  seated: number; // how many are playing
+  capacity: number;
+};
+
+// THE TABLES THE VIEWER COULD WATCH, newest first: open, public, allowing
+// spectators, human (computer_level null), a live game, the viewer not
+// seated (isWatchableTable, lib/spectators.ts). Reads only, through the
+// existing policies -- no spectator SQL is called until they tap Watch.
+// The row shows the first seated player, as a Join row does. A failed
+// games read hides every row (nothing is known to be live); a failed
+// profiles read only loses the names.
+export async function loadWatchableTables(userId: string): Promise<WatchableTable[] | null> {
+  const { data, error } = await supabase
+    .from("tables")
+    .select(
+      "id, code, status, is_public, is_muggins, max_players, created_at, allow_spectators, computer_level, table_members(user_id, seat)"
+    )
+    .eq("status", "open")
+    .eq("is_public", true)
+    .eq("allow_spectators", true)
+    .is("computer_level", null)
+    .order("created_at", { ascending: false });
+  if (error || !data) return null;
+  if (data.length === 0) return [];
+
+  const { data: liveGames, error: gamesError } = await supabase
+    .from("games")
+    .select("table_id")
+    .in("table_id", data.map((t) => t.id))
+    .in("status", LIVE_GAME_STATUSES);
+  if (gamesError) return null;
+  const live = new Set((liveGames ?? []).map((g) => g.table_id));
+
+  const now = Date.now();
+  const shown = data.flatMap((t) => {
+    const seated = [...(t.table_members ?? [])]
+      .sort((a, b) => (a.seat ?? 0) - (b.seat ?? 0))
+      .map((m) => m.user_id);
+    const watchable = isWatchableTable(
+      {
+        status: t.status,
+        isPublic: t.is_public,
+        allowSpectators: t.allow_spectators,
+        computerLevel: t.computer_level,
+        seatedIds: seated,
+        gameLive: live.has(t.id),
+        createdAt: t.created_at,
+      },
+      userId,
+      now
+    );
+    if (!watchable) return [];
+    return [
+      {
+        code: t.code,
+        isMuggins: t.is_muggins === true,
+        createdAt: t.created_at,
+        host: seated[0],
+        seated: seated.length,
+        capacity: t.max_players ?? 2,
+      },
+    ];
+  });
+  if (shown.length === 0) return [];
+
+  const hostIds = [...new Set(shown.map((t) => t.host))];
+  const { data: profiles } = await supabase.from("profiles").select("id, nickname, avatar_url").in("id", hostIds);
   const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
 
   return shown.map((t) => {

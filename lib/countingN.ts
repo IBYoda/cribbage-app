@@ -40,6 +40,11 @@ export type CountingInputN = {
   cribCards: string[] | null; // the crib, if readable
   starter: string | null;
   hideNumbers?: boolean;
+  // A SPECTATOR (PRD item 40): myId is then the seat drawn at the bottom
+  // (Seat 1), named viewerName -- never "you". Nothing is ever the
+  // spectator's to confirm, and the bottom hand is face-down until myHand
+  // holds it (the page passes it only once it is turned over).
+  viewerName?: string;
 };
 
 export type RecapLine = { key: string; text: string };
@@ -83,16 +88,21 @@ export function countingViewN(input: CountingInputN): CountingViewN {
   const order = countingOrder(players, dealerId);
   const name = (id: string) => names[id] ?? "A player";
   const iAmDealer = myId === dealerId;
+  const watching = input.viewerName !== undefined;
+  const yourHand = watching ? `${input.viewerName}'s hand` : "Your hand";
+  const yourCrib = watching ? `${input.viewerName}'s crib` : "Your crib";
 
   const isCribStep = !done && step >= n;
   const counterId = done ? null : isCribStep ? dealerId : (order[step] ?? null);
-  const myTurn = counterId === myId;
+  // The bottom seat's count is up; it is MY turn only for a player.
+  const bottomTurn = counterId === myId;
+  const myTurn = !watching && bottomTurn;
 
   // WHOSE COUNT IT IS.
   let headline: string;
   if (done) headline = "Every hand and the crib are counted.";
-  else if (isCribStep) headline = iAmDealer ? "Counting: your crib" : `Counting: ${name(dealerId)}'s crib`;
-  else headline = myTurn ? "Counting: your hand" : `Counting: ${name(counterId!)}'s hand`;
+  else if (isCribStep) headline = iAmDealer ? `Counting: ${watching ? yourCrib : "your crib"}` : `Counting: ${name(dealerId)}'s crib`;
+  else headline = bottomTurn ? `Counting: ${watching ? yourHand : "your hand"}` : `Counting: ${name(counterId!)}'s hand`;
   const hint = myTurn ? "Count it out loud, then Confirm Count." : "";
 
   // THE MIDDLE: the hand being counted, unless it's mine (that one is in my
@@ -101,7 +111,7 @@ export function countingViewN(input: CountingInputN): CountingViewN {
   let middleLabel: string | null = null;
   if (isCribStep) {
     middle = cribCards ? { kind: "full", cards: cribCards } : { kind: "faceDown", count: 4 };
-    middleLabel = iAmDealer ? "Your crib" : `${name(dealerId)}'s crib`;
+    middleLabel = iAmDealer ? yourCrib : `${name(dealerId)}'s crib`;
   } else if (counterId && counterId !== myId) {
     const cards = hands[counterId] ?? null;
     middle = cards ? { kind: "full", cards } : { kind: "faceDown", count: 4 };
@@ -128,11 +138,11 @@ export function countingViewN(input: CountingInputN): CountingViewN {
   const recap: RecapLine[] = [];
   for (let k = 0; k < counted; k++) {
     const id = order[k];
-    const l = line(`hand-${id}`, id === myId ? "Your hand" : `${name(id)}'s hand`, id === myId ? myHand : (hands[id] ?? null), false);
+    const l = line(`hand-${id}`, id === myId ? yourHand : `${name(id)}'s hand`, id === myId ? myHand : (hands[id] ?? null), false);
     if (l) recap.push(l);
   }
   if (done) {
-    const l = line("crib", iAmDealer ? "Your crib" : `${name(dealerId)}'s crib`, cribCards, true);
+    const l = line("crib", iAmDealer ? yourCrib : `${name(dealerId)}'s crib`, cribCards, true);
     if (l) recap.push(l);
   }
 
@@ -140,8 +150,8 @@ export function countingViewN(input: CountingInputN): CountingViewN {
     counterId,
     isCribStep,
     myTurn,
-    myRow: { kind: "full", cards: myHand },
-    myRowCounting: myTurn && !isCribStep,
+    myRow: watching && myHand.length === 0 ? { kind: "faceDown", count: 4 } : { kind: "full", cards: myHand },
+    myRowCounting: bottomTurn && !isCribStep,
     middle,
     middleLabel,
     cribFan: done && cribCards ? cribCards : null,

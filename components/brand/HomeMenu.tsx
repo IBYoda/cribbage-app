@@ -5,7 +5,8 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { SiteFooter } from "@/components/brand/SiteFooter";
 import { JoinTableForm } from "@/components/brand/JoinTableForm";
-import type { JoinableTable, MyTable } from "@/lib/openTables";
+import type { JoinableTable, MyTable, WatchableTable } from "@/lib/openTables";
+import { watchHref } from "@/lib/spectators";
 import { MugginsTag } from "@/components/MugginsTag";
 import { Avatar } from "@/components/Avatar";
 import { placementFor, type WingsTier } from "@/lib/wings";
@@ -14,11 +15,14 @@ import { placementFor, type WingsTier } from "@/lib/wings";
 export type OpenTablesState = {
   mine: MyTable[] | null; // null until the first successful read
   joinable: JoinableTable[] | null; // likewise
+  // Public tables with a live game the viewer could watch (PRD item 40).
+  // Optional: a state without it (the dev mock) simply shows none.
+  watchable?: WatchableTable[] | null;
   failed: boolean; // the last refresh had a failed read
   refreshing: boolean; // a Refresh the player asked for is running
   readAt: number; // when the joinable rows were read, for "5 min ago"
   onRefresh: () => void;
-  hostWings?: Record<string, WingsTier | null>; // the joinable rows' hosts
+  hostWings?: Record<string, WingsTier | null>; // the joinable and watchable rows' hosts
 };
 
 // THE MAIN MENU (signed in), as plain props -- HomeView reads the data. A
@@ -153,7 +157,10 @@ function OpenTables({
   const myRows = mine ?? [];
   const myCodes = new Set(myRows.map((t) => t.code));
   const joinRows = (joinable ?? []).filter((t) => !myCodes.has(t.code));
-  const hasRows = myRows.length + joinRows.length > 0;
+  // After the joinable rows; never a table already listed above.
+  const joinCodes = new Set(joinRows.map((t) => t.code));
+  const watchRows = (state.watchable ?? []).filter((t) => !myCodes.has(t.code) && !joinCodes.has(t.code));
+  const hasRows = myRows.length + joinRows.length + watchRows.length > 0;
   const loading = !failed && !hasRows && (mine === null || joinable === null);
 
   // "More below": fades the list's last rows while it can scroll further.
@@ -243,6 +250,35 @@ function OpenTables({
                   aria-label={`Join ${t.hostName}'s table`}
                 >
                   Join
+                </Link>
+              </li>
+            ))}
+            {/* WATCH ROWS (PRD item 40): a game in progress at a public table
+                that allows spectators. The Join row's layout, with Watch in
+                Join's place -- one button, the same size. */}
+            {watchRows.map((t) => (
+              <li key={`watch-${t.code}`} className="table-row">
+                <span className="flex min-w-0 items-center gap-3">
+                  <Avatar
+                    name={t.hostName}
+                    url={t.hostAvatar}
+                    tier={t.hostId ? state.hostWings?.[t.hostId] : null}
+                    wings={placementFor("open-tables")}
+                  />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate font-bold">{t.hostName}</span>
+                    <span className="text-sm">
+                      {t.isMuggins && <MugginsLead />}
+                      Game in progress
+                    </span>
+                  </span>
+                </span>
+                <Link
+                  href={watchHref(t.code)}
+                  className="peg-btn peg-btn--brass peg-btn--small shrink-0"
+                  aria-label={`Watch ${t.hostName}'s game`}
+                >
+                  Watch
                 </Link>
               </li>
             ))}

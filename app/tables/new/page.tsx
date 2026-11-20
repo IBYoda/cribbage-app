@@ -45,6 +45,9 @@ export default function NewTablePage() {
   // With 4 players: Teams (the default) or Solo. Sent only for 4 players,
   // and never with Self-Scoring, which has no Team/Solo (newTableFields).
   const [fourPlayerMode, setFourPlayerMode] = useState<FourPlayerMode>("teams");
+  // Spectators (PRD item 40): off unless ticked; always sent. Fixed once the
+  // table exists.
+  const [allowSpectators, setAllowSpectators] = useState(false);
 
   // The nickname gate: a player without a nickname picks one first and
   // comes back here (the page stays "Loading..." meanwhile).
@@ -79,7 +82,7 @@ export default function NewTablePage() {
         .insert({
           code,
           created_by: session.user.id,
-          ...newTableFields({ isPublic, isMuggins, maxPlayers, fourPlayerMode }),
+          ...newTableFields({ isPublic, isMuggins, maxPlayers, fourPlayerMode, allowSpectators }),
         })
         .select("code")
         .single();
@@ -138,6 +141,8 @@ export default function NewTablePage() {
         onMaxPlayersChange={setMaxPlayers}
         fourPlayerMode={fourPlayerMode}
         onFourPlayerModeChange={setFourPlayerMode}
+        allowSpectators={allowSpectators}
+        onAllowSpectatorsChange={setAllowSpectators}
       />
 
       {/* Stays disabled once created, while the table page loads -- a second

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SpectatorsTag } from "@/components/SpectatorsTag";
 
 // A host alone at the table: what they're waiting for, and the code to send
 // a friend, big, with a Copy button. Sized for the middle region (see
@@ -11,10 +12,13 @@ export function WaitingForPlayer({
   code,
   seated = 1,
   capacity = 2,
+  spectators = false,
 }: {
   code: string;
   seated?: number;
   capacity?: number;
+  // The table allows spectators (PRD item 40): said here, before anyone sits.
+  spectators?: boolean;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -36,6 +40,11 @@ export function WaitingForPlayer({
           {capacity === 2 ? "Waiting for a second player" : `Waiting for players (${seated} of ${capacity})`}
         </p>
         <p className="text-sm text-zinc-500">Send them this table code:</p>
+        {spectators && (
+          <span className="mt-1">
+            <SpectatorsTag />
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-3">
         <span className="text-4xl font-bold leading-10 tracking-widest tabular-nums" aria-label={`Table code ${code}`}>

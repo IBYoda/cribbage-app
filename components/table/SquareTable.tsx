@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
 import { MugginsTag } from "@/components/MugginsTag";
+import { SpectatorsTag } from "@/components/SpectatorsTag";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
 import type { ScreenSide } from "@/lib/tableLayout";
@@ -85,9 +86,13 @@ export function SquareTableHeader({
   opponent,
   right,
   muggins = false,
+  spectators = false,
 }: {
   code: string;
   handNo: number | null;
+  // Allows spectators (PRD item 40): as the classic header (TableHeader) --
+  // on the Muggins tag line, else a small eye beside "Table CODE".
+  spectators?: boolean;
   // A self-scoring (Muggins) table: its tag on a short line of its own under
   // the header line, as the classic header has it (TableHeader).
   muggins?: boolean;
@@ -103,7 +108,10 @@ export function SquareTableHeader({
           the hand number takes only the room left over (contain: its own
           width never counts) and ends in an ellipsis. */}
       <h1 className="flex min-w-0 font-semibold">
-        <span className="shrink-0 whitespace-nowrap">Table {code}</span>
+        <span className="shrink-0 whitespace-nowrap">
+          Table {code}
+          {spectators && !muggins && <SpectatorsTag variant="icon" />}
+        </span>
         {handNo != null && (
           <span className="min-w-0 flex-1 truncate font-normal text-zinc-500 [contain:inline-size]">
             {" "}· Hand {handNo}
@@ -145,8 +153,9 @@ export function SquareTableHeader({
   return (
     <>
       {header}
-      <div className="sq-muggins-tag">
+      <div className="sq-muggins-tag gap-1.5">
         <MugginsTag />
+        {spectators && <SpectatorsTag />}
       </div>
     </>
   );

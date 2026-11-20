@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { MugginsTag } from "@/components/MugginsTag";
+import { SpectatorsTag } from "@/components/SpectatorsTag";
 import {
   DEFAULT_CARD_BACK,
   DEFAULT_TABLE_SURFACE,
@@ -90,18 +91,24 @@ export function TableHeader({
   code,
   handNo,
   muggins = false,
+  spectators = false,
   right,
 }: {
   code: string;
   handNo: number | null;
   // A Muggins table: the "Self-Scoring (Muggins)" tag under the header line.
   muggins?: boolean;
+  // A table that allows spectators (PRD item 40): "Spectators allowed" on
+  // the Muggins tag line when there is one, else a small eye beside the code
+  // (no extra line, and the title truncates before Leave moves).
+  spectators?: boolean;
   right: ReactNode;
 }) {
   const line = (
     <>
       <h1 className="truncate font-semibold">
         Table {code}
+        {spectators && !muggins && <SpectatorsTag variant="icon" />}
         {handNo != null && (
           <span className="font-normal text-zinc-500"> · Hand {handNo}</span>
         )}
@@ -119,8 +126,9 @@ export function TableHeader({
   return (
     <header className="flex flex-col gap-0.5 text-sm">
       <div className="flex h-6 items-center justify-between gap-2">{line}</div>
-      <div className="flex">
+      <div className="flex gap-1.5">
         <MugginsTag />
+        {spectators && <SpectatorsTag />}
       </div>
     </header>
   );
