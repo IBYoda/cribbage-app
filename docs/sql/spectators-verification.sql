@@ -6,6 +6,11 @@
 -- STATUS: RUN in production on 2026-11-20: "ALL 134 CHECKS PASSED (rolled
 -- back). Walk-through: 1 cut round(s), 2 discards, 8 plays, 4 counting
 -- states, done." T3 ran (a computer account exists), so 134, not 133.
+-- SLICE 2: docs/sql/spectators-join-or-watch.sql (live 2026-11-20) changes
+-- watch_table (a table with no live game) and spectator_heartbeat (the place
+-- kept between games); its own verification covers them. Re-run now, this
+-- file stops at R7 and E3 (they expect slice 1's "There is no game to watch
+-- at this table yet."): by design, not a regression.
 --
 -- RUN ORDER:
 --   1. docs/sql/spectators-precheck.sql      (read-only)

@@ -10,7 +10,7 @@
 // 2-player table can't change through these helpers.
 
 import { deepStrictEqual, strictEqual } from "node:assert";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync as readFileSyncRaw, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import {
   WINGS_ASPECT,
@@ -373,6 +373,19 @@ import {
 import { suitSymbol } from "../lib/cards";
 
 let passed = 0;
+// EVERY SOURCE READ in this file goes through here: text is returned with
+// CRLF turned into LF, so the checks below give the same result on a CRLF
+// working copy (core.autocrlf=true on Windows) as on an LF one -- the
+// patterns are written with "\n". Binary reads (no encoding) are untouched.
+function normalizeEol(text: string): string {
+  return text.replace(/\r\n/g, "\n");
+}
+function readFileSync(path: string, encoding: "utf8"): string;
+function readFileSync(path: string): Buffer;
+function readFileSync(path: string, encoding?: "utf8"): string | Buffer {
+  return encoding === undefined ? readFileSyncRaw(path) : normalizeEol(readFileSyncRaw(path, encoding));
+}
+
 function check(name: string, fn: () => void) {
   try {
     fn();
@@ -5755,6 +5768,23 @@ check("chat: my own message is never announced to the screen reader", () => {
   const ui = readFileSync("components/table/TableChat.tsx", "utf8");
   const announcer = ui.slice(ui.indexOf("export function ChatAnnouncer"));
   strictEqual(announcer.includes("own"), false);
+});
+
+check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
+  strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");
+  strictEqual(normalizeEol("a\nb"), "a\nb");
+  // Real files, whatever their line endings on disk: no CR survives a text read.
+  for (const f of ["lib/openTables.ts", "components/table/TableView.tsx", "docs/sql/spectators.sql", "scripts/test-phase3.ts"]) {
+    strictEqual(readFileSync(f, "utf8").includes("\r"), false, f);
+  }
+  // A file stored with CRLF still has them in its raw text: the helper is what removes them.
+  const raw = readFileSyncRaw("docs/sql/spectators.sql", "utf8");
+  if (raw.includes("\r\n")) strictEqual(readFileSync("docs/sql/spectators.sql", "utf8"), raw.replace(/\r\n/g, "\n"));
+  // Binary reads come back as bytes, untouched.
+  strictEqual(Buffer.isBuffer(readFileSync("public/boards/derby.webp")), true);
+  // No read in this file bypasses the helper: the helper's two raw reads and this check's two.
+  const self = readFileSyncRaw("scripts/test-phase3.ts", "utf8");
+  strictEqual((self.match(/readFileSyncRaw\(/g) ?? []).length, 4);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);

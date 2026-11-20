@@ -5,6 +5,9 @@
 -- STATUS: RUN in production on 2026-11-20: "Success. No rows returned."
 -- (after the precheck, which was clean). Its verification passed the same
 -- day: ALL 134 CHECKS PASSED, T3 included (none skipped).
+-- SLICE 2: docs/sql/spectators-join-or-watch.sql (live 2026-11-20) replaces
+-- watch_table (accepts a table with no live game) and spectator_heartbeat
+-- (refreshes the place between games); the text below is slice 1's.
 --
 -- RUN ORDER:
 --   1. docs/sql/spectators-precheck.sql      (read-only; one result)
@@ -40,9 +43,11 @@
 --     * the crib: only from its counting step on (count_step >= the number
 --       of players) or phase 'done'.
 --     * a game that has ended (won, left, admin, timeout): NOTHING. A
---       spectator goes to the lobby when the game ends and never sees the
---       final board, so the won-mid-pegging reveal path (where players see
---       unplayed cards and an unshown crib) is never open to a spectator.
+--       spectator stays on the table through the game's end (the result
+--       screen) and a return to the waiting room, but never receives a
+--       hidden card of an ended game: the won-mid-pegging reveal path (where
+--       players see unplayed cards and an unshown crib) is never open to a
+--       spectator.
 --     * the deck: never. get_spectator_reveals does not mention game_decks.
 --
 -- THE RULES
@@ -72,7 +77,10 @@
 --       'not_watching' no row (never watched, or stopped), nobody signed
 --                      in, the caller is now seated there, or the row had
 --                      gone stale and the 4 places were taken meanwhile.
---     Anything but 'ok' sends the app to the lobby.
+--     The app: 'ok' and 'game_ended' stay on the table (a game end and a
+--     return to waiting included); 'removed' sends the spectator home;
+--     'table_ended' shows a closed-table screen; 'not_watching' asks
+--     watch_table again, quietly.
 --   get_spectator_reveals(game) -- see above. Returns NULL (never an error)
 --     whenever the caller may see nothing: nobody signed in, no such game,
 --     the game is not live, the table is not open / not human / does not
