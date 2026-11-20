@@ -29,6 +29,12 @@ export type JoinableTable = {
   createdAt: string;
   seated: number; // how many are seated now
   capacity: number; // tables.max_players: 2, 3 or 4
+  // Allows spectators (PRD item 40): Join asks Play or Watch first
+  // (joinRowAction). Missing reads as false: Join goes straight in.
+  allowSpectators?: boolean;
+  // The viewer created this table (and has left it): Join goes straight back
+  // in, never the choice (joinRowAction).
+  isCreator?: boolean;
 };
 
 // The open tables the viewer is seated at, newest seat first, with who else
@@ -97,7 +103,7 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
 export async function loadJoinableTables(userId: string): Promise<JoinableTable[] | null> {
   const { data, error } = await supabase
     .from("tables")
-    .select("id, code, status, is_public, is_muggins, max_players, created_at, table_members(user_id, seat)")
+    .select("id, code, status, is_public, is_muggins, max_players, created_at, created_by, allow_spectators, table_members(user_id, seat)")
     .eq("status", "open")
     .eq("is_public", true)
     .order("created_at", { ascending: false });
@@ -124,6 +130,8 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
         host: seated[0],
         seated: seated.length,
         capacity,
+        allowSpectators: t.allow_spectators === true,
+        isCreator: t.created_by === userId,
       },
     ];
   });
@@ -159,11 +167,14 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
       createdAt: t.createdAt,
       seated: t.seated,
       capacity: t.capacity,
+      allowSpectators: t.allowSpectators,
+      isCreator: t.isCreator,
     };
   });
 }
 
-// A public table with a live game that the viewer could watch (PRD item 40).
+// A public table the viewer could watch (PRD item 40): its game has started,
+// or it is full and has not started yet.
 export type WatchableTable = {
   code: string;
   isMuggins: boolean;
@@ -173,11 +184,15 @@ export type WatchableTable = {
   createdAt: string;
   seated: number; // how many are playing
   capacity: number;
+  // A game is being cut for or played ("Game in progress"); false: full,
+  // not started ("Not started"). Missing reads as true, the original rows.
+  gameLive?: boolean;
 };
 
 // THE TABLES THE VIEWER COULD WATCH, newest first: open, public, allowing
-// spectators, human (computer_level null), a live game, the viewer not
-// seated (isWatchableTable, lib/spectators.ts). Reads only, through the
+// spectators, human (computer_level null), the viewer not seated, and no
+// seat for them -- a live game, or every seat taken (isWatchableTable,
+// lib/spectators.ts). Reads only, through the
 // existing policies -- no spectator SQL is called until they tap Watch.
 // The row shows the first seated player, as a Join row does. A failed
 // games read hides every row (nothing is known to be live); a failed
@@ -216,6 +231,7 @@ export async function loadWatchableTables(userId: string): Promise<WatchableTabl
         allowSpectators: t.allow_spectators,
         computerLevel: t.computer_level,
         seatedIds: seated,
+        capacity: t.max_players ?? 2,
         gameLive: live.has(t.id),
         createdAt: t.created_at,
       },
@@ -231,6 +247,7 @@ export async function loadWatchableTables(userId: string): Promise<WatchableTabl
         host: seated[0],
         seated: seated.length,
         capacity: t.max_players ?? 2,
+        gameLive: live.has(t.id),
       },
     ];
   });
@@ -251,6 +268,7 @@ export async function loadWatchableTables(userId: string): Promise<WatchableTabl
       createdAt: t.createdAt,
       seated: t.seated,
       capacity: t.capacity,
+      gameLive: t.gameLive,
     };
   });
 }

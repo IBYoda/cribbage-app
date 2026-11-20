@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { SiteFooter } from "@/components/brand/SiteFooter";
 import { JoinTableForm } from "@/components/brand/JoinTableForm";
 import type { JoinableTable, MyTable, WatchableTable } from "@/lib/openTables";
-import { watchHref } from "@/lib/spectators";
+import { joinRowAction, splitOpenTableRows, watchHref, watchRowState } from "@/lib/spectators";
+import { JoinChoiceSheet } from "@/components/brand/JoinChoice";
 import { MugginsTag } from "@/components/MugginsTag";
 import { Avatar } from "@/components/Avatar";
 import { placementFor, type WingsTier } from "@/lib/wings";
@@ -137,9 +138,11 @@ function TimeOfDayGreeting() {
   return <>{greeting}</>;
 }
 
-// OPEN TABLES: one list, two kinds of row. First, pinned and in brass, every
-// open table the player is seated at (Rejoin); then the public tables they
-// could join (Join). A table the player is seated at never appears twice.
+// OPEN TABLES: one list, three kinds of row. First, pinned and in brass,
+// every open table the player is seated at (Rejoin); then the public tables
+// they could join (Join -- at a table that allows spectators, Join asks Play
+// or Watch first); then the ones they could watch (Watch: a game in
+// progress, or full and not started). One row per table.
 // The list is capped in height and scrolls inside itself (.open-tables-list
 // in app/globals.css), so Start a Table and Join stay in the lower third.
 function OpenTables({
@@ -156,10 +159,12 @@ function OpenTables({
   const { mine, joinable, failed, refreshing, readAt, onRefresh } = state;
   const myRows = mine ?? [];
   const myCodes = new Set(myRows.map((t) => t.code));
-  const joinRows = (joinable ?? []).filter((t) => !myCodes.has(t.code));
-  // After the joinable rows; never a table already listed above.
-  const joinCodes = new Set(joinRows.map((t) => t.code));
-  const watchRows = (state.watchable ?? []).filter((t) => !myCodes.has(t.code) && !joinCodes.has(t.code));
+  // ONE ROW PER TABLE (splitOpenTableRows): a table the viewer could watch
+  // is a Watch row, every other free seat a Join row.
+  const { joinRows, watchRows } = splitOpenTableRows(myCodes, joinable ?? [], state.watchable ?? []);
+  // PLAY OR WATCH: the Join row whose choice is open (a table that allows
+  // spectators); null when none is.
+  const [choosing, setChoosing] = useState<{ code: string; hostName: string } | null>(null);
   const hasRows = myRows.length + joinRows.length + watchRows.length > 0;
   const loading = !failed && !hasRows && (mine === null || joinable === null);
 
@@ -244,18 +249,34 @@ function OpenTables({
                     </span>
                   </span>
                 </span>
-                <Link
-                  href={`/tables/${t.code}`}
-                  className="peg-btn peg-btn--brass peg-btn--small shrink-0"
-                  aria-label={`Join ${t.hostName}'s table`}
-                >
-                  Join
-                </Link>
+                {/* A table that allows spectators: Join asks Play or Watch
+                    first (the sheet below) -- never its creator. Otherwise
+                    straight in, as always. */}
+                {joinRowAction({ allowSpectators: t.allowSpectators ?? false, isCreator: t.isCreator }) === "choose" ? (
+                  <button
+                    type="button"
+                    onClick={() => setChoosing({ code: t.code, hostName: t.hostName })}
+                    className="peg-btn peg-btn--brass peg-btn--small shrink-0"
+                    aria-label={`Join ${t.hostName}'s table`}
+                    aria-haspopup="dialog"
+                  >
+                    Join
+                  </button>
+                ) : (
+                  <Link
+                    href={`/tables/${t.code}`}
+                    className="peg-btn peg-btn--brass peg-btn--small shrink-0"
+                    aria-label={`Join ${t.hostName}'s table`}
+                  >
+                    Join
+                  </Link>
+                )}
               </li>
             ))}
-            {/* WATCH ROWS (PRD item 40): a game in progress at a public table
-                that allows spectators. The Join row's layout, with Watch in
-                Join's place -- one button, the same size. */}
+            {/* WATCH ROWS (PRD item 40): a public table that allows
+                spectators, with a game in progress or every seat taken
+                before its game ("Not started"). The Join row's layout, with
+                Watch in Join's place -- one button, the same size. */}
             {watchRows.map((t) => (
               <li key={`watch-${t.code}`} className="table-row">
                 <span className="flex min-w-0 items-center gap-3">
@@ -269,14 +290,14 @@ function OpenTables({
                     <span className="truncate font-bold">{t.hostName}</span>
                     <span className="text-sm">
                       {t.isMuggins && <MugginsLead />}
-                      Game in progress
+                      {watchRowState(t.gameLive ?? true)}
                     </span>
                   </span>
                 </span>
                 <Link
                   href={watchHref(t.code)}
                   className="peg-btn peg-btn--brass peg-btn--small shrink-0"
-                  aria-label={`Watch ${t.hostName}'s game`}
+                  aria-label={`Watch ${t.hostName}'s table`}
                 >
                   Watch
                 </Link>
@@ -293,6 +314,7 @@ function OpenTables({
           {loading ? "Looking for tables..." : "No open tables right now. Start one below."}
         </p>
       )}
+      <JoinChoiceSheet table={choosing} onClose={() => setChoosing(null)} />
     </section>
   );
 }

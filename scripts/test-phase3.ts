@@ -56,7 +56,9 @@ import {
   FULL_TEXT,
   NOBODY_SEATED,
   NOT_ALLOWED_TEXT,
+  PLAY_PARAM,
   REMOVED_TEXT,
+  SPECTATOR_NO_GAME_TEXT,
   TABLE_CLOSED_TEXT,
   WATCH_RETRY_MS,
   followGame,
@@ -64,10 +66,18 @@ import {
   isLiveGameStatus,
   isWatchableTable,
   joinOrWatch,
+  joinRowAction,
+  playChosenFromSearch,
+  playHref,
   rewatchOutcome,
+  rewatchStep,
   spectatorViewerId,
+  spectatorWaitingLine,
+  splitOpenTableRows,
+  waitingForPlayerTitle,
   watchHref,
   watchRefusal,
+  watchRowState,
 } from "../lib/spectators";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
@@ -1210,44 +1220,164 @@ const watchable = {
   allowSpectators: true,
   computerLevel: null,
   seatedIds: ["h", "g"],
+  capacity: 2,
   gameLive: true,
   createdAt: "2026-11-20T11:00:00Z",
 };
-check("Open Tables: a Watch row needs open, public, spectators allowed, human, a live game, viewer not seated", () => {
+check("Open Tables: a Watch row needs open, public, spectators allowed, human, viewer not seated, and a live game OR a full table", () => {
   strictEqual(isWatchableTable(watchable, "v", WATCH_NOW), true);
   strictEqual(isWatchableTable({ ...watchable, status: "ended" }, "v", WATCH_NOW), false, "ended");
   strictEqual(isWatchableTable({ ...watchable, isPublic: false }, "v", WATCH_NOW), false, "private: never listed");
   strictEqual(isWatchableTable({ ...watchable, allowSpectators: false }, "v", WATCH_NOW), false, "no spectators");
   strictEqual(isWatchableTable({ ...watchable, allowSpectators: null }, "v", WATCH_NOW), false, "unknown");
   strictEqual(isWatchableTable({ ...watchable, computerLevel: "easy" }, "v", WATCH_NOW), false, "computer");
-  strictEqual(isWatchableTable({ ...watchable, gameLive: false }, "v", WATCH_NOW), false, "no live game");
+  // JOIN-OR-WATCH: a FULL table that has not started is a Watch row too ...
+  strictEqual(isWatchableTable({ ...watchable, gameLive: false }, "v", WATCH_NOW), true, "full, not started");
+  strictEqual(isWatchableTable({ ...watchable, gameLive: false, seatedIds: ["a", "b", "c", "d"], capacity: 4 }, "v", WATCH_NOW), true, "4/4");
+  // ... but a free seat before the game is a Join row (Play or Watch), never a Watch row.
+  strictEqual(isWatchableTable({ ...watchable, gameLive: false, seatedIds: ["h"] }, "v", WATCH_NOW), false, "1/2, not started");
+  strictEqual(isWatchableTable({ ...watchable, gameLive: false, seatedIds: ["a", "b", "c"], capacity: 4 }, "v", WATCH_NOW), false, "3/4");
+  strictEqual(isWatchableTable({ ...watchable, seatedIds: ["h"] }, "v", WATCH_NOW), true, "a free seat but the game is on");
   strictEqual(isWatchableTable(watchable, "g", WATCH_NOW), false, "the viewer is seated");
   strictEqual(isWatchableTable({ ...watchable, seatedIds: [] }, "v", WATCH_NOW), false, "nobody seated");
-  // The joinable list's age rule: never hides a live game, however old.
+  // The joinable list's age rule: never hides a live game, however old; hides an old waiting one.
   strictEqual(isWatchableTable({ ...watchable, createdAt: "2026-11-19T12:00:00Z" }, "v", WATCH_NOW), true, "old but live");
+  strictEqual(isWatchableTable({ ...watchable, gameLive: false, createdAt: "2026-11-19T12:00:00Z" }, "v", WATCH_NOW), false, "old, full, never started");
   strictEqual(isLiveGameStatus("cutting") && isLiveGameStatus("active"), true);
   strictEqual(isLiveGameStatus("ended") || isLiveGameStatus(null), false);
   strictEqual(watchHref("0427"), "/watch/0427");
+  // The row says which: the game is on, or the table is full and waiting.
+  strictEqual(watchRowState(true), "Game in progress");
+  strictEqual(watchRowState(false), "Not started");
 });
-check("Join by code: Watch instead only for a newcomer with no seat, at a human table that allows spectators", () => {
+check("Join-or-Watch: joinOrWatch answers watch | choose | seat", () => {
   const t = { isMember: false, seated: 2, capacity: 2, gameLive: true, allowSpectators: true, computerLevel: null };
   strictEqual(joinOrWatch(t), "watch", "full, game on");
   strictEqual(joinOrWatch({ ...t, gameLive: false }), "watch", "full, between games");
   strictEqual(joinOrWatch({ ...t, seated: 1, gameLive: true }), "watch", "a seat free but the game started");
-  strictEqual(joinOrWatch({ ...t, seated: 1, gameLive: false }), "seat", "a free seat, no game: join as always");
+  // A free seat before the game, spectators allowed: ask Play or Watch.
+  strictEqual(joinOrWatch({ ...t, seated: 1, gameLive: false }), "choose", "1/2, not started");
+  strictEqual(joinOrWatch({ ...t, seated: 0, gameLive: false }), "choose", "0/2, not started");
+  strictEqual(joinOrWatch({ ...t, seated: 3, capacity: 4, gameLive: false }), "choose", "3/4, not started");
+  strictEqual(joinOrWatch({ ...t, seated: 1, capacity: 3, gameLive: false }), "choose", "1/3, not started");
+  // Chose Play already: the seat, never the choice again ...
+  strictEqual(joinOrWatch({ ...t, seated: 1, gameLive: false, playChosen: true }), "seat", "chose Play");
+  strictEqual(joinOrWatch({ ...t, seated: 3, capacity: 4, gameLive: false, playChosen: true }), "seat", "chose Play, 4 players");
+  // ... unless the seat has gone meanwhile (Watch instead, as before).
+  strictEqual(joinOrWatch({ ...t, playChosen: true }), "watch", "chose Play, but the table filled and started");
+  strictEqual(joinOrWatch({ ...t, gameLive: false, playChosen: true }), "watch", "chose Play, but the table filled");
+  // Exactly as before: seated, no spectators, unknown, a computer table.
   strictEqual(joinOrWatch({ ...t, isMember: true }), "seat", "already seated: back to their seat");
+  strictEqual(joinOrWatch({ ...t, isMember: true, seated: 1, gameLive: false }), "seat", "seated, not started: no choice");
   strictEqual(joinOrWatch({ ...t, allowSpectators: false }), "seat", "no spectators: exactly as today");
-  strictEqual(joinOrWatch({ ...t, allowSpectators: null }), "seat", "unknown: as today");
-  strictEqual(joinOrWatch({ ...t, computerLevel: "hard" }), "seat", "computer table: as today");
+  strictEqual(joinOrWatch({ ...t, allowSpectators: false, seated: 1, gameLive: false }), "seat", "no spectators, free seat: straight in");
+  strictEqual(joinOrWatch({ ...t, allowSpectators: null, seated: 1, gameLive: false }), "seat", "unknown: as today");
+  strictEqual(joinOrWatch({ ...t, computerLevel: "hard", seated: 1, gameLive: false }), "seat", "computer table: as today");
   strictEqual(joinOrWatch({ ...t, seated: 4, capacity: 4 }), "watch", "4 players, full");
-  strictEqual(joinOrWatch({ ...t, seated: 3, capacity: 4, gameLive: false }), "seat", "4 players, a seat free");
+});
+check("Join-or-Watch: the table's creator never gets the choice -- seat, at every table size", () => {
+  // Start a Table lands the creator on the table page before their seat exists.
+  for (const capacity of [2, 3, 4]) {
+    const fresh = { isMember: false, seated: 0, capacity, gameLive: false, allowSpectators: true, computerLevel: null };
+    strictEqual(joinOrWatch({ ...fresh, isCreator: true }), "seat", `creator, new ${capacity}-player table`);
+    strictEqual(joinOrWatch({ ...fresh, seated: capacity - 1, isCreator: true }), "seat", `creator, ${capacity - 1}/${capacity}`);
+    // Anyone else in the same state: the choice.
+    strictEqual(joinOrWatch(fresh), "choose", `non-creator, new ${capacity}-player table`);
+    strictEqual(joinOrWatch({ ...fresh, isCreator: false }), "choose", `non-creator (false), ${capacity}`);
+    strictEqual(joinOrWatch({ ...fresh, seated: capacity - 1 }), "choose", `non-creator, ${capacity - 1}/${capacity}`);
+    // A creator who finds it full or started (left and came back): unchanged, watch.
+    strictEqual(joinOrWatch({ ...fresh, seated: capacity, isCreator: true }), "watch", `creator, full ${capacity}`);
+    strictEqual(joinOrWatch({ ...fresh, seated: capacity - 1, gameLive: true, isCreator: true }), "watch", `creator, started ${capacity}`);
+    // Seated: seat. No spectators: seat.
+    strictEqual(joinOrWatch({ ...fresh, isMember: true, seated: 1, isCreator: true }), "seat", `creator seated, ${capacity}`);
+    strictEqual(joinOrWatch({ ...fresh, allowSpectators: false, isCreator: true }), "seat", `creator, no spectators, ${capacity}`);
+    strictEqual(joinOrWatch({ ...fresh, allowSpectators: false, seated: capacity, isCreator: true }), "seat", `creator, no spectators, full ${capacity}`);
+  }
+  // Home: a creator who left sees their table as a plain Join, never the sheet.
+  strictEqual(joinRowAction({ allowSpectators: true, isCreator: true }), "join");
+  strictEqual(joinRowAction({ allowSpectators: true, isCreator: false }), "choose");
+  // The table page reads it from the table row it already has (no extra query).
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("isCreator: tableRow.created_by === session!.user.id,"), true);
+  const setup = view.slice(view.indexOf("// WATCH INSTEAD (joinOrWatch"), view.indexOf("// THE NICKNAME GATE."));
+  strictEqual(/\.from\(/.test(setup.slice(setup.indexOf("joinOrWatch({"))), false, "no read after the rule");
+  // The joinable read carries created_by into isCreator, and the menu passes it on.
+  const reads = readFileSync("lib/openTables.ts", "utf8");
+  strictEqual(reads.includes("created_at, created_by, allow_spectators, table_members(user_id, seat)"), true);
+  strictEqual(reads.includes("isCreator: t.created_by === userId,"), true);
+  strictEqual(readFileSync("components/brand/HomeMenu.tsx", "utf8").includes("joinRowAction({ allowSpectators: t.allowSpectators ?? false, isCreator: t.isCreator })"), true);
+});
+check("Join-or-Watch: choosing Play never asks again (?play=1 from Home, a flag on the table page)", () => {
+  strictEqual(PLAY_PARAM, "play");
+  strictEqual(playHref("0427"), "/tables/0427?play=1");
+  strictEqual(playChosenFromSearch("?play=1"), true);
+  strictEqual(playChosenFromSearch("?layout=classic&play=1"), true);
+  strictEqual(playChosenFromSearch(""), false);
+  strictEqual(playChosenFromSearch("?play=0"), false);
+  strictEqual(playChosenFromSearch("?layout=classic"), false);
+  // Home's sheet: Play links to playHref; Watch to the watch page; Cancel closes.
+  const choice = readFileSync("components/brand/JoinChoice.tsx", "utf8");
+  strictEqual(choice.includes("<Link href={playHref(code)}"), true);
+  strictEqual(choice.includes("<Link href={watchHref(code)}"), true);
+  strictEqual(choice.includes("onClick={onCancel}"), true);
+  // 44px targets with 12px corners.
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/\.join-choice__btn \{[^}]*min-height: 44px;[^}]*border-radius: 12px;/.test(css), true);
+  strictEqual(/\.join-choice__cancel \{[^}]*min-height: 44px;[^}]*border-radius: 12px;/.test(css), true);
+  // The table page: the flag or the URL decides; its own Play sets the flag and re-runs the setup.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("playChosen: playChosenRef.current || playChosenFromSearch(window.location.search),"), true);
+  strictEqual(/onPlay=\{\(\) => \{\s*playChosenRef\.current = true;\s*setWatchOffer\(null\);\s*setRetryKey\(\(k\) => k \+ 1\);/.test(view), true);
+  // "choose" shows the choice and stops BEFORE any seat, nickname gate or Muggins notice.
+  const setup = view.slice(view.indexOf("// WATCH INSTEAD (joinOrWatch"), view.indexOf("// THE NICKNAME GATE."));
+  strictEqual(/if \(choice === "choose"\) \{\s*setWatchOffer\("choose"\);\s*return;\s*\}/.test(setup), true);
+  strictEqual(view.indexOf('setWatchOffer("choose")') < view.indexOf("await takeSeat(tableRow"), true);
+  // The full / started "Watch instead" screens stay.
+  strictEqual(view.includes("You can watch the game instead."), true);
+});
+check("Open Tables: one row per table -- Join (with the choice), Join (straight in), Watch for full-not-started, Watch for started", () => {
+  const mine = new Set(["9000"]);
+  const joinable = [
+    { code: "1111", allowSpectators: true }, // free seat, not started, spectators: Join -> choice
+    { code: "2222", allowSpectators: false }, // free seat, no spectators: Join straight in
+    { code: "3333", allowSpectators: true }, // free seat but a live game: listed by both reads
+    { code: "9000", allowSpectators: true }, // the viewer's own table
+  ];
+  const watchableRows = [
+    { code: "3333", gameLive: true },
+    { code: "4444", gameLive: false }, // full, not started
+    { code: "5555", gameLive: true }, // full, started
+    { code: "9000", gameLive: true },
+  ];
+  const { joinRows, watchRows } = splitOpenTableRows(mine, joinable, watchableRows);
+  deepStrictEqual(joinRows.map((t) => t.code), ["1111", "2222"]);
+  deepStrictEqual(watchRows.map((t) => t.code), ["3333", "4444", "5555"]);
+  deepStrictEqual(joinRows.map((t) => joinRowAction(t)), ["choose", "join"]);
+  deepStrictEqual(watchRows.map((t) => watchRowState(t.gameLive)), ["Game in progress", "Not started", "Game in progress"]);
+  strictEqual(joinRowAction({ allowSpectators: true, computerLevel: "easy" }), "join");
+  strictEqual(joinRowAction({ allowSpectators: null }), "join");
+  // The joinable read selects allow_spectators and carries it; Watch rows carry gameLive.
+  const reads = readFileSync("lib/openTables.ts", "utf8");
+  strictEqual(reads.includes('.select("id, code, status, is_public, is_muggins, max_players, created_at, created_by, allow_spectators, table_members(user_id, seat)")'), true);
+  strictEqual(reads.includes("allowSpectators: t.allow_spectators === true,"), true);
+  strictEqual(reads.includes("capacity: t.max_players ?? 2,\n        gameLive: live.has(t.id),"), true);
+  // The menu: a "choose" Join opens the sheet (a button); a plain Join is the old link; Watch says its state.
+  const menu = readFileSync("components/brand/HomeMenu.tsx", "utf8");
+  strictEqual(menu.includes("splitOpenTableRows(myCodes, joinable ?? [], state.watchable ?? [])"), true);
+  strictEqual(/joinRowAction\(\{ allowSpectators: t\.allowSpectators \?\? false, isCreator: t\.isCreator \}\) === "choose" \? \(\s*<button[\s\S]{0,120}onClick=\{\(\) => setChoosing\(/.test(menu), true);
+  strictEqual(/<Link\s+href=\{`\/tables\/\$\{t\.code\}`\}[\s\S]{0,160}>\s*Join\s*</.test(menu), true);
+  strictEqual(menu.includes("<JoinChoiceSheet table={choosing} onClose={() => setChoosing(null)} />"), true);
+  strictEqual(menu.includes("href={watchHref(t.code)}"), true);
+  strictEqual(/key=\{`watch-\$\{t\.code\}`\}[\s\S]{0,1200}\{watchRowState\(t\.gameLive \?\? true\)\}[\s\S]{0,400}>\s*Watch\s*</.test(menu), true);
+  // Every row's button is the same small brass button, so rows keep one height.
+  strictEqual((menu.match(/className="peg-btn peg-btn--brass peg-btn--small shrink-0"/g) ?? []).length, 3);
 });
 check("Spectators: the players are told -- the tag in the headers and the waiting screens", () => {
   const page = readFileSync("components/table/TableView.tsx", "utf8");
   // Every header that shows the Muggins tag shows the spectators one too.
   strictEqual(page.split("muggins={isMuggins}").length, page.split("spectators={headerSpectatorsTag}").length);
   strictEqual(page.includes("const headerSpectatorsTag = allowsSpectators && !spectating;"), true);
-  strictEqual(page.includes("<WaitingForPlayer code={code} seated={members.length} capacity={capacity} spectators={allowsSpectators} />"), true);
+  strictEqual(/<WaitingForPlayer[\s\S]{0,120}spectators=\{allowsSpectators\}/.test(page), true);
   strictEqual(/<WaitingRoom[\s\S]{0,80}spectators=\{allowsSpectators\}/.test(page), true);
   // The in-game header never gets a line of its own for it: an icon beside
   // the code, or the Muggins line that is already there.
@@ -1256,11 +1386,93 @@ check("Spectators: the players are told -- the tag in the headers and the waitin
     strictEqual(src.includes('{spectators && !muggins && <SpectatorsTag variant="icon" />}'), true, f);
     strictEqual(src.includes("{spectators && <SpectatorsTag />}"), true, f);
   }
-  // Open Tables: Watch in Join's place, to the watch page.
-  const menu = readFileSync("components/brand/HomeMenu.tsx", "utf8");
-  strictEqual(menu.includes("href={watchHref(t.code)}"), true);
-  // The Watch row itself says the game is in progress (not only "Your table").
-  strictEqual(/key=\{`watch-\$\{t\.code\}`\}[\s\S]{0,1200}Game in progress[\s\S]{0,400}>\s*Watch\s*</.test(menu), true);
+});
+check("Header: 'Hand N' sits under the table code, the spectators eye stays on the top row beside it", () => {
+  for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
+    const src = readFileSync(f, "utf8");
+    strictEqual(src.includes('<h1 className="flex min-w-0 flex-col justify-center font-semibold" data-header="title">'), true, f);
+    const start = src.indexOf('data-header="title"');
+    const h1 = src.slice(start, src.indexOf("</h1>", start));
+    // A column: the code line (with the eye inside it), then the hand line.
+    const code = h1.indexOf('data-header="code"');
+    const eye = h1.indexOf('<SpectatorsTag variant="icon" />');
+    const codeEnd = h1.indexOf("</span>", code);
+    const hand = h1.indexOf('data-header="hand"');
+    strictEqual(code > 0 && eye > code && eye < codeEnd, true, `${f}: the eye on the code line`);
+    strictEqual(hand > codeEnd, true, `${f}: the hand line under it`);
+    strictEqual(/data-header="hand"\s*>\s*Hand \{handNo\}\s*<\/span>/.test(h1), true, `${f}: "Hand N", no separator`);
+    strictEqual(src.includes("· Hand"), false, f);
+    // Small and one line, inside the header's own height.
+    const handClass = h1.slice(Math.max(0, hand - 200), hand);
+    strictEqual(handClass.includes("text-[10px]"), true, `${f}: 10px`);
+    strictEqual(handClass.includes("truncate"), true, `${f}: one line`);
+  }
+  strictEqual(readFileSync("components/table/TableShell.tsx", "utf8").includes('<header className="flex h-6 items-center justify-between gap-2 text-sm">{line}</header>'), true, "classic stays 24px");
+  // Square: the hand line's width never counts toward the column, so the across player keeps its room.
+  strictEqual(readFileSync("components/table/SquareTable.tsx", "utf8").includes('[contain:inline-size]"\n            data-header="hand"'), true);
+  strictEqual(/\.sq-header \{[^}]*height: 28px;/.test(readFileSync("app/globals.css", "utf8")), true, "square stays 28px");
+});
+check("Watching with no game: a NULL game id is accepted, and the old refusal still waits", () => {
+  // A quiet re-watch that lets the spectator in STAYS, with or without a game.
+  deepStrictEqual(rewatchStep({ ok: { gameId: null } }), { kind: "continue" });
+  deepStrictEqual(rewatchStep({ ok: { gameId: "g1" } }), { kind: "continue" });
+  // The old SQL's refusal still means "between games, stay" (and "waiting" on first watch).
+  deepStrictEqual(rewatchStep({ refused: "There is no game to watch at this table yet." }), { kind: "continue" });
+  strictEqual(watchRefusal("There is no game to watch at this table yet.").kind, "waiting");
+  deepStrictEqual(rewatchStep({ refused: "You were removed from watching this table." }), { kind: "home", text: REMOVED_TEXT });
+  deepStrictEqual(rewatchStep({ refused: "This table has ended." }), { kind: "closed" });
+  deepStrictEqual(rewatchStep({ refused: "Spectators full: this table already has 4 spectators." }), { kind: "screen", text: FULL_TEXT });
+  // game_ended (the new SQL's waiting room answer) still means stay.
+  deepStrictEqual(heartbeatStep("game_ended"), { kind: "continue" });
+  // The data layer: only the table id is required; game_id may be null.
+  const data = readFileSync("lib/spectatorData.ts", "utf8");
+  strictEqual(data.includes("export type WatchTicket = { tableId: string; code: string; gameId: string | null };"), true);
+  strictEqual(data.includes('if (!row?.table_id) return { refused: "Couldn\'t start watching. Please try again." };'), true);
+  strictEqual(data.includes("gameId: row.game_id ?? null"), true);
+  strictEqual(data.includes("!row.game_id"), false);
+  // Reveals: only ever a real game id.
+  strictEqual(/export async function readSpectatorReveals\(gameId: string\)[^{]*\{\s*\/\/[^\n]*\n\s*if \(!gameId\) return null;/.test(data), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const viewCode = codeOnly(view);
+  strictEqual((viewCode.match(/fetchRevealed\(/g) ?? []).length, 2, "two calls");
+  for (const call of viewCode.match(/fetchRevealed\([^)]*\)/g) ?? []) strictEqual(/fetchRevealed\((row|existingGame)\.id\)/.test(call), true, call);
+  // The page: let in -> the table view at once (no own waiting screen); the
+  // re-watch goes through rewatchStep; the old "waiting" path stays as the fallback.
+  const page = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual(/if \("ok" in result\) \{\s*ticketRef\.current = result\.ok;\s*setState\(\{ kind: "watching", ticket: result\.ok \}\);/.test(page), true);
+  strictEqual(page.includes("const outcome: RewatchOutcome = rewatchStep(again);"), true);
+  strictEqual(page.includes('if (refusal.kind === "waiting") {'), true);
+  strictEqual(page.includes("timer = window.setTimeout(attempt, WATCH_RETRY_MS);"), true);
+});
+check("Watching: the spectator's waiting room for 2, 3 and 4 players -- read-only, no 'you', who it waits on", () => {
+  // 2 players: WaitingForPlayer.
+  strictEqual(waitingForPlayerTitle({ seated: 1, capacity: 2, spectating: true }), "Waiting for a second player");
+  strictEqual(waitingForPlayerTitle({ seated: 0, capacity: 2, spectating: true }), "Waiting for players");
+  strictEqual(waitingForPlayerTitle({ seated: 0, capacity: 2, spectating: false }), "Waiting for a second player");
+  strictEqual(waitingForPlayerTitle({ seated: 1, capacity: 2, spectating: false }), "Waiting for a second player");
+  // 3 and 4 players (the counts, whoever is looking).
+  strictEqual(waitingForPlayerTitle({ seated: 2, capacity: 3, spectating: true }), "Waiting for players (2 of 3)");
+  strictEqual(waitingForPlayerTitle({ seated: 2, capacity: 4, spectating: false }), "Waiting for players (2 of 4)");
+  const wfp = readFileSync("components/table/WaitingForPlayer.tsx", "utf8");
+  strictEqual(wfp.includes(`{spectating ? "You're watching this table." : "Send them this table code:"}`), true);
+  // 3 and 4 players: WaitingRoom -- never the host, never "(you)", who it waits on.
+  strictEqual(spectatorWaitingLine({ full: true, hostName: "Elsa" }), "You're watching. Waiting for Elsa to start.");
+  strictEqual(spectatorWaitingLine({ full: true, hostName: null }), "You're watching. Waiting for the host to start.");
+  strictEqual(spectatorWaitingLine({ full: false, hostName: "Elsa" }), "You're watching. Waiting for players to sit down.");
+  const room = readFileSync("components/table/WaitingRoom.tsx", "utf8");
+  strictEqual(room.includes("const isHost = !spectating && hostId !== null && hostId === myId;"), true);
+  strictEqual(/\{spectating \? \(\s*<p className="text-sm text-zinc-500">\{spectatorWaitingLine\(\{ full, hostName \}\)\}<\/p>\s*\) : isHost \? \(/.test(room), true);
+  // Moves and Start exist only behind isHost.
+  strictEqual(/const action = !isHost\s*\? undefined/.test(room), true);
+  // The page passes spectating to both, myId = NOBODY_SEATED (no "(you)"), Start only for the host.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(/<WaitingForPlayer[\s\S]{0,160}spectating=\{spectating\}/.test(view), true);
+  strictEqual(/<WaitingRoom[\s\S]{0,120}spectating=\{spectating\}/.test(view), true);
+  strictEqual(/<WaitingRoom[\s\S]{0,900}myId=\{meId\}/.test(view), true);
+  strictEqual(/<WaitingRoom[\s\S]{0,1400}canStart=\{isHost && members\.length === capacity\}/.test(view), true);
+  // A full 2-player table with no game yet: the result stage's spectator line.
+  strictEqual(SPECTATOR_NO_GAME_TEXT, "You're watching. Waiting for the players to start.");
+  strictEqual(/finishedGame\s*\? "Waiting for the next game\.\.\."\s*: \/\/[^\n]*\n\s*SPECTATOR_NO_GAME_TEXT\}/.test(view), true);
 });
 
 // SPECTATOR SEAT, PART B: the watch page (app/watch/[code]) and the shared

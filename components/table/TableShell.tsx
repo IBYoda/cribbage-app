@@ -86,7 +86,10 @@ export function TableShell({
 }
 
 // The header line: table code, hand number, and whatever controls go on the
-// right (reconnecting, Leave). One line, small text -- it costs ~24px.
+// right (reconnecting, Leave). Small text -- it costs ~24px. "Hand N" sits
+// directly UNDER "Table CODE", in the header's own 24px (a 14px line over a
+// 10px one), so it takes no width from the line and the header grows by
+// nothing; the spectators eye stays beside the code on the top line.
 export function TableHeader({
   code,
   handNo,
@@ -106,11 +109,15 @@ export function TableHeader({
 }) {
   const line = (
     <>
-      <h1 className="truncate font-semibold">
-        Table {code}
-        {spectators && !muggins && <SpectatorsTag variant="icon" />}
+      <h1 className="flex min-w-0 flex-col justify-center font-semibold" data-header="title">
+        <span className="truncate leading-[14px]" data-header="code">
+          Table {code}
+          {spectators && !muggins && <SpectatorsTag variant="icon" />}
+        </span>
         {handNo != null && (
-          <span className="font-normal text-zinc-500"> · Hand {handNo}</span>
+          <span className="truncate text-[10px] font-normal leading-[10px] text-zinc-500" data-header="hand">
+            Hand {handNo}
+          </span>
         )}
       </h1>
       <div className="flex shrink-0 items-center gap-3">{right}</div>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { copyText } from "@/components/table/WaitingForPlayer";
 import { SpectatorsTag } from "@/components/SpectatorsTag";
+import { spectatorWaitingLine } from "@/lib/spectators";
 
 // THE WAITING ROOM (Phase 3, app stage A2): a 3- or 4-player table before a
 // game. A 2-player table never shows it.
@@ -17,6 +18,9 @@ import { SpectatorsTag } from "@/components/SpectatorsTag";
 //     call, worked or not, and shows a refusal word for word.
 //   * START: only the host, only when every seat is taken. Everyone else
 //     sees who they're waiting for.
+//   * A SPECTATOR (PRD item 40; the page passes myId NOBODY_SEATED, which
+//     matches no player): read-only -- no "(you)", no Host moves, no Start;
+//     "You're watching" with who the table waits on.
 //
 // Pure props: the page owns the roster, the pick and the calls.
 
@@ -46,6 +50,7 @@ export function WaitingRoom({
   starting,
   onStart,
   spectators = false,
+  spectating = false,
 }: {
   code: string;
   capacity: number;
@@ -63,6 +68,8 @@ export function WaitingRoom({
   onStart: () => void;
   // The table allows spectators (PRD item 40): said under the title.
   spectators?: boolean;
+  // This screen is a spectator's (the watch page): never the host's.
+  spectating?: boolean;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   useEffect(() => {
@@ -71,7 +78,7 @@ export function WaitingRoom({
     return () => window.clearTimeout(t);
   }, [copyState]);
 
-  const isHost = hostId !== null && hostId === myId;
+  const isHost = !spectating && hostId !== null && hostId === myId;
   const seated = seats.filter((s) => s.player).length;
   const full = seated === capacity;
 
@@ -141,7 +148,9 @@ export function WaitingRoom({
       </ol>
 
       <div className="waiting-room__foot">
-        {isHost ? (
+        {spectating ? (
+          <p className="text-sm text-zinc-500">{spectatorWaitingLine({ full, hostName })}</p>
+        ) : isHost ? (
           <>
             <p className="text-sm text-zinc-500">
               {picked !== null
@@ -163,3 +172,4 @@ export function WaitingRoom({
     </div>
   );
 }
+

@@ -21,11 +21,14 @@ export function isLiveGameStatus(status: string | null | undefined): boolean {
 
 // OPEN TABLES' WATCH ROWS: a table is offered to watch when it is open,
 // PUBLIC (a private table is never listed, whatever it allows), allows
-// spectators, is a human table (computer_level null), has a live game, has
-// someone seated, and the viewer is NOT seated there (their own table shows
-// as "Your table"). The joinable list's age filter (isStaleWaitingTable)
-// applies too -- it never hides a table with a live game, so in practice it
-// changes nothing, but both lists keep the one rule.
+// spectators, is a human table (computer_level null), has someone seated,
+// the viewer is NOT seated there (their own table shows as "Your table"),
+// and there is no seat to offer them as a Join row: its game has started,
+// or every seat is taken (a full table that has not started yet -- the row
+// says "Not started"). A table that allows spectators and still has a free
+// seat before its game is a Join row whose Join asks Play or Watch
+// (joinRowAction). The joinable list's age filter (isStaleWaitingTable)
+// applies too -- it never hides a table with a live game.
 export function isWatchableTable(
   t: {
     status: string | null;
@@ -33,6 +36,7 @@ export function isWatchableTable(
     allowSpectators: boolean | null;
     computerLevel: string | null;
     seatedIds: readonly string[];
+    capacity: number;
     gameLive: boolean;
     createdAt: string;
   },
@@ -44,20 +48,66 @@ export function isWatchableTable(
     t.isPublic === true &&
     t.allowSpectators === true &&
     t.computerLevel == null &&
-    t.gameLive &&
+    (t.gameLive || t.seatedIds.length >= t.capacity) &&
     t.seatedIds.length >= 1 &&
     !t.seatedIds.includes(viewerId) &&
     !isStaleWaitingTable({ createdAt: t.createdAt, gameLive: t.gameLive }, now)
   );
 }
 
-// JOIN BY CODE: take a seat (as always) or offer "Watch instead". Watch only
-// for someone not seated there, at a human table that allows spectators,
-// when there is no seat for them: the table is full, or its game has
-// started. Everything else is "seat" -- exactly today's path, so a table
-// that doesn't allow spectators still answers "This table is full." when
-// the seat is refused.
-export type JoinChoice = "seat" | "watch";
+// A Watch row's state line: the game is on, or the table is full and has
+// not started.
+export function watchRowState(gameLive: boolean): string {
+  return gameLive ? "Game in progress" : "Not started";
+}
+
+// ONE ROW PER TABLE (HomeMenu): the viewer's own tables first (never listed
+// again below), then Join rows, then Watch rows. A table the viewer could
+// watch (a live game, or full and not started) is a Watch row even when the
+// joinable read also lists it (a free seat at a live game): there is no
+// seat to offer before the next game.
+export function splitOpenTableRows<J extends { code: string }, W extends { code: string }>(
+  mineCodes: ReadonlySet<string>,
+  joinable: readonly J[],
+  watchable: readonly W[]
+): { joinRows: J[]; watchRows: W[] } {
+  const watchRows = watchable.filter((t) => !mineCodes.has(t.code));
+  const watchCodes = new Set(watchRows.map((t) => t.code));
+  const joinRows = joinable.filter((t) => !mineCodes.has(t.code) && !watchCodes.has(t.code));
+  return { joinRows, watchRows };
+}
+
+// A JOIN ROW's button: straight to the seat ("join", exactly as before), or
+// -- at a human table that allows spectators -- a small choice first, Play
+// or Watch ("choose"). Join rows only ever list tables with a free seat.
+// The table's CREATOR is never asked (joinOrWatch): their own table, back
+// to their seat -- e.g. a creator who left and finds it listed again.
+export function joinRowAction(t: {
+  allowSpectators: boolean | null;
+  computerLevel?: string | null;
+  isCreator?: boolean;
+}): "join" | "choose" {
+  if (t.isCreator === true) return "join";
+  return t.allowSpectators === true && t.computerLevel == null ? "choose" : "join";
+}
+
+// JOIN BY CODE (and a Join row's choice): take a seat, offer "Watch
+// instead", or ask Play or Watch first.
+//   seat   -- exactly today's path: already seated there, a table that
+//             doesn't allow spectators or a computer table (which still
+//             answers "This table is full." when the seat is refused), the
+//             newcomer already chose Play, or the viewer is the table's
+//             CREATOR (tables.created_by): the creator never gets the
+//             choice -- Start a Table lands them on the table page before
+//             their seat exists, and they always take it.
+//   watch  -- no seat for them: the table is full, or its game has started
+//             ("Watch instead"). Even after choosing Play: the seat is gone.
+//   choose -- a free seat before the game, at a human table that allows
+//             spectators, for anyone but its creator: Play or Watch, before
+//             anyone is seated.
+// A creator who finds their table full or started (they left and came back)
+// follows the same rules as anyone: watch.
+export type JoinChoice = "seat" | "watch" | "choose";
 
 export function joinOrWatch(t: {
   isMember: boolean;
@@ -66,10 +116,27 @@ export function joinOrWatch(t: {
   gameLive: boolean;
   allowSpectators: boolean | null;
   computerLevel: string | null;
+  playChosen?: boolean;
+  isCreator?: boolean;
 }): JoinChoice {
   if (t.isMember) return "seat";
   if (t.allowSpectators !== true || t.computerLevel != null) return "seat";
-  return t.seated >= t.capacity || t.gameLive ? "watch" : "seat";
+  if (t.seated >= t.capacity || t.gameLive) return "watch";
+  return t.playChosen === true || t.isCreator === true ? "seat" : "choose";
+}
+
+// CHOOSING PLAY never asks again: the choice's Play goes to the table page
+// with ?play=1 (playHref), and the table page's own choice screen sets the
+// same flag in memory and re-runs its setup. Either way joinOrWatch gets
+// playChosen and answers "seat" (unless the seat has gone meanwhile).
+export const PLAY_PARAM = "play";
+
+export function playHref(code: string): string {
+  return `/tables/${code}?${PLAY_PARAM}=1`;
+}
+
+export function playChosenFromSearch(search: string): boolean {
+  return new URLSearchParams(search).get(PLAY_PARAM) === "1";
 }
 
 // WHO "YOU" IS ON A SPECTATOR'S SCREEN: nobody at the table. Used where the
@@ -89,8 +156,9 @@ export function spectatorViewerId(input: {
 // ---------------------------------------------------------------------------
 // THE WATCH PAGE'S RULES (app/watch/[code]/page.tsx), pure.
 
-// "No game yet": watch_table is asked again, quietly, this often until a game
-// starts (or the player leaves the page).
+// "No game yet" (the OLD watch_table only; the new one lets a spectator into
+// the waiting room with a NULL game id): watch_table is asked again,
+// quietly, this often until a game starts (or the player leaves the page).
 export const WATCH_RETRY_MS = 5_000;
 
 export const REMOVED_TEXT = "The host removed you from this table.";
@@ -169,6 +237,14 @@ export function rewatchOutcome(message: string): RewatchOutcome {
   return { kind: "screen", text: r.text };
 }
 
+// The quiet watch_table's whole answer: let in -> STAY, with or without a
+// live game (the new SQL answers a NULL game id in the waiting room and
+// between games); refused -> rewatchOutcome (the old SQL's "no game yet"
+// stays too).
+export function rewatchStep(result: { ok: { gameId: string | null } } | { refused: string }): RewatchOutcome {
+  return "ok" in result ? { kind: "continue" } : rewatchOutcome(result.refused);
+}
+
 // FOLLOWING THE TABLE'S GAME: the table view reports each live game on
 // screen; a different one from the game being watched is a NEW game (a
 // rematch, the next game after the table waited) -- watch_table is asked
@@ -178,3 +254,26 @@ export function followGame(watchedGameId: string | null, liveGameId: string | nu
 }
 
 export const TABLE_CLOSED_TEXT = "This table has closed.";
+
+// ---------------------------------------------------------------------------
+// THE SPECTATOR'S WAITING ROOM (the table's own waiting screens, read-only).
+
+// WaitingForPlayer's title: a 2-player table waits for "a second player" (a
+// spectator with nobody seated yet: "Waiting for players"); 3 and 4 players
+// say how many are here.
+export function waitingForPlayerTitle(t: { seated: number; capacity: number; spectating: boolean }): string {
+  if (t.capacity !== 2) return `Waiting for players (${t.seated} of ${t.capacity})`;
+  return t.spectating && t.seated === 0 ? "Waiting for players" : "Waiting for a second player";
+}
+
+// The 3/4-player WaitingRoom's line for a spectator, under the seats: who
+// the table waits on.
+export function spectatorWaitingLine(t: { full: boolean; hostName: string | null }): string {
+  return t.full
+    ? `You're watching. Waiting for ${t.hostName ?? "the host"} to start.`
+    : "You're watching. Waiting for players to sit down.";
+}
+
+// A full 2-player table with no game yet, on a spectator's screen: either
+// player deals, so nobody is named.
+export const SPECTATOR_NO_GAME_TEXT = "You're watching. Waiting for the players to start.";

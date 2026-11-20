@@ -16,7 +16,15 @@ import { OpponentBand, SideSeat, type OpponentSeat } from "@/components/table/Op
 import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
-import { joinOrWatch, NOBODY_SEATED, spectatorViewerId, watchHref } from "@/lib/spectators";
+import {
+  joinOrWatch,
+  NOBODY_SEATED,
+  playChosenFromSearch,
+  SPECTATOR_NO_GAME_TEXT,
+  spectatorViewerId,
+  watchHref,
+} from "@/lib/spectators";
+import { JoinChoice } from "@/components/brand/JoinChoice";
 import { readSpectatorReveals } from "@/lib/spectatorData";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces, winHeadline } from "@/lib/phase3";
@@ -455,9 +463,14 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // WATCH INSTEAD (PRD item 40): a newcomer who finds no seat -- the table
   // is full, or its game has started -- at a table that allows spectators.
   // No seat is attempted; they're offered the watch page. "full" or
-  // "started" says which. A table that doesn't allow spectators goes on as
-  // before ("This table is full.").
-  const [watchOffer, setWatchOffer] = useState<"full" | "started" | null>(null);
+  // "started" says which. "choose": a free seat before the game -- Play or
+  // Watch, asked before anyone is seated (joinOrWatch). A table that doesn't
+  // allow spectators goes on as before ("This table is full.").
+  const [watchOffer, setWatchOffer] = useState<"full" | "started" | "choose" | null>(null);
+  // CHOSE PLAY on this page's own choice: remembered here (the Home choice
+  // sends ?play=1 instead, playChosenFromSearch), so the choice is never
+  // asked again and the setup goes on to the seat.
+  const playChosenRef = useRef(false);
   // THE NICKNAME GATE: a player without a nickname, about to take a NEW
   // seat, is on their way to the nickname step (and back here after). The
   // page stays "Loading..." meanwhile.
@@ -1331,9 +1344,17 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               gameLive: !!liveGame,
               allowSpectators: tableRow.allow_spectators,
               computerLevel: tableRow.computer_level,
+              playChosen: playChosenRef.current || playChosenFromSearch(window.location.search),
+              // The creator never gets the choice (Start a Table lands them
+              // here before their seat exists): read from the row above.
+              isCreator: tableRow.created_by === session!.user.id,
             });
         if (choice === "watch") {
           setWatchOffer(isFull ? "full" : "started");
+          return;
+        }
+        if (choice === "choose") {
+          setWatchOffer("choose");
           return;
         }
       }
@@ -2581,6 +2602,26 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     );
   }
 
+  // PLAY OR WATCH: a free seat before the game, at a table that allows
+  // spectators. Nothing is written until they choose. Play goes on to the
+  // seat (the nickname gate and the Muggins notice still come first) and is
+  // never asked again (playChosenRef); Watch goes to the watch page.
+  if (watchOffer === "choose") {
+    return (
+      <CardRoomFrame backHome={false}>
+        <JoinChoice
+          code={code}
+          onPlay={() => {
+            playChosenRef.current = true;
+            setWatchOffer(null);
+            setRetryKey((k) => k + 1);
+          }}
+          onCancel={() => router.replace("/")}
+        />
+      </CardRoomFrame>
+    );
+  }
+
   // WATCH INSTEAD: no seat here for this newcomer, but they may watch. The
   // dead end ("This table is full.") becomes a way in. Nothing was written.
   if (watchOffer) {
@@ -3521,7 +3562,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           <p className="text-sm text-zinc-500 [overflow-wrap:anywhere]">
             {finishedGame && othersNotReadyForNewGame.length > 0
               ? `Waiting for ${othersNotReadyForNewGame.map(nameOf).join(", ")} to start a new game…`
-              : "Waiting for the next game..."}
+              : finishedGame
+                ? "Waiting for the next game..."
+                : // No game yet (a full 2-player table): either player deals.
+                  SPECTATOR_NO_GAME_TEXT}
           </p>
           {rematchDealerId && <p className="text-xs text-zinc-500">Next dealer: {nameOf(rematchDealerId)}</p>}
         </div>
@@ -3627,6 +3671,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           code={code}
           capacity={capacity}
           spectators={allowsSpectators}
+          spectating={spectating}
           seats={Array.from({ length: capacity }, (_, i) => {
             const m = members.find((x) => x.seat === i + 1);
             return {
@@ -3653,7 +3698,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         // A host waiting for the table to fill, with no result to show: what
         // they are waiting for, and the code to send. New Game needs a full
         // table, so its disabled button is left out here.
-        <WaitingForPlayer code={code} seated={members.length} capacity={capacity} spectators={allowsSpectators} />
+        <WaitingForPlayer
+          code={code}
+          seated={members.length}
+          capacity={capacity}
+          spectators={allowsSpectators}
+          spectating={spectating}
+        />
       ) : (
         <div className="final-board">
           {/* THE FINAL BOARD: the hand's last run as it stood, with its
