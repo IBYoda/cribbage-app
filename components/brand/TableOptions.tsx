@@ -18,6 +18,8 @@ export function TableOptions({
   onMaxPlayersChange,
   fourPlayerMode,
   onFourPlayerModeChange,
+  allowSpectators,
+  onAllowSpectatorsChange,
 }: {
   isPublic: boolean;
   onVisibilityChange: (isPublic: boolean) => void;
@@ -27,6 +29,10 @@ export function TableOptions({
   onMaxPlayersChange: (maxPlayers: 2 | 3 | 4) => void;
   fourPlayerMode: FourPlayerMode;
   onFourPlayerModeChange: (mode: FourPlayerMode) => void;
+  // Spectators (PRD item 40): optional so the dev mock, which doesn't pass
+  // them, draws exactly as before (no fieldset).
+  allowSpectators?: boolean;
+  onAllowSpectatorsChange?: (allow: boolean) => void;
 }) {
   const options = startTableOptions(maxPlayers, isMuggins);
   const modeOffered = options.fourPlayerModeOffered;
@@ -127,6 +133,28 @@ export function TableOptions({
               : "Head to head"}
         </p>
       </fieldset>
+
+      {/* SPECTATORS (PRD item 40): off unless ticked. Set at creation only. */}
+      {onAllowSpectatorsChange && (
+        <fieldset className="flex flex-col gap-1.5" aria-describedby="spectators-help">
+          <legend className="mb-1.5 text-sm font-semibold uppercase tracking-[0.18em] text-[var(--brass-light)]">
+            Spectators
+          </legend>
+          <label className="option-card">
+            <input
+              type="checkbox"
+              checked={allowSpectators === true}
+              onChange={(e) => onAllowSpectatorsChange(e.target.checked)}
+              className="sr-only"
+            />
+            <span className="option-dot option-dot--check" aria-hidden="true" />
+            <span className="font-semibold leading-tight">Allow spectators</span>
+          </label>
+          <p id="spectators-help" className="text-sm">
+            Up to 4 people can watch the game. They never see anyone&apos;s hand.
+          </p>
+        </fieldset>
+      )}
     </div>
   );
 }

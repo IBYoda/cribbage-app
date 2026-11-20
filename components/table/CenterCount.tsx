@@ -37,7 +37,9 @@ export function CenterCount({
   currentPlayer: string | null;
   myUserId: string;
   nameFor: (userId: string) => string;
-  handOver?: { onCountHands: () => void };
+  // label: the button's words -- "Count hands", or "Show Hands" on a
+  // spectator's screen (PRD item 40).
+  handOver?: { onCountHands: () => void; label?: string };
   ended?: boolean;
   flash?: ReactNode;
   // Before pegging (the discard): this line -- a <p>, like the pill it
@@ -99,7 +101,7 @@ export function CenterCount({
           onClick={handOver.onCountHands}
           className="tap-40-overlay h-7 whitespace-nowrap rounded-full bg-foreground px-3 text-sm font-semibold text-background"
         >
-          Count hands
+          {handOver.label ?? "Count hands"}
         </button>
       )}
     </div>

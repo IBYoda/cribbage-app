@@ -47,7 +47,7 @@ export function PlayArea({
   // THE HOLD after the last card of the hand (see the table page): the
   // server is already in counting, but this screen still shows the final run
   // until the player taps Count hands.
-  handOver?: { onCountHands: () => void };
+  handOver?: { onCountHands: () => void; label?: string };
   // The final board after a win: show the last run only (see ENDED above).
   ended?: boolean;
 }) {
@@ -97,7 +97,7 @@ export function PlayArea({
                 onClick={handOver.onCountHands}
                 className="tap-40-overlay h-7 whitespace-nowrap rounded-full bg-foreground px-3 text-sm font-semibold text-background"
               >
-                Count hands
+                {handOver.label ?? "Count hands"}
               </button>
             )}
           </div>

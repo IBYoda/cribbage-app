@@ -2210,6 +2210,19 @@ section.felt-panel {
 .option-card:has(input:disabled) .option-dot {
   opacity: 0.45;
 }
+/* A checkbox (Allow spectators): the same dot, squared, with a tick. */
+.option-dot--check {
+  border-radius: 5px;
+}
+.option-card:has(input:checked) .option-dot--check::after {
+  width: 11px;
+  height: 6px;
+  border-radius: 0;
+  background: none;
+  border-left: 2.5px solid var(--brass);
+  border-bottom: 2.5px solid var(--brass);
+  transform: translateY(-1px) rotate(-45deg);
+}
 
 /* An on/off switch on the felt (Hide counts on the Profile page). Only the
    switch dims when disabled, never its label. On: the knob moves right and
@@ -2435,6 +2448,36 @@ section.felt-panel {
    on Open Tables rows and in the table header. It takes the text colour of
    wherever it sits -- cream on the felt, the table's own text colour on
    every table surface -- so it always has that text's contrast. */
+/* A one-time message over the home menu (HomeView's LobbyNotice). */
+.lobby-notice {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 16px;
+  transform: translateX(-50%);
+  border: 1px solid var(--brass);
+  border-radius: 12px;
+  background: rgb(10 30 20 / 0.95);
+  color: var(--cream);
+  font-size: 0.9375rem;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
+}
+
+/* "Spectators allowed" as an icon in a header line (components/SpectatorsTag.tsx). */
+.spectators-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  margin-inline-start: 0.3rem;
+  opacity: 0.8;
+  vertical-align: -2px;
+}
+
 .muggins-tag {
   display: inline-block;
   flex-shrink: 0;

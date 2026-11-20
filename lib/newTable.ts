@@ -39,16 +39,30 @@ export function startTableOptions(
 // 4 (tables_muggins_no_teams, docs/sql/phase3-muggins-multiplayer.sql), and
 // 'solo' keeps award_points and the leaderboard snapshot off their Teams
 // branch. 2-player Self-Scoring is sent exactly as before.
+//
+// ALLOW SPECTATORS (PRD item 40): always sent, false unless the host ticked
+// it (the database default is false too, and a computer table can never
+// have it: tables_spectators_human_only, docs/sql/spectators.sql). Start a
+// Table makes human multiplayer tables only; computer tables come from
+// create_computer_table, which never sends it.
 export function newTableFields(input: {
   isPublic: boolean;
   isMuggins: boolean;
   maxPlayers: PlayerCount;
   fourPlayerMode: FourPlayerMode;
-}): { is_public: boolean; is_muggins: boolean; max_players: PlayerCount; team_mode?: FourPlayerMode } {
+  allowSpectators?: boolean;
+}): {
+  is_public: boolean;
+  is_muggins: boolean;
+  max_players: PlayerCount;
+  allow_spectators: boolean;
+  team_mode?: FourPlayerMode;
+} {
   return {
     is_public: input.isPublic,
     is_muggins: input.isMuggins,
     max_players: input.maxPlayers,
+    allow_spectators: input.allowSpectators === true,
     ...(input.isMuggins
       ? input.maxPlayers === 2
         ? {}

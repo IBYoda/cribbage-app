@@ -52,6 +52,23 @@ import {
   writeWingsOn,
 } from "../lib/wings";
 import { fourPlayerModeOffered, newTableFields, startTableOptions } from "../lib/newTable";
+import {
+  FULL_TEXT,
+  NOBODY_SEATED,
+  NOT_ALLOWED_TEXT,
+  REMOVED_TEXT,
+  TABLE_CLOSED_TEXT,
+  WATCH_RETRY_MS,
+  followGame,
+  heartbeatStep,
+  isLiveGameStatus,
+  isWatchableTable,
+  joinOrWatch,
+  rewatchOutcome,
+  spectatorViewerId,
+  watchHref,
+  watchRefusal,
+} from "../lib/spectators";
 import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates";
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
 import { godLossAlt, godLossSplash, hideRejoinedScores, lossTier, scoreFromThisGame } from "../lib/resultScores";
@@ -1067,6 +1084,7 @@ check("Start a Table: the row created -- 2/3 players and Teams exactly as before
         is_public: true,
         is_muggins: false,
         max_players: n,
+        allow_spectators: false,
       });
     }
   }
@@ -1075,12 +1093,14 @@ check("Start a Table: the row created -- 2/3 players and Teams exactly as before
     is_public: false,
     is_muggins: true,
     max_players: 2,
+    allow_spectators: false,
   });
   // 4 players, Teams (the default): team_mode 'teams', as before.
   deepStrictEqual(newTableFields({ ...base, maxPlayers: 4, fourPlayerMode: "teams" }), {
     is_public: true,
     is_muggins: false,
     max_players: 4,
+    allow_spectators: false,
     team_mode: "teams",
   });
   // 4 players, Solo: team_mode 'solo' -- the row the solo verification
@@ -1089,6 +1109,7 @@ check("Start a Table: the row created -- 2/3 players and Teams exactly as before
     is_public: true,
     is_muggins: false,
     max_players: 4,
+    allow_spectators: false,
     team_mode: "solo",
   });
 });
@@ -1120,6 +1141,7 @@ check("Start a Table: the Self-Scoring row -- 3 and 4 players 'solo', 2 players 
         is_public: isPublic,
         is_muggins: true,
         max_players: 2,
+        allow_spectators: false,
       });
       // 3 and 4: 'solo', whatever the (hidden) Team/Solo choice left behind
       // -- the database requires it for 4 (tables_muggins_no_teams).
@@ -1128,11 +1150,372 @@ check("Start a Table: the Self-Scoring row -- 3 and 4 players 'solo', 2 players 
           is_public: isPublic,
           is_muggins: true,
           max_players: n,
+          allow_spectators: false,
           team_mode: "solo",
         });
       }
     }
   }
+});
+
+// SPECTATORS (PRD item 40): Start a Table, Open Tables' Watch rows, and
+// join-by-code's Watch instead (lib/newTable.ts, lib/spectators.ts).
+check("Start a Table: every column the insert sends has a column-level INSERT grant in docs/sql", () => {
+  // authenticated has INSERT on a fixed list of tables columns only
+  // (phase3-hardening-grants.sql); a new column the form sends needs its own
+  // grant, or the insert fails with "permission denied for table tables".
+  const granted = new Set<string>();
+  for (const f of readdirSync("docs/sql")) {
+    if (!f.endsWith(".sql") || /rollback|verification|precheck/.test(f)) continue;
+    const sql = readFileSync(`docs/sql/${f}`, "utf8").replace(/--[^\n]*/g, "");
+    for (const m of sql.matchAll(/grant\s+insert\s*\(([^)]*)\)\s*on\s+(?:table\s+)?public\.tables\s+to\s+[^;]*\bauthenticated\b/gi)) {
+      for (const col of m[1].split(",")) granted.add(col.trim());
+    }
+  }
+  const sent = new Set(["code", "created_by"]); // app/tables/new/page.tsx adds these two
+  for (const isMuggins of [false, true]) {
+    for (const n of [2, 3, 4] as const) {
+      for (const mode of ["teams", "solo"] as const) {
+        const row = newTableFields({ isPublic: true, isMuggins, maxPlayers: n, fourPlayerMode: mode, allowSpectators: true });
+        for (const col of Object.keys(row)) sent.add(col);
+      }
+    }
+  }
+  const missing = [...sent].filter((c) => !granted.has(c));
+  deepStrictEqual(missing, [], `no INSERT grant in docs/sql for: ${missing.join(", ")}`);
+  strictEqual(granted.has("allow_spectators"), true);
+});
+check("Start a Table: allow_spectators is always sent, false unless ticked", () => {
+  for (const n of [2, 3, 4] as const) {
+    for (const isMuggins of [false, true]) {
+      const base = { isPublic: true, isMuggins, maxPlayers: n, fourPlayerMode: "teams" as const };
+      strictEqual(newTableFields(base).allow_spectators, false, `${n} ${isMuggins} default`);
+      strictEqual(newTableFields({ ...base, allowSpectators: false }).allow_spectators, false, `${n} ${isMuggins} off`);
+      strictEqual(newTableFields({ ...base, allowSpectators: true }).allow_spectators, true, `${n} ${isMuggins} on`);
+    }
+  }
+  // Ticking it changes nothing else in the row.
+  const off = newTableFields({ isPublic: false, isMuggins: false, maxPlayers: 4, fourPlayerMode: "solo" });
+  const on = newTableFields({ isPublic: false, isMuggins: false, maxPlayers: 4, fourPlayerMode: "solo", allowSpectators: true });
+  deepStrictEqual({ ...on, allow_spectators: false }, off);
+  // The computer-table path never builds its row here: create_computer_table
+  // lists its own columns, and the page that calls it never sends this field.
+  const single = readFileSync("app/single-player/page.tsx", "utf8");
+  strictEqual(single.includes("create_computer_table") && !single.includes("allow_spectators") && !single.includes("newTableFields"), true);
+});
+const WATCH_NOW = Date.parse("2026-11-20T12:00:00Z");
+const watchable = {
+  status: "open",
+  isPublic: true,
+  allowSpectators: true,
+  computerLevel: null,
+  seatedIds: ["h", "g"],
+  gameLive: true,
+  createdAt: "2026-11-20T11:00:00Z",
+};
+check("Open Tables: a Watch row needs open, public, spectators allowed, human, a live game, viewer not seated", () => {
+  strictEqual(isWatchableTable(watchable, "v", WATCH_NOW), true);
+  strictEqual(isWatchableTable({ ...watchable, status: "ended" }, "v", WATCH_NOW), false, "ended");
+  strictEqual(isWatchableTable({ ...watchable, isPublic: false }, "v", WATCH_NOW), false, "private: never listed");
+  strictEqual(isWatchableTable({ ...watchable, allowSpectators: false }, "v", WATCH_NOW), false, "no spectators");
+  strictEqual(isWatchableTable({ ...watchable, allowSpectators: null }, "v", WATCH_NOW), false, "unknown");
+  strictEqual(isWatchableTable({ ...watchable, computerLevel: "easy" }, "v", WATCH_NOW), false, "computer");
+  strictEqual(isWatchableTable({ ...watchable, gameLive: false }, "v", WATCH_NOW), false, "no live game");
+  strictEqual(isWatchableTable(watchable, "g", WATCH_NOW), false, "the viewer is seated");
+  strictEqual(isWatchableTable({ ...watchable, seatedIds: [] }, "v", WATCH_NOW), false, "nobody seated");
+  // The joinable list's age rule: never hides a live game, however old.
+  strictEqual(isWatchableTable({ ...watchable, createdAt: "2026-11-19T12:00:00Z" }, "v", WATCH_NOW), true, "old but live");
+  strictEqual(isLiveGameStatus("cutting") && isLiveGameStatus("active"), true);
+  strictEqual(isLiveGameStatus("ended") || isLiveGameStatus(null), false);
+  strictEqual(watchHref("0427"), "/watch/0427");
+});
+check("Join by code: Watch instead only for a newcomer with no seat, at a human table that allows spectators", () => {
+  const t = { isMember: false, seated: 2, capacity: 2, gameLive: true, allowSpectators: true, computerLevel: null };
+  strictEqual(joinOrWatch(t), "watch", "full, game on");
+  strictEqual(joinOrWatch({ ...t, gameLive: false }), "watch", "full, between games");
+  strictEqual(joinOrWatch({ ...t, seated: 1, gameLive: true }), "watch", "a seat free but the game started");
+  strictEqual(joinOrWatch({ ...t, seated: 1, gameLive: false }), "seat", "a free seat, no game: join as always");
+  strictEqual(joinOrWatch({ ...t, isMember: true }), "seat", "already seated: back to their seat");
+  strictEqual(joinOrWatch({ ...t, allowSpectators: false }), "seat", "no spectators: exactly as today");
+  strictEqual(joinOrWatch({ ...t, allowSpectators: null }), "seat", "unknown: as today");
+  strictEqual(joinOrWatch({ ...t, computerLevel: "hard" }), "seat", "computer table: as today");
+  strictEqual(joinOrWatch({ ...t, seated: 4, capacity: 4 }), "watch", "4 players, full");
+  strictEqual(joinOrWatch({ ...t, seated: 3, capacity: 4, gameLive: false }), "seat", "4 players, a seat free");
+});
+check("Spectators: the players are told -- the tag in the headers and the waiting screens", () => {
+  const page = readFileSync("components/table/TableView.tsx", "utf8");
+  // Every header that shows the Muggins tag shows the spectators one too.
+  strictEqual(page.split("muggins={isMuggins}").length, page.split("spectators={headerSpectatorsTag}").length);
+  strictEqual(page.includes("const headerSpectatorsTag = allowsSpectators && !spectating;"), true);
+  strictEqual(page.includes("<WaitingForPlayer code={code} seated={members.length} capacity={capacity} spectators={allowsSpectators} />"), true);
+  strictEqual(/<WaitingRoom[\s\S]{0,80}spectators=\{allowsSpectators\}/.test(page), true);
+  // The in-game header never gets a line of its own for it: an icon beside
+  // the code, or the Muggins line that is already there.
+  for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
+    const src = readFileSync(f, "utf8");
+    strictEqual(src.includes('{spectators && !muggins && <SpectatorsTag variant="icon" />}'), true, f);
+    strictEqual(src.includes("{spectators && <SpectatorsTag />}"), true, f);
+  }
+  // Open Tables: Watch in Join's place, to the watch page.
+  const menu = readFileSync("components/brand/HomeMenu.tsx", "utf8");
+  strictEqual(menu.includes("href={watchHref(t.code)}"), true);
+  // The Watch row itself says the game is in progress (not only "Your table").
+  strictEqual(/key=\{`watch-\$\{t\.code\}`\}[\s\S]{0,1200}Game in progress[\s\S]{0,400}>\s*Watch\s*</.test(menu), true);
+});
+
+// SPECTATOR SEAT, PART B: the watch page (app/watch/[code]) and the shared
+// table view's spectating mode (components/table/TableView.tsx).
+check("Watching: Seat 1 at the bottom, the others placed as Seat 1 sees them (2, 3, 4 Teams and Solo)", () => {
+  const roster = (ids: string[]) => ids.map((id, i) => ({ user_id: id, seat: i + 1 }));
+  // 2 players: Seat 1 at the bottom, Seat 2 across.
+  let v = spectatorViewerId({ gamePlayers: ["s1", "s2"], roster: roster(["s1", "s2"]) });
+  strictEqual(v, "s1");
+  deepStrictEqual(seatsOnScreen(["s1", "s2"], v), { bottom: "s1", left: null, top: "s2", right: null });
+  // 3 players: the next clockwise on the left, the last on the right.
+  v = spectatorViewerId({ gamePlayers: ["s1", "s2", "s3"], roster: [] });
+  deepStrictEqual(seatsOnScreen(["s1", "s2", "s3"], v), { bottom: "s1", left: "s2", top: null, right: "s3" });
+  // 4 players (Teams or Solo: the same seats): Seat 3 across -- Seat 1's partner in Teams.
+  v = spectatorViewerId({ gamePlayers: ["s1", "s2", "s3", "s4"], roster: [] });
+  deepStrictEqual(seatsOnScreen(["s1", "s2", "s3", "s4"], v), { bottom: "s1", left: "s2", top: "s3", right: "s4" });
+  strictEqual(teamOfPosition(["s1", "s2", "s3", "s4"], "s1"), teamOfPosition(["s1", "s2", "s3", "s4"], "s3"));
+  // The game's own order wins over the roster's; before a game, the roster's seat 1.
+  strictEqual(spectatorViewerId({ gamePlayers: ["b", "a"], roster: roster(["a", "b"]) }), "b");
+  strictEqual(spectatorViewerId({ gamePlayers: null, roster: [{ user_id: "x", seat: 2 }, { user_id: "y", seat: 1 }] }), "y");
+  strictEqual(spectatorViewerId({ gamePlayers: [], roster: [] }), NOBODY_SEATED);
+  // "You" is nobody: the stand-in matches no player.
+  for (const ids of [["s1", "s2"], ["s1", "s2", "s3", "s4"]]) strictEqual(ids.includes(NOBODY_SEATED), false);
+});
+check("Watching: the counting views never offer a spectator a count, and never say 'you'", () => {
+  for (const [step, phase] of [[0, "counting"], [1, "counting"], [2, "counting"], [2, "done"]] as const) {
+    for (const dealer of ["s1", "s2"]) {
+      const v = countingView({
+        myId: "s1", dealerId: dealer, oppName: "Bea", phase, step, myHand: [], oppCards: ["AS", "2S", "3S", "4S"],
+        cribCards: null, starter: "5D", viewerName: "Ann",
+      });
+      strictEqual(v.myTurn, false, `2p ${dealer} ${step}`);
+      strictEqual(v.canConfirm, false);
+      strictEqual(v.hint, "");
+      deepStrictEqual(v.myRow, { kind: "faceDown", count: 4 }, "Seat 1's hand face-down until it is turned over");
+      strictEqual(/\byour?\b/i.test([v.headline, v.waitingOn ?? "", ...v.recap].join(" ")), false, v.headline);
+    }
+  }
+  // Once turned over (the page passes the cards), the bottom row shows them.
+  const shown = countingView({ myId: "s1", dealerId: "s2", oppName: "Bea", phase: "counting", step: 1, myHand: ["AS", "2S", "3S", "4S"], oppCards: null, cribCards: null, starter: "5D", viewerName: "Ann" });
+  deepStrictEqual(shown.myRow, { kind: "full", cards: ["AS", "2S", "3S", "4S"] });
+  strictEqual(shown.waitingOn, "Bea is counting");
+  const players = ["s1", "s2", "s3", "s4"];
+  for (let step = 0; step <= 4; step++) {
+    const n = countingViewN({
+      players, myId: "s1", dealerId: "s4", names: { s1: "Ann", s2: "Bea", s3: "Cal", s4: "Dee" }, phase: "counting", step,
+      myHand: [], hands: {}, cribCards: null, starter: "5D", viewerName: "Ann",
+    });
+    strictEqual(n.myTurn || n.canConfirm, false, `4p step ${step}`);
+    strictEqual(/\byour?\b/i.test([n.headline, n.middleLabel ?? "", n.waitingOn ?? "", ...n.recap.map((r) => r.text)].join(" ")), false);
+    deepStrictEqual(n.myRow, { kind: "faceDown", count: 4 });
+  }
+  // Seat 1 counting (step 0, dealer on its right): "Ann is counting", never a button.
+  const annCounts = countingViewN({ players, myId: "s1", dealerId: "s4", names: { s1: "Ann" }, phase: "counting", step: 0, myHand: [], hands: {}, cribCards: null, starter: "5D", viewerName: "Ann" });
+  strictEqual(annCounts.waitingOn, "Ann is counting");
+  strictEqual(annCounts.headline, "Counting: Ann's hand");
+  // A player's view is exactly as before (no viewerName).
+  strictEqual(countingViewN({ players, myId: "s1", dealerId: "s4", names: {}, phase: "counting", step: 0, myHand: ["AS"], hands: {}, cribCards: null, starter: "5D" }).canConfirm, true);
+});
+// Source with its comments removed, so a scan reads code only (these files
+// talk about table_members and the hand reads they never make).
+function codeOnly(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+check("Watching: every action flag of the shared table view is off when spectating", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // The flags and controls, each defined with !spectating (or a spectator branch first).
+  for (const needle of [
+    "const isHost = !spectating && hostId === viewerId;",
+    "const isMyTurn = !spectating && isPlaying && activeGame?.current_player === viewerId;",
+    "const canDiscard =\n    !spectating && // an action flag",
+    "const dealInFlight =\n    !spectating &&",
+    "const cardAnimationsOn = !spectating &&",
+    "const computerTable = !spectating &&",
+    "!spectating && finishedGame && finishedGame.winner_id === myUserId",
+    "const chatOn =\n    !spectating &&",
+    "const mugginsWinBar =\n    !spectating && isMuggins",
+    "{!spectating && myHand.length > 0 && !sortLocked && (",
+    "const countActions = view\n    ? isDone && spectating ? (",
+    "const discardPrompt = spectating ? (",
+    "myUserId={viewerId}\n          spectating={spectating}",
+  ]) {
+    strictEqual(view.includes(needle), true, needle);
+  }
+  // Every action handler returns at once for a spectator.
+  const handlers = [...view.matchAll(/\n  (?:async )?function (handle\w+|run\w+Action)\(/g)].map((m) => m[1]);
+  deepStrictEqual([...handlers].sort(), [
+    "handleAcknowledgeCut", "handleConfirmCount", "handleDiscard", "handleDrawCutCard", "handleLeave", "handleNextHand",
+    "handlePlayCard", "handleSeatMove", "handleStartNewGame", "runCountAction", "runWinAction",
+  ]);
+  for (const name of handlers) {
+    // The handler's signature line ends with "{", and its first statement is the guard.
+    strictEqual(new RegExp(`function ${name}\\([^\\n]*\\{\\n    if \\(spectating\\) return`).test(view), true, name);
+  }
+  // The spectator's header: Watching and Stop watching -- no chat, speaker, Hide counts or Leave.
+  const start = view.indexOf("const headerRight = spectating ? (");
+  const header = view.slice(start, view.indexOf(") : (", start));
+  strictEqual(header.includes("Watching") && header.includes("Stop watching"), true);
+  for (const absent of ["ChatButton", "SoundToggle", "CountsToggle", "handleLeave"]) strictEqual(header.includes(absent), false, absent);
+  // "You" is nobody: identity wording uses meId, placement viewerId.
+  strictEqual(view.includes("const meId = spectating ? NOBODY_SEATED : session.user.id;"), true);
+  // The cut: read-only for a spectator.
+  const cut = readFileSync("components/CutForDealView.tsx", "utf8");
+  strictEqual(cut.includes("const interactive = !spectating && !iHaveDrawn && !drawPending;"), true);
+  strictEqual(cut.includes("if (spectating || iHaveDrawn || drawPending) return;"), true);
+  for (const btn of ["{!spectating && isTie && (", "{!spectating && isDecisive && ("]) strictEqual(cut.includes(btn), true, btn);
+  // No sounds: the hook's claims are silent.
+  strictEqual(readFileSync("components/table/useTableSounds.ts", "utf8").includes("return optionsRef.current.silent !== true;"), true);
+  strictEqual(view.includes("silent: spectating,"), true);
+});
+check("Watching: the heartbeat's answers (part C: stay through game over, closed screen, removal goes home)", () => {
+  deepStrictEqual(heartbeatStep("ok"), { kind: "continue" });
+  deepStrictEqual(heartbeatStep(null), { kind: "continue" }, "a failed call: try again on the next poll");
+  // game_ended: STAY on the table (game-over or waiting screen), keep heartbeating.
+  deepStrictEqual(heartbeatStep("game_ended"), { kind: "continue" });
+  // table_ended: the closed screen, no redirect.
+  deepStrictEqual(heartbeatStep("table_ended"), { kind: "closed" });
+  strictEqual(TABLE_CLOSED_TEXT, "This table has closed.");
+  // removed: home, with the message.
+  deepStrictEqual(heartbeatStep("removed"), { kind: "home", text: REMOVED_TEXT });
+  strictEqual(REMOVED_TEXT, "The host removed you from this table.");
+  deepStrictEqual(heartbeatStep("not_watching"), { kind: "rewatch" });
+  // A refused quiet re-watch: "no game yet" stays (between games); removed goes
+  // home; ended shows the closed screen; anything else its screen -- no redirect.
+  deepStrictEqual(rewatchOutcome("There is no game to watch at this table yet."), { kind: "continue" });
+  deepStrictEqual(rewatchOutcome("You were removed from watching this table."), { kind: "home", text: REMOVED_TEXT });
+  deepStrictEqual(rewatchOutcome("This table has ended."), { kind: "closed" });
+  deepStrictEqual(rewatchOutcome("Spectators full: this table already has 4 spectators."), { kind: "screen", text: FULL_TEXT });
+  deepStrictEqual(rewatchOutcome("This table does not allow spectators."), { kind: "screen", text: NOT_ALLOWED_TEXT });
+  // The page: only a removal redirects; the closed screen has Back home and
+  // stops the heartbeat (no table view, and heartbeat() returns once left).
+  const page = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual((page.match(/router\.replace\("\/"\)/g) ?? []).length, 1, "one redirect home");
+  strictEqual(/if \(outcome\.kind === "home"\) \{[\s\S]{0,120}router\.replace\("\/"\);/.test(page), true);
+  strictEqual(page.includes('onTableEnded: () => leave({ kind: "closed" }),'), true);
+  strictEqual(page.includes("if (!ticket || beatingRef.current || exitedRef.current) return;"), true);
+  strictEqual(/state\.kind === "closed"[\s\S]{0,300}\{TABLE_CLOSED_TEXT\}[\s\S]{0,300}Back home/.test(page), true);
+  // The table view no longer sends a spectator away when the game ends.
+  const tv = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(tv.includes("onGameEnded"), false);
+  // Under the 90 s cutoff: the safety poll's pace either way.
+  strictEqual(SAFETY_POLL_CONNECTED_MS < 90_000 && SAFETY_POLL_MS < 90_000, true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(/async function pollOnce\(\) \{[\s\S]{0,300}spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "on the safety poll");
+  strictEqual(/const catchUp = \(\) => \{[\s\S]{0,200}spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "visible / online");
+});
+check("Watching: watch_table's refusals become screens; 'no game yet' waits and asks again", () => {
+  strictEqual(watchRefusal("There is no game to watch at this table yet.").kind, "waiting");
+  strictEqual(watchRefusal("There is no game to watch at this table yet.").text, "Waiting for the next game...");
+  strictEqual(WATCH_RETRY_MS, 5_000);
+  strictEqual(watchRefusal("You are seated at this table.").kind, "seated");
+  deepStrictEqual(watchRefusal("Spectators full: this table already has 4 spectators."), { kind: "full", text: FULL_TEXT });
+  deepStrictEqual(watchRefusal("You were removed from watching this table."), { kind: "removed", text: REMOVED_TEXT });
+  deepStrictEqual(watchRefusal("This table has ended."), { kind: "ended", text: "This table has ended." });
+  deepStrictEqual(watchRefusal("This table does not allow spectators."), { kind: "not_allowed", text: NOT_ALLOWED_TEXT });
+  deepStrictEqual(watchRefusal("Computer tables cannot be watched."), { kind: "not_allowed", text: NOT_ALLOWED_TEXT });
+  strictEqual(watchRefusal("You must be logged in to watch a table.").kind, "login");
+  strictEqual(watchRefusal("No table found with code 1234.").kind, "not_found");
+  strictEqual(watchRefusal("something new").text, "something new");
+  // The page: waiting re-asks on a timer; seated goes to the player's own seat.
+  const page = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual(page.includes("timer = window.setTimeout(attempt, WATCH_RETRY_MS);"), true);
+  strictEqual(page.includes("router.replace(`/tables/${code}`);"), true);
+  strictEqual(page.includes("Waiting for the next game..."), true);
+});
+check("Watching: the RPC allowlist -- the spectator route and its own modules call only the four spectator RPCs and write nothing", () => {
+  const ALLOWED = new Set(["watch_table", "stop_watching", "spectator_heartbeat", "get_spectator_reveals"]);
+  // The route and every module only it (or the spectating mode) uses.
+  const spectatorOnly = ["app/watch/[code]/page.tsx", "lib/spectatorData.ts", "lib/spectators.ts", "lib/lobbyNotice.ts"];
+  const WRITE = /\.(insert|upsert|update|delete)\(/;
+  let rpcs = 0;
+  for (const f of spectatorOnly) {
+    const src = codeOnly(readFileSync(f, "utf8"));
+    for (const m of src.matchAll(/\.rpc\(\s*([^,)]+)/g)) {
+      rpcs++;
+      const name = m[1].trim().replace(/^["'`]|["'`]$/g, "");
+      strictEqual(ALLOWED.has(name), true, `${f}: .rpc(${m[1]})`);
+    }
+    strictEqual(WRITE.test(src), false, `${f} writes a table`);
+    strictEqual(/takeSeat|table_members/.test(src), false, f);
+  }
+  strictEqual(rpcs, 4, "exactly the four spectator calls");
+  // The shared view: one supabase.rpc, inside playerRpc, refused for a spectator;
+  // its only write is takeSeat's upsert, which a spectator never reaches.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual((view.match(/supabase\.rpc\(/g) ?? []).length, 1);
+  strictEqual(/const playerRpc = useCallback\(\s*\([^)]*\)[^{]*\{\s*if \(spectating\) \{/.test(view), true);
+  strictEqual((view.match(/\.(insert|update|delete)\(/g) ?? []).length, 0);
+  strictEqual((view.match(/\.upsert\(/g) ?? []).length, 1);
+  strictEqual(/const takeSeat = useCallback\(\s*async \([^\n]*=> \{\s*\/\/[^\n]*\n\s*if \(spectating\) return;/.test(view), true);
+  // A spectator's setup never reaches the seat code.
+  strictEqual(/if \(spectating\) \{\s*setTable\(tableRow\);\s*await refreshTableState\(tableRow\.id\);\s*return;\s*\}/.test(view), true);
+});
+check("Watching: nothing in the spectator path reads its own hand; hidden cards only via get_spectator_reveals", () => {
+  for (const f of ["app/watch/[code]/page.tsx", "lib/spectatorData.ts", "lib/spectators.ts", "lib/lobbyNotice.ts"]) {
+    const src = codeOnly(readFileSync(f, "utf8"));
+    strictEqual(/fetchMyHand|readOwnHand|game_hands|game_cribs|game_decks/.test(src), false, f);
+  }
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // fetchMyHand is called in exactly one place: readOwnHand, which returns first for a spectator.
+  strictEqual((view.match(/fetchMyHand\(/g) ?? []).length, 1);
+  strictEqual(/const readOwnHand = useCallback\(\s*async \(gameId: string\) => \{\s*if \(spectating\) return;\s*await fetchMyHand\(gameId\);/.test(view), true);
+  // Revealed hands and the crib: the spectator branch reads get_spectator_reveals only.
+  strictEqual(/const fetchRevealed = useCallback\(async \(gameId: string\) => \{[\s\S]{0,400}if \(spectating\) \{\s*const shown = await readSpectatorReveals\(gameId\);/.test(view), true);
+  strictEqual(readFileSync("lib/spectatorData.ts", "utf8").includes('supabase.rpc("get_spectator_reveals"'), true);
+  // Seat 1's hand in play: card backs with the public count (opponentCardCount), never a face.
+  strictEqual(view.includes("{Array.from({ length: opponentCardCount(viewerId) }, (_, i) => (\n        <FaceDownCard key={i} sizing={HAND_CARD} />"), true);
+  // In the count: only once the counting sequence has turned it over.
+  strictEqual(view.includes("const bottomHand: string[] = spectating ? (bottomTurnedOver ? (revealedHands[viewerId] ?? []) : []) : myHand;"), true);
+});
+check("Watching (part C): the hold's button says Show Hands for a spectator only", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes('const holdButtonLabel = spectating ? "Show Hands" : undefined;'), true);
+  // Every hold button (PlayArea and CenterCount) gets the label.
+  const holds = view.match(/handOver=\{onPegHold \? \{[^}]*\}/g) ?? [];
+  strictEqual(holds.length, 3);
+  for (const h of holds) strictEqual(h.includes("label: holdButtonLabel"), true, h);
+  // Players keep "Count hands": the components fall back to it.
+  for (const f of ["components/PlayArea.tsx", "components/table/CenterCount.tsx"]) {
+    strictEqual(readFileSync(f, "utf8").includes('{handOver.label ?? "Count hands"}'), true, f);
+  }
+});
+check("Watching (part C): a new game at the table is followed -- the game id change is picked up", () => {
+  // The first game, a rematch, the next game after waiting: a different id.
+  strictEqual(followGame("g1", "g2"), true);
+  strictEqual(followGame(null, "g1"), true);
+  // The same game, or no live game (game over, waiting): nothing to follow.
+  strictEqual(followGame("g1", "g1"), false);
+  strictEqual(followGame("g1", null), false);
+  // The table view reports each live game; the page follows it (a quiet
+  // watch_table, the ticket's game moved on); reveals read the game on screen.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(/if \(spectating && liveGameId\) spectateRef\.current\?\.onLiveGame\(liveGameId\);/.test(view), true);
+  strictEqual(view.includes("const shown = await readSpectatorReveals(gameId);"), true);
+  const page = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual(/!followGame\(ticket\.gameId, gameId\)\) return;\s*ticketRef\.current = \{ \.\.\.ticket, gameId \};\s*void rewatch\(\);/.test(page), true);
+  // The heartbeat uses the table (not a stale game id) and the current ticket.
+  strictEqual(page.includes("callSpectatorHeartbeat(ticket.tableId)"), true);
+});
+check("Watching (part C): the game-over and waiting screens are the players', read-only, in names", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // No New Game for a spectator: who it waits on, by name.
+  strictEqual(/\{spectating \? \(\s*\/\/ A SPECTATOR: who the next game waits on, never a button\./.test(view), true);
+  strictEqual(view.includes("to start a new game…`"), true);
+  strictEqual(view.includes('{rematchDealerId && <p className="text-xs text-zinc-500">Next dealer: {nameOf(rematchDealerId)}</p>}'), true);
+  // The headline: never "You win!" for a spectator (meId is nobody).
+  strictEqual(view.includes(": finishedGame.winner_id === meId"), true);
+  strictEqual(winHeadline({ players: ["a", "b", "c"], winnerId: "b", myId: NOBODY_SEATED, nameOf: () => "Bea", teams: false }), "Bea wins!");
+  strictEqual(
+    winHeadline({ players: ["a", "b", "c", "d"], winnerId: "a", myId: NOBODY_SEATED, nameOf: (id) => id.toUpperCase(), teams: true }).includes("You"),
+    false
+  );
+  // The waiting room: no host controls (isHost is off), no "(you)".
+  strictEqual(view.includes("const isHost = !spectating && hostId === viewerId;"), true);
+  strictEqual(view.includes("          myId={meId}"), true);
 });
 
 // THE SELF-SCORING PLATES (lib/mugginsPlates.ts), 3 and 4 players. Seen as
@@ -3821,7 +4204,7 @@ check("header: Reconnecting is a dot under 400px, the words kept for screen read
   for (const needle of ['role="status"', 'title="Reconnecting..."', "max-[399px]:sr-only", "min-[400px]:hidden", "max-[399px]:hidden"]) {
     strictEqual(src.includes(needle), true, needle);
   }
-  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  const page = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(page.includes('realtimeStatus === "disconnected" && <ReconnectingNote beside={leaveConfirming} />'), true);
   strictEqual(page.includes(">Reconnecting...</span>"), false);
 });
@@ -4387,7 +4770,7 @@ check("wings home: God's skunk splash still follows only the table's live win", 
   strictEqual(/showWings\(`wings:home:\$\{userId\}:\$\{myCount\}`, moment\)/.test(calls[0]), true);
   strictEqual(home.includes("showGodLoss"), false);
   // The table still passes it, from the live win only.
-  const table = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  const table = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(table.includes("showWings(`wings:${wonGameId}`, wings, loss ? { key: lossKey, loss } : undefined)"), true);
   strictEqual(table.includes("showWings(`wings:${myGodWinId}`, moment)"), true);
 });
@@ -4991,7 +5374,7 @@ check("chat: nothing reads a sender name or id from the message payload", () => 
   strictEqual(hook.includes("private: true, broadcast: { self: false, ack: true }"), true);
   strictEqual(hook.includes("supabase.realtime.setAuth()"), true);
   // The table page never passes a computer table or an unseated player.
-  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  const page = readFileSync("components/table/TableView.tsx", "utf8");
   for (const needle of ['table.status === "open"', "!table.computer_level", "members.some((m) => m.user_id === session.user.id)", "messages={chat.messages}"]) {
     strictEqual(page.includes(needle), true, needle);
   }
@@ -5040,7 +5423,7 @@ check("chat: the banner never folds the stack; the cards go below it; the waitin
   strictEqual(room.limit, 596);
   // The table page marks the banner and gives the waiting room the whole
   // middle; the stack skips a notice's controls.
-  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  const page = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(/<div data-table-notice="" [^>]*>\s*<span>\{gameEndedNotice\}/.test(page), true, "banner marked");
   strictEqual(page.includes('const chatRoom: "game" | "full" = inWaitingRoom || (!activeGame && !finishedGame) ? "full" : "game";'), true);
   strictEqual(page.includes("room={chatRoom}"), true);
@@ -5071,7 +5454,7 @@ check("chat: the cards are a layer above every table element, below the deal and
   ]);
   const sources = [
     readFileSync("app/globals.css", "utf8"),
-    readFileSync("app/tables/[code]/page.tsx", "utf8"),
+    readFileSync("components/table/TableView.tsx", "utf8"),
     ...readdirSync("components/table")
       .filter((f) => f.endsWith(".tsx") && f !== "TableChat.tsx")
       .map((f) => readFileSync(`components/table/${f}`, "utf8")),
@@ -5153,7 +5536,7 @@ check("chat: my own card is never counted in the fold or +N more, and never push
   strictEqual(hook.includes("useState<ChatMessage | null>(null)"), true);
 });
 check("chat: my own message is never announced to the screen reader", () => {
-  const page = readFileSync("app/tables/[code]/page.tsx", "utf8");
+  const page = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(page.includes("<ChatAnnouncer newest={chat.messages[0]} />"), true);
   strictEqual(page.includes("own={chat.own}"), true);
   strictEqual((page.match(/chat\.own\b/g) ?? []).length, 1); // only to the stack

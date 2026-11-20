@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { copyText } from "@/components/table/WaitingForPlayer";
+import { SpectatorsTag } from "@/components/SpectatorsTag";
 
 // THE WAITING ROOM (Phase 3, app stage A2): a 3- or 4-player table before a
 // game. A 2-player table never shows it.
@@ -44,6 +45,7 @@ export function WaitingRoom({
   canStart,
   starting,
   onStart,
+  spectators = false,
 }: {
   code: string;
   capacity: number;
@@ -59,6 +61,8 @@ export function WaitingRoom({
   canStart: boolean;
   starting: boolean;
   onStart: () => void;
+  // The table allows spectators (PRD item 40): said under the title.
+  spectators?: boolean;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   useEffect(() => {
@@ -77,6 +81,7 @@ export function WaitingRoom({
         <p className="text-lg font-semibold leading-tight">
           {full ? "Everyone's here" : `Waiting for players (${seated} of ${capacity})`}
         </p>
+        {spectators && <SpectatorsTag />}
         <div className="flex items-center gap-3">
           <span className="text-2xl font-bold tracking-widest tabular-nums" aria-label={`Table code ${code}`}>
             {code}
