@@ -38,13 +38,14 @@ From here, new work exists only under the rule recorded in the PRD's **Backlog (
 
 All SQL lives in `docs/sql/` for history; there is **no Supabase CLI or migrations setup**. The user runs every file by hand in the Supabase SQL Editor. Where a function was redefined across slices, the **last file to define it is the live version**.
 
-Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`, plus five added since Phase 2:
+Tables: `profiles`, `tables`, `table_members`, `games`, `game_hands`, `game_decks`, `game_cribs`, `game_plays`, `admin_users`, plus six added since Phase 2:
 
 - `user_appearance` — each player's card back and table surface, readable and writable by its owner only (`appearance-settings.sql`).
 - `computer_accounts` — the computer opponents, one auth user per level: `easy` Shortbus, `casual` Normie, `medium` Rainman (the v2.0 Normie, renamed), `hard` God (the fourth level comes from `computer-normie.sql`, run in production on 2026-11-08; its verification passed, 10 checks); RLS on with no policies and no client privileges, read only by `security definer` functions (`computer-c2-engine.sql`).
 - `game_results` — every player's score, position and won flag, saved by a trigger on `games` when a game is won; the leaderboard's skunks come from it (`leaderboard-l1-game-results.sql`).
 - `leaderboard_hidden` — test accounts kept off the leaderboard; every game such an account played counts for nobody (`leaderboard-l3-hidden-accounts.sql`).
 - `follows` — who each player follows (one-way, private, up to 50); RLS on with no policies and no client privileges, written and read only through the follow functions (`follows.sql`, run and verified in production on 2026-11-11; PRD item 36).
+- `table_spectators` — who is watching which multiplayer table (never `table_members`; up to 4 current, host can remove for good), plus `tables.allow_spectators`; RLS on, `authenticated` SELECT only (seated players or the spectator's own row), written and read only through `watch_table`, `stop_watching`, `remove_spectator`, `spectator_heartbeat` and `get_spectator_reveals` (hands from counting, the crib from its step, nothing for an ended game, never the deck) (`spectators.sql`, LIVE: run and verified in production on 2026-11-20, 134 checks passed; PRD item 40). The app has no spectator code yet; next: S2 the Start a Table checkbox and the Open Tables "Watch" button, S3 the spectator view (Seat 1's orientation, hands as card backs, never writes `table_members`), S4 the host's Remove, S5 read-only chat.
 
 Functions, with the file holding the current definition:
 
