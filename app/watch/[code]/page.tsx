@@ -19,7 +19,7 @@ import {
 import {
   followGame,
   heartbeatStep,
-  rewatchOutcome,
+  rewatchStep,
   TABLE_CLOSED_TEXT,
   WATCH_RETRY_MS,
   watchRefusal,
@@ -38,9 +38,12 @@ import {
 //     count, every action off, hands and the crib only through
 //     get_spectator_reveals, no sounds.
 //
-// THE FLOW. watch_table(code): let in -> the table. "No game yet" -> a
-// waiting screen that asks again every WATCH_RETRY_MS. Seated here -> the
-// player's own seat. Anything else -> its message and Back to home.
+// THE FLOW. watch_table(code): let in -> the table, with or without a live
+// game (no game: the table's own waiting room, read-only). The OLD
+// watch_table refuses "no game yet" instead -> a waiting screen that asks
+// again every WATCH_RETRY_MS (kept until spectators-join-or-watch.sql is
+// live). Seated here -> the player's own seat. Anything else -> its message
+// and Back to home.
 //
 // STAYING (part C). Once watching, the spectator stays on the table through
 // the game's end (the players' game-over screen, every action off) and a
@@ -143,14 +146,12 @@ export default function WatchPage() {
   );
 
   // A QUIET watch_table: after not_watching, or to follow a new game. In ->
-  // the ticket moves on; refused -> rewatchOutcome ("no game yet" stays).
+  // STAY, the ticket moves on (a NULL game id too: the waiting room or
+  // between games); refused -> rewatchOutcome ("no game yet" stays).
   const rewatch = useCallback(async () => {
     const again = await callWatchTable(code);
-    if ("ok" in again) {
-      ticketRef.current = again.ok;
-      return;
-    }
-    const outcome: RewatchOutcome = rewatchOutcome(again.refused);
+    if ("ok" in again) ticketRef.current = again.ok;
+    const outcome: RewatchOutcome = rewatchStep(again);
     if (outcome.kind !== "continue") leave(outcome);
   }, [code, leave]);
 

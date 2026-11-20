@@ -78,7 +78,7 @@ export function SquareTableShell({
   );
 }
 
-// The header line: table code and hand on the left, the across player
+// The header line: table code (with "Hand N" under it) on the left, the across player
 // (avatar, name, "Go") in the centre, the controls on the right.
 export function SquareTableHeader({
   code,
@@ -104,17 +104,22 @@ export function SquareTableHeader({
 }) {
   const header = (
     <header className="sq-header">
-      {/* "Table CODE" always shows whole (the column's minimum, .sq-header);
-          the hand number takes only the room left over (contain: its own
-          width never counts) and ends in an ellipsis. */}
-      <h1 className="flex min-w-0 font-semibold">
-        <span className="shrink-0 whitespace-nowrap">
+      {/* "Table CODE" (and the spectators eye) always shows whole on the
+          top line: the column's minimum, .sq-header. "Hand N" sits directly
+          UNDER it, in the header's own 28px (a 16px line over a 12px one);
+          contain: its width never counts, so the across player keeps all
+          the room they had, and it ends in an ellipsis if ever too long. */}
+      <h1 className="flex min-w-0 flex-col justify-center font-semibold" data-header="title">
+        <span className="whitespace-nowrap leading-4" data-header="code">
           Table {code}
           {spectators && !muggins && <SpectatorsTag variant="icon" />}
         </span>
         {handNo != null && (
-          <span className="min-w-0 flex-1 truncate font-normal text-zinc-500 [contain:inline-size]">
-            {" "}· Hand {handNo}
+          <span
+            className="min-w-0 truncate text-[10px] font-normal leading-3 text-zinc-500 [contain:inline-size]"
+            data-header="hand"
+          >
+            Hand {handNo}
           </span>
         )}
       </h1>

@@ -8,16 +8,20 @@ import { supabase } from "@/lib/supabase";
 // scripts/test-phase3.ts scans this file and the watch page for any other
 // .rpc(...) name or a table write.
 
-export type WatchTicket = { tableId: string; code: string; gameId: string };
+// gameId: the live game, or null -- the table's waiting room or between
+// games (the new watch_table, spectators-join-or-watch.sql, lets a
+// spectator in with no game; the old one refused instead).
+export type WatchTicket = { tableId: string; code: string; gameId: string | null };
 
 // watch_table(code): become (or stay) a spectator. The table, its code and
-// the live game -- or the server's refusal message, word for word.
+// the live game (null when none is live) -- or the server's refusal
+// message, word for word.
 export async function callWatchTable(code: string): Promise<{ ok: WatchTicket } | { refused: string }> {
   const { data, error } = await supabase.rpc("watch_table", { p_code: code });
   if (error) return { refused: error.message };
-  const row = (Array.isArray(data) ? data[0] : data) as { table_id?: string; code?: string; game_id?: string } | null;
-  if (!row?.table_id || !row.game_id) return { refused: "Couldn't start watching. Please try again." };
-  return { ok: { tableId: row.table_id, code: row.code ?? code, gameId: row.game_id } };
+  const row = (Array.isArray(data) ? data[0] : data) as { table_id?: string; code?: string; game_id?: string | null } | null;
+  if (!row?.table_id) return { refused: "Couldn't start watching. Please try again." };
+  return { ok: { tableId: row.table_id, code: row.code ?? code, gameId: row.game_id ?? null } };
 }
 
 export async function callStopWatching(tableId: string): Promise<void> {
@@ -41,6 +45,8 @@ export type SpectatorReveals = { hands: Record<string, string[]>; crib: string[]
 // crib from its step -- the only hidden cards a spectator ever receives.
 // null when there is nothing to show (or the call failed).
 export async function readSpectatorReveals(gameId: string): Promise<SpectatorReveals | null> {
+  // Only ever a real game: nothing to read in the waiting room.
+  if (!gameId) return null;
   const { data, error } = await supabase.rpc("get_spectator_reveals", { p_game_id: gameId });
   if (error || !data || typeof data !== "object") return null;
   const d = data as { hands?: unknown; crib?: unknown };
