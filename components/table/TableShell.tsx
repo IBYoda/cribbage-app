@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { MugginsTag } from "@/components/MugginsTag";
-import { SpectatorsTag } from "@/components/SpectatorsTag";
+import { SpectatorsEye, WatchingRow } from "@/components/SpectatorsTag";
 import {
   DEFAULT_CARD_BACK,
   DEFAULT_TABLE_SURFACE,
@@ -90,29 +90,36 @@ export function TableShell({
 // directly UNDER "Table CODE", in the header's own 24px (a 14px line over a
 // 10px one), so it takes no width from the line and the header grows by
 // nothing; the spectators eye stays beside the code on the top line.
+// The SAME header for players and spectators (spectator chat): a spectator
+// only gets the thin "Watching" row under it (watching).
 export function TableHeader({
   code,
   handNo,
   muggins = false,
-  spectators = false,
+  spectators = 0,
+  onSpectators,
+  watching = false,
   right,
 }: {
   code: string;
   handNo: number | null;
   // A Muggins table: the "Self-Scoring (Muggins)" tag under the header line.
   muggins?: boolean;
-  // A table that allows spectators (PRD item 40): "Spectators allowed" on
-  // the Muggins tag line when there is one, else a small eye beside the code
-  // (no extra line, and the title truncates before Leave moves).
-  spectators?: boolean;
+  // How many CURRENT spectators are watching (get_table_spectators). Only
+  // while it is above 0: an eye with the count beside the code, or a pill on
+  // the Muggins tag line; tapping it calls onSpectators (the list).
+  spectators?: number;
+  onSpectators?: () => void;
+  // A spectator's screen: the "Watching" row under the header.
+  watching?: boolean;
   right: ReactNode;
 }) {
   const line = (
     <>
       <h1 className="flex min-w-0 flex-col justify-center font-semibold" data-header="title">
-        <span className="truncate leading-[14px]" data-header="code">
-          Table {code}
-          {spectators && !muggins && <SpectatorsTag variant="icon" />}
+        <span className="flex min-w-0 items-center leading-[14px]" data-header="code">
+          <span className="truncate">Table {code}</span>
+          {!muggins && <SpectatorsEye count={spectators} onOpen={onSpectators} />}
         </span>
         {handNo != null && (
           <span className="truncate text-[10px] font-normal leading-[10px] text-zinc-500" data-header="hand">
@@ -124,19 +131,27 @@ export function TableHeader({
     </>
   );
   if (!muggins) {
-    return <header className="flex h-6 items-center justify-between gap-2 text-sm">{line}</header>;
+    return (
+      <>
+        <header className="flex h-6 items-center justify-between gap-2 text-sm">{line}</header>
+        {watching && <WatchingRow />}
+      </>
+    );
   }
   // A Muggins table: the tag gets a short line of its own under the header
   // line -- there is no room beside the code and the header buttons on a
   // phone. It costs ~20px, well inside the score strip's height, which a
   // Muggins table doesn't have.
   return (
-    <header className="flex flex-col gap-0.5 text-sm">
-      <div className="flex h-6 items-center justify-between gap-2">{line}</div>
-      <div className="flex gap-1.5">
-        <MugginsTag />
-        {spectators && <SpectatorsTag />}
-      </div>
-    </header>
+    <>
+      <header className="flex flex-col gap-0.5 text-sm">
+        <div className="flex h-6 items-center justify-between gap-2">{line}</div>
+        <div className="flex gap-1.5">
+          <MugginsTag />
+          <SpectatorsEye count={spectators} onOpen={onSpectators} pill />
+        </div>
+      </header>
+      {watching && <WatchingRow />}
+    </>
   );
 }

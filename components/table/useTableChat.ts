@@ -19,10 +19,18 @@ import {
 // server, docs/sql/table-chat.sql).
 //
 // ON only when `enabled`: the page passes an OPEN, HUMAN table (not a
-// computer table) that I am seated at, on the table screen, signed in. Then:
+// computer table) that I am seated at -- or, spectator chat, that I am a
+// CURRENT spectator of -- on the table screen, signed in. Then:
 //   * MY channel, chatTopic(table, me): I send on it, never listen (self:
 //     false).
-//   * every OTHER seated player's channel: I listen, never send.
+//   * every OTHER roster entry's channel -- the seated players and the
+//     current spectators: I listen, never send.
+// THE ROSTER IS THE CUTOFF. Realtime checks a channel's permission when it
+// is joined (and at a token refresh), not per message, so a spectator who
+// was removed or went stale may still be able to send for a while. What
+// this screen SHOWS is decided here: a sender who is not in the roster is
+// dropped, and their channel is left as soon as the roster loses them (the
+// page's list refresh, or at once on the host's screen after Remove).
 // All private (the server's policies decide), broadcast event "msg", acked.
 // A player joining adds their channel; one leaving drops theirs. Off -- I
 // leave, the table ends, the page goes, I sign out -- removes every channel
@@ -50,7 +58,8 @@ import {
 // the button. realtime-js rejoins on its own after a drop (airplane mode),
 // and `available` comes back with it.
 
-export type ChatRosterEntry = { user_id: string; nickname: string | null; avatar_url: string | null };
+// spectator: a current spectator (their messages carry the eye).
+export type ChatRosterEntry = { user_id: string; nickname: string | null; avatar_url: string | null; spectator?: boolean };
 export type ChatSendResult = "ok" | "throttled" | "failed";
 
 const CHANNEL_CONFIG = { config: { private: true, broadcast: { self: false, ack: true } } };
@@ -156,8 +165,9 @@ export function useTableChat({
     };
   }, [on, tableId, myUserId]);
 
-  // THEIR CHANNELS: one per other seated player, keyed by topic, added and
-  // dropped as the roster changes; the rest stay joined.
+  // THEIR CHANNELS: one per other roster entry (players and current
+  // spectators), keyed by topic, added and dropped as the roster changes;
+  // the rest stay joined.
   type Listening = { channel: RealtimeChannel | null; cancelled: boolean };
   const listenRef = useRef(new Map<string, Listening>());
   useEffect(() => {
@@ -195,7 +205,8 @@ export function useTableChat({
               );
               if (text === null) return;
               const member = rosterRef.current.find((m) => m.user_id === senderId);
-              if (!member) return; // left meanwhile
+              // Not in the roster (left, removed, no longer watching): dropped.
+              if (!member) return;
               if (!receiveThrottle.current.take(senderId, Date.now())) return;
               setMessages((list) =>
                 addChatMessage(list, {
@@ -205,6 +216,7 @@ export function useTableChat({
                   avatarUrl: member.avatar_url,
                   text,
                   at: Date.now(),
+                  spectator: member.spectator === true,
                 })
               );
             })

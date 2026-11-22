@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
 import { MugginsTag } from "@/components/MugginsTag";
-import { SpectatorsTag } from "@/components/SpectatorsTag";
+import { SpectatorsEye, WatchingRow } from "@/components/SpectatorsTag";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
 import type { ScreenSide } from "@/lib/tableLayout";
@@ -86,13 +86,19 @@ export function SquareTableHeader({
   opponent,
   right,
   muggins = false,
-  spectators = false,
+  spectators = 0,
+  onSpectators,
+  watching = false,
 }: {
   code: string;
   handNo: number | null;
-  // Allows spectators (PRD item 40): as the classic header (TableHeader) --
-  // on the Muggins tag line, else a small eye beside "Table CODE".
-  spectators?: boolean;
+  // Current spectators (as the classic header, TableHeader): above 0, an eye
+  // with the count beside "Table CODE", or a pill on the Muggins tag line;
+  // tapping it calls onSpectators. watching: a spectator's screen (the
+  // "Watching" row under the header).
+  spectators?: number;
+  onSpectators?: () => void;
+  watching?: boolean;
   // A self-scoring (Muggins) table: its tag on a short line of its own under
   // the header line, as the classic header has it (TableHeader).
   muggins?: boolean;
@@ -112,7 +118,7 @@ export function SquareTableHeader({
       <h1 className="flex min-w-0 flex-col justify-center font-semibold" data-header="title">
         <span className="whitespace-nowrap leading-4" data-header="code">
           Table {code}
-          {spectators && !muggins && <SpectatorsTag variant="icon" />}
+          {!muggins && <SpectatorsEye count={spectators} onOpen={onSpectators} />}
         </span>
         {handNo != null && (
           <span
@@ -154,14 +160,22 @@ export function SquareTableHeader({
       <div className="flex shrink-0 items-center justify-end gap-3 text-sm">{right}</div>
     </header>
   );
-  if (!muggins) return header;
+  if (!muggins) {
+    return (
+      <>
+        {header}
+        {watching && <WatchingRow />}
+      </>
+    );
+  }
   return (
     <>
       {header}
       <div className="sq-muggins-tag gap-1.5">
         <MugginsTag />
-        {spectators && <SpectatorsTag />}
+        <SpectatorsEye count={spectators} onOpen={onSpectators} pill />
       </div>
+      {watching && <WatchingRow />}
     </>
   );
 }

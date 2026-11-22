@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
@@ -17,15 +17,22 @@ import { PileRow } from "@/components/table/PileRow";
 import { HandRow } from "@/components/table/HandRow";
 import { WaitingForPlayer } from "@/components/table/WaitingForPlayer";
 import {
+  canRemoveSpectator,
   joinOrWatch,
+  mergeChatRoster,
   NOBODY_SEATED,
   playChosenFromSearch,
   SPECTATOR_NO_GAME_TEXT,
+  soundSeatId,
+  spectatorDealSound,
+  spectatorEyeCount,
   spectatorViewerId,
   watchHref,
+  withoutSpectator,
 } from "@/lib/spectators";
 import { JoinChoice } from "@/components/brand/JoinChoice";
-import { readSpectatorReveals } from "@/lib/spectatorData";
+import { readSpectatorReveals, readTableSpectators, type TableSpectator } from "@/lib/spectatorData";
+import { SpectatorsList, type SpectatorsListMode } from "@/components/table/SpectatorsList";
 import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces, winHeadline } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
@@ -477,12 +484,25 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const [toNickname, setToNickname] = useState(false);
   // MUGGINS: no visible scoring on this table, for everyone (see TableRow).
   const isMuggins = table?.is_muggins === true;
-  // Allows spectators (PRD item 40): the players see it in the header and
-  // the waiting screens.
+  // Allows spectators (PRD item 40): the waiting screens say so (the pill).
   const allowsSpectators = table?.allow_spectators === true;
-  // ...in the header too -- except on a spectator's own screen, whose header
-  // already says "Watching" (and needs the room on a 320px phone).
-  const headerSpectatorsTag = allowsSpectators && !spectating;
+  // WHO IS WATCHING (spectator chat): the table's current spectators
+  // (get_table_spectators), for everyone at the table -- players and
+  // spectators alike. null until first read, or at a table that doesn't
+  // allow spectators. It drives the header's eye (only while someone is
+  // watching, with the count), the spectators list and the chat roster.
+  // Read on the safety poll, on every full refresh (a game-state change, a
+  // reconnect, the tab coming back) and right after the host's Remove.
+  const [spectatorList, setSpectatorList] = useState<TableSpectator[] | null>(null);
+  const spectatorsAllowedRef = useRef(false);
+  useEffect(() => {
+    spectatorsAllowedRef.current = allowsSpectators && !table?.computer_level;
+  });
+  const headerSpectatorCount = allowsSpectators ? spectatorEyeCount(spectatorList) : 0;
+  // The spectators list (the eye's dialog) and the host's Remove.
+  const [spectatorsDialog, setSpectatorsDialog] = useState<SpectatorsListMode | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
   // hand and crib count numbers on this screen (the recap, count flashes, a
   // count win's breakdown): this player's Hide counts setting, or a Muggins
@@ -696,10 +716,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // row says who has cut or discarded, and every UPDATE repeats the whole row,
   // so what a catch-up finds there is marked heard (heardKeys) rather than
   // played late by the next event; true until the first read has done that.
+  // A SPECTATOR hears the table too (spectator chat), from Seat 1 -- the seat
+  // their screen is drawn from: cut cards, discards and plays come from the
+  // table's state on every screen but the tapper's anyway; the deal plays
+  // when a hand is dealt live (spectatorDealSound, below); a win or a loss
+  // is Seat 1's (soundSeatId).
   const tableSound = useTableSounds({
     open: !!table,
-    // No sounds for spectators (v1).
-    silent: spectating,
     isMuggins,
     hideCounts: appearance.hideCounts,
     square: isSquareTable({
@@ -1226,6 +1249,14 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   }, [readOwnHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers, tableSound]);
 
   // Counted while in flight, so the safety poll waits for it.
+  // WHO IS WATCHING, read (get_table_spectators). A failed read keeps the
+  // list as it was; a table that doesn't allow spectators is never asked.
+  const loadSpectators = useCallback(async (tableId: string) => {
+    if (!spectatorsAllowedRef.current) return;
+    const list = await readTableSpectators(tableId);
+    if (list) setSpectatorList(list);
+  }, []);
+
   const refreshTableState = useCallback(
     async (tableId: string) => {
       refreshesInFlightRef.current++;
@@ -1234,9 +1265,15 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       } finally {
         refreshesInFlightRef.current--;
       }
+      // A game-state change, a reconnect, the tab coming back: the
+      // spectators too (not counted as a refresh in flight: the safety poll
+      // must not wait on it).
+      void loadSpectators(tableId);
     },
-    [readTableState]
+    [readTableState, loadSpectators]
   );
+  // (The first full read awaits the table's own reads before this runs, so
+  // spectatorsAllowedRef already reflects the table row set just before.)
 
   // Takes my seat at the table (idempotent) and loads it. setTable first, as
   // before: it starts the realtime subscription while the seat is written.
@@ -2111,7 +2148,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             (updatedGame.ready_by ?? []).length === 0
           ) {
             const endedKey = endKey(updatedGame.id);
-            const myId = myHandRef.current?.userId ?? null;
+            // Whose win or loss: mine, or Seat 1's on a spectator's screen
+            // (the game's players are in seat order: Seat 1 first).
+            const myId = soundSeatId({
+              spectating,
+              viewerId: updatedGame.players?.[0] ?? NOBODY_SEATED,
+              myId: myHandRef.current?.userId ?? null,
+            });
             const players = updatedGame.players ?? [];
             const winnerId = updatedGame.winner_id;
             const teams = table.max_players === 4 && table.team_mode === "teams";
@@ -2417,6 +2460,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         }
       }
       await loadMembers(tableId, true);
+      // Who is watching: the eye, the list and the chat roster.
+      await loadSpectators(tableId);
     }
 
     const timer = window.setInterval(() => {
@@ -2438,7 +2483,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     return () => window.clearInterval(timer);
     // realtimeConnected: a change of channel status restarts the interval at
     // the new pace, so a disconnect is back to 12 s at once.
-  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, realtimeConnected]);
+  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
   // update, so this is a legitimate effect rather than a cascading render.
@@ -2506,20 +2551,28 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // ended table shows one -- and not mid-leave). The server's rules
   // (chat_topic_allows) say the same; this keeps the channels from even
   // being tried elsewhere. Off removes every channel and message.
+  // A SPECTATOR chats too (spectator chat, docs/sql/spectator-chat.sql):
+  // while they are a CURRENT spectator -- in the list get_table_spectators
+  // gives -- exactly as a player while seated.
   const chatOn =
-    !spectating &&
     !!session &&
     !!table &&
     table.status === "open" &&
     !table.computer_level &&
     !error &&
     leaveStatus !== "leaving" &&
-    members.some((m) => m.user_id === session.user.id);
+    (spectating
+      ? !!spectatorList?.some((s) => s.userId === session.user.id)
+      : members.some((m) => m.user_id === session.user.id));
+  // THE CHAT ROSTER: the players, then the current spectators (flagged, for
+  // the eye on their messages). A sender not in it is dropped, so a
+  // spectator leaves everyone's chat as soon as they leave the list.
+  const chatRoster = useMemo(() => mergeChatRoster(members, allowsSpectators ? spectatorList : null), [members, spectatorList, allowsSpectators]);
   const chat = useTableChat({
     enabled: chatOn,
     tableId: table?.id ?? null,
     myUserId,
-    roster: members,
+    roster: chatRoster,
   });
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
@@ -2709,6 +2762,35 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       ? table.created_by
       : (seatedBySeat[0]?.user_id ?? null);
   const isHost = !spectating && hostId === viewerId; // an action flag
+  // THE HOST'S REMOVE (spectator chat): the host only, never a spectator
+  // (remove_spectator checks table_host on the server too).
+  const hostMayRemove = canRemoveSpectator({ isHost, spectating, targetIsSpectator: true });
+  const openSpectators = () => {
+    setRemoveError(null);
+    setSpectatorsDialog({ kind: "list" });
+  };
+  // Remove, confirmed: remove_spectator through playerRpc (refused for a
+  // spectator before anything is sent). On success the spectator leaves the
+  // list on this screen AT ONCE -- and with it the chat roster, so their
+  // messages stop here now -- and the list is read again; everyone else's
+  // screen drops them at its next read (the safety poll). Their own screen
+  // goes home on its next heartbeat ("The host removed you from this
+  // table.").
+  async function handleRemoveSpectator(userId: string) {
+    if (spectating) return; // never a spectator
+    if (!table || !hostMayRemove || removeBusy) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    const { error: rpcError } = await playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId });
+    setRemoveBusy(false);
+    if (rpcError) {
+      setRemoveError(rpcError.message);
+      return;
+    }
+    setSpectatorList((list) => withoutSpectator(list, userId));
+    setSpectatorsDialog(null);
+    void loadSpectators(table.id);
+  }
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
   // The waiting room: no game and no result on screen -- or, after a won
@@ -2825,6 +2907,12 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
+  // A SPECTATOR'S DEAL SOUND (spectator chat): a spectator has no deal
+  // animation, which is what plays a player's shuffle and deal; it plays here
+  // instead when a hand is dealt live, under the animation's own key (claimed
+  // once, so a re-render never repeats it). Players: unchanged.
+  const spectatorDealKey = spectatorDealSound({ spectating, liveKey: dealLiveKey, handKey: dealHandKey });
+  if (spectatorDealKey && phase === "discard") tableSound.dealStart(dealKey(spectatorDealKey));
   // The square table (by default for 2, 3 and 4 players, Teams or Solo,
   // self-scoring ones too, without ?layout=classic -- 3- and 4-player
   // self-scoring always): only it shows the
@@ -3279,30 +3367,32 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     (seatStatus === "error" && seatMessage) ||
     null;
 
-  // The header's controls -- the same in the square view's header.
-  // A SPECTATOR'S HEADER (PRD item 40): "Watching", the reconnecting dot,
-  // and Stop watching in Leave's place. No chat, no speaker, no Hide counts.
-  // Under 400px wide, or while "Reconnecting..." shows, "Watching" is for
-  // screen readers only: the across player's name needs the room.
-  const headerRight = spectating ? (
-    <>
-      <span
-        className={`text-xs font-semibold uppercase tracking-wide text-zinc-500 ${
-          realtimeStatus === "disconnected" ? "sr-only" : "max-[399px]:sr-only"
-        }`}
-      >
-        Watching
-      </span>
-      {realtimeStatus === "disconnected" && <ReconnectingNote beside={false} />}
-      <button
-        onClick={() => spectateRef.current?.onStop()}
-        className="tap-40 whitespace-nowrap px-1 text-xs text-zinc-600 underline dark:text-zinc-400"
-      >
-        Stop watching
-      </button>
-    </>
-  ) : (
+  // The header's controls -- the same in the square view's header, and the
+  // SAME FOR A SPECTATOR (spectator chat): chat, the speaker, the "⋯" menu
+  // (Hide counts: a display setting, as useful to a spectator) and Leave.
+  // A spectator's Leave stops watching and goes home (the watch page's
+  // onStop: stop_watching), with no "End game & leave" confirm -- they end
+  // nothing. "Watching" is a thin row under the header (watching, below).
+  const headerRight = (
         <>
+          {/* WHO IS WATCHING: the eye's list, and the host's Remove (a native
+              dialog: above the chat cards, the counts menu and the composer). */}
+          <SpectatorsList
+            mode={spectatorsDialog}
+            spectators={spectatorList ?? []}
+            canRemove={hostMayRemove}
+            busy={removeBusy}
+            error={removeError}
+            onAskRemove={(userId, name) => {
+              setRemoveError(null);
+              setSpectatorsDialog({ kind: "confirm", userId, name });
+            }}
+            onConfirmRemove={handleRemoveSpectator}
+            onClose={() => {
+              setSpectatorsDialog(null);
+              setRemoveError(null);
+            }}
+          />
           {/* CHAT, beside the speaker, the same size. Only while chat is
               available (an open, human table I'm seated at, my channel
               joined); not while Leave is asking to confirm. The composer
@@ -3358,7 +3448,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             </>
           ) : (
             <button
-              onClick={() => (activeGame ? setLeaveConfirming(true) : handleLeave())}
+              onClick={() =>
+                spectating ? spectateRef.current?.onStop() : activeGame ? setLeaveConfirming(true) : handleLeave()
+              }
               disabled={leaveStatus === "leaving"}
               className="tap-40 px-1 text-xs text-zinc-600 underline disabled:opacity-50 dark:text-zinc-400"
             >
@@ -3372,7 +3464,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       code={code}
       handNo={isActive ? (activeGame?.hand_no ?? null) : null}
       muggins={isMuggins}
-      spectators={headerSpectatorsTag}
+      spectators={headerSpectatorCount}
+      onSpectators={openSpectators}
+      watching={spectating}
       right={headerRight}
     />
   );
@@ -3393,6 +3487,14 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         own={chat.own}
         onDismissOwn={chat.dismissOwn}
         room={chatRoom}
+        onRemoveSpectator={
+          hostMayRemove
+            ? (userId, name) => {
+                setRemoveError(null);
+                setSpectatorsDialog({ kind: "confirm", userId, name });
+              }
+            : undefined
+        }
       />
       {gameEndedNotice && (
         <div data-table-notice="" className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">
@@ -4240,7 +4342,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               opponent={topRow?.header ?? null}
               right={headerRight}
               muggins={isMuggins}
-              spectators={headerSpectatorsTag}
+              spectators={headerSpectatorCount}
+              onSpectators={openSpectators}
+              watching={spectating}
             />
           }
           opponent={topRow?.row ?? null}
@@ -4399,7 +4503,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               opponent={topRow?.header ?? null}
               right={headerRight}
               muggins={isMuggins}
-              spectators={headerSpectatorsTag}
+              spectators={headerSpectatorCount}
+              onSpectators={openSpectators}
+              watching={spectating}
             />
           }
           opponent={topRow?.row ?? null}
@@ -4556,7 +4662,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               }}
               right={headerRight}
               muggins={isMuggins}
-              spectators={headerSpectatorsTag}
+              spectators={headerSpectatorCount}
+              onSpectators={openSpectators}
+              watching={spectating}
             />
           }
           opponent={
@@ -4732,7 +4840,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               }}
               right={headerRight}
               muggins={isMuggins}
-              spectators={headerSpectatorsTag}
+              spectators={headerSpectatorCount}
+              onSpectators={openSpectators}
+              watching={spectating}
             />
           }
           opponent={
