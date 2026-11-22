@@ -62,8 +62,15 @@ import {
   TABLE_CLOSED_TEXT,
   WATCH_RETRY_MS,
   followGame,
+  canRemoveSpectator,
   heartbeatStep,
   isLiveGameStatus,
+  mergeChatRoster,
+  showSpectatorsEye,
+  soundSeatId,
+  spectatorDealSound,
+  spectatorEyeCount,
+  withoutSpectator,
   isWatchableTable,
   joinOrWatch,
   joinRowAction,
@@ -1387,17 +1394,18 @@ check("Open Tables: one row per table -- Join (with the choice), Join (straight 
 });
 check("Spectators: the players are told -- the tag in the headers and the waiting screens", () => {
   const page = readFileSync("components/table/TableView.tsx", "utf8");
-  // Every header that shows the Muggins tag shows the spectators one too.
-  strictEqual(page.split("muggins={isMuggins}").length, page.split("spectators={headerSpectatorsTag}").length);
-  strictEqual(page.includes("const headerSpectatorsTag = allowsSpectators && !spectating;"), true);
+  // Every header that shows the Muggins tag gets the watcher count too.
+  strictEqual(page.split("muggins={isMuggins}").length, page.split("spectators={headerSpectatorCount}").length);
   strictEqual(/<WaitingForPlayer[\s\S]{0,120}spectators=\{allowsSpectators\}/.test(page), true);
   strictEqual(/<WaitingRoom[\s\S]{0,80}spectators=\{allowsSpectators\}/.test(page), true);
-  // The in-game header never gets a line of its own for it: an icon beside
-  // the code, or the Muggins line that is already there.
+  // The in-game header never gets a line of its own for it: the eye beside
+  // the code, or a pill on the Muggins line that is already there -- only
+  // while someone is watching (SpectatorsEye renders nothing at 0).
   for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
     const src = readFileSync(f, "utf8");
-    strictEqual(src.includes('{spectators && !muggins && <SpectatorsTag variant="icon" />}'), true, f);
-    strictEqual(src.includes("{spectators && <SpectatorsTag />}"), true, f);
+    strictEqual(src.includes("{!muggins && <SpectatorsEye count={spectators} onOpen={onSpectators} />}"), true, f);
+    strictEqual(src.includes("<SpectatorsEye count={spectators} onOpen={onSpectators} pill />"), true, f);
+    strictEqual(src.includes("{watching && <WatchingRow />}"), true, f);
   }
 });
 check("Header: 'Hand N' sits under the table code, the spectators eye stays on the top row beside it", () => {
@@ -1408,9 +1416,9 @@ check("Header: 'Hand N' sits under the table code, the spectators eye stays on t
     const h1 = src.slice(start, src.indexOf("</h1>", start));
     // A column: the code line (with the eye inside it), then the hand line.
     const code = h1.indexOf('data-header="code"');
-    const eye = h1.indexOf('<SpectatorsTag variant="icon" />');
-    const codeEnd = h1.indexOf("</span>", code);
+    const eye = h1.indexOf("<SpectatorsEye count={spectators}");
     const hand = h1.indexOf('data-header="hand"');
+    const codeEnd = h1.lastIndexOf("</span>", hand);
     strictEqual(code > 0 && eye > code && eye < codeEnd, true, `${f}: the eye on the code line`);
     strictEqual(hand > codeEnd, true, `${f}: the hand line under it`);
     strictEqual(/data-header="hand"\s*>\s*Hand \{handNo\}\s*<\/span>/.test(h1), true, `${f}: "Hand N", no separator`);
@@ -1488,6 +1496,136 @@ check("Watching: the spectator's waiting room for 2, 3 and 4 players -- read-onl
   strictEqual(/finishedGame\s*\? "Waiting for the next game\.\.\."\s*: \/\/[^\n]*\n\s*SPECTATOR_NO_GAME_TEXT\}/.test(view), true);
 });
 
+check("Spectator chat: the eye shows only while someone is watching, with the count", () => {
+  strictEqual(spectatorEyeCount(null), 0);
+  strictEqual(spectatorEyeCount(undefined), 0);
+  strictEqual(spectatorEyeCount([]), 0);
+  strictEqual(spectatorEyeCount([{}, {}]), 2);
+  strictEqual(showSpectatorsEye(0), false);
+  strictEqual(showSpectatorsEye(1), true);
+  strictEqual(showSpectatorsEye(4), true);
+  // The component renders nothing at 0, the count above it, and opens the list.
+  const tag = readFileSync("components/SpectatorsTag.tsx", "utf8");
+  strictEqual(tag.includes("if (count <= 0) return null;"), true);
+  strictEqual(tag.includes('aria-haspopup="dialog"'), true);
+  strictEqual(tag.includes("{pill ? `${count} watching` : count}"), true);
+  // Its tap target is 44x44 around the small eye.
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/\.spectators-eye::after \{[^}]*width: 44px;[^}]*height: 44px;/.test(css), true);
+  // The page: the count from get_table_spectators, at a table that allows spectators, for players and spectators alike.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("const headerSpectatorCount = allowsSpectators ? spectatorEyeCount(spectatorList) : 0;"), true);
+  strictEqual((view.match(/spectators=\{headerSpectatorCount\}\n\s*onSpectators=\{openSpectators\}\n\s*watching=\{spectating\}/g) ?? []).length, 5);
+  // Refreshed on the safety poll, on every full refresh (game-state changes) and after a Remove.
+  strictEqual(/async function pollOnce\(\) \{[\s\S]{0,2600}await loadSpectators\(tableId\);/.test(view), true);
+  strictEqual(/const refreshTableState = useCallback\([\s\S]{0,500}void loadSpectators\(tableId\);/.test(view), true);
+  strictEqual(view.includes("if (list) setSpectatorList(list);"), true, "a failed read keeps the list");
+  // Muggins: the pill on the tag line follows the same rule.
+  for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
+    strictEqual(readFileSync(f, "utf8").includes("<SpectatorsEye count={spectators} onOpen={onSpectators} pill />"), true, f);
+  }
+});
+check("Spectator chat: the roster merges players and spectators; a spectator's own echo has their name", () => {
+  const players = [
+    { user_id: "p1", nickname: "Walt", avatar_url: null },
+    { user_id: "p2", nickname: "Elsa", avatar_url: "e.png" },
+  ];
+  const spectators = [
+    { userId: "s1", joinedAt: "t1", nickname: "Kim", avatarUrl: "k.png" },
+    { userId: "p2", joinedAt: "t2", nickname: "Elsa", avatarUrl: "e.png" }, // seated and listed: a player
+  ];
+  deepStrictEqual(mergeChatRoster(players, spectators), [
+    { user_id: "p1", nickname: "Walt", avatar_url: null, spectator: false },
+    { user_id: "p2", nickname: "Elsa", avatar_url: "e.png", spectator: false },
+    { user_id: "s1", nickname: "Kim", avatar_url: "k.png", spectator: true },
+  ]);
+  deepStrictEqual(mergeChatRoster(players, null).map((r) => r.user_id), ["p1", "p2"]);
+  // The spectator's own card: their name and their eye, from the roster.
+  const me = mergeChatRoster(players, spectators).find((r) => r.user_id === "s1");
+  const card = ownChatCard({ result: "ok", text: "nice peg", me, myUserId: "s1", now: 10, id: "own-s" });
+  strictEqual(card?.name, "Kim");
+  strictEqual(card?.spectator, true);
+  // The page builds the roster this way and passes it to the chat hook.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("mergeChatRoster(members, allowsSpectators ? spectatorList : null)"), true);
+  strictEqual(view.includes("roster: chatRoster,"), true);
+  // A spectator chats while listed (a current spectator), a player while seated.
+  strictEqual(/\(spectating\s*\?\s*!!spectatorList\?\.some\(\(s\) => s\.userId === session\.user\.id\)\s*:\s*members\.some\(\(m\) => m\.user_id === session\.user\.id\)\)/.test(view), true);
+  // Messages carry the roster's spectator flag; the card draws an eye for it.
+  const hook = readFileSync("components/table/useTableChat.ts", "utf8");
+  strictEqual(hook.includes("spectator: member.spectator === true,"), true);
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes("{m.spectator &&"), true);
+  strictEqual(ui.includes("<SpectatorEyeGlyph size={12} />"), true);
+});
+check("Spectator chat: a spectator who leaves the list is dropped; the host's client drops them at once after Remove", () => {
+  const list = [
+    { userId: "s1", joinedAt: "t1", nickname: "Kim", avatarUrl: null },
+    { userId: "s2", joinedAt: "t2", nickname: "Lou", avatarUrl: null },
+  ];
+  deepStrictEqual(withoutSpectator(list, "s1")?.map((s) => s.userId), ["s2"]);
+  strictEqual(withoutSpectator(null, "s1"), null);
+  // Out of the list = out of the roster: their channel is left and anything still arriving is dropped.
+  const roster = mergeChatRoster([], withoutSpectator(list, "s1"));
+  strictEqual(roster.some((r) => r.user_id === "s1"), false);
+  const hook = readFileSync("components/table/useTableChat.ts", "utf8");
+  strictEqual(/const member = rosterRef\.current\.find\(\(m\) => m\.user_id === senderId\);\s*\/\/[^\n]*\n\s*if \(!member\) return;/.test(hook), true);
+  strictEqual(hook.includes("const others = on ? roster.map((m) => m.user_id).filter((id) => id !== myUserId).sort() : [];"), true);
+  // The host's Remove: the list loses them on success, before the next read.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(/if \(rpcError\) \{\s*setRemoveError\(rpcError\.message\);\s*return;\s*\}\s*setSpectatorList\(\(list\) => withoutSpectator\(list, userId\)\);/.test(view), true);
+});
+check("Spectator chat: Remove is the host's only -- the list's rows and the chat card's eye", () => {
+  strictEqual(canRemoveSpectator({ isHost: true, spectating: false, targetIsSpectator: true }), true);
+  strictEqual(canRemoveSpectator({ isHost: false, spectating: false, targetIsSpectator: true }), false, "a player who isn't the host");
+  strictEqual(canRemoveSpectator({ isHost: true, spectating: true, targetIsSpectator: true }), false, "never a spectator");
+  strictEqual(canRemoveSpectator({ isHost: true, spectating: false, targetIsSpectator: false }), false, "never a player");
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("const hostMayRemove = canRemoveSpectator({ isHost, spectating, targetIsSpectator: true });"), true);
+  strictEqual(view.includes("canRemove={hostMayRemove}"), true);
+  strictEqual(/onRemoveSpectator=\{\s*hostMayRemove\s*\?/.test(view), true);
+  // Through playerRpc (refused for a spectator before anything is sent), guarded twice.
+  strictEqual(view.includes('playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId })'), true);
+  strictEqual(/async function handleRemoveSpectator\(userId: string\) \{\s*if \(spectating\) return;[^\n]*\n\s*if \(!table \|\| !hostMayRemove \|\| removeBusy\) return;/.test(view), true);
+  // The card: the eye is a button only when the host's handler is passed; a 44px layer; the confirm is a native dialog.
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes("onRemove={m.spectator && onRemoveSpectator ? () => onRemoveSpectator(m.senderId, m.name) : undefined}"), true);
+  strictEqual(/\.chat-eye-tap::after \{[^}]*width: 44px;[^}]*height: 44px;/.test(readFileSync("app/globals.css", "utf8")), true);
+  const list = readFileSync("components/table/SpectatorsList.tsx", "utf8");
+  strictEqual(list.includes("d.showModal()"), true, "the top layer: above the chat portal (55), counts (62), composer (70)");
+  strictEqual(list.includes("{canRemove && ("), true);
+  strictEqual(list.includes("{SPECTATOR_REMOVE_CONFIRM}"), true);
+  strictEqual(/\.spectators-remove \{[^}]*min-height: 44px;[^}]*border-radius: 12px;/.test(readFileSync("app/globals.css", "utf8")), true);
+  // The removed spectator goes home with the message (the heartbeat), the only forced exit home.
+  deepStrictEqual(heartbeatStep("removed"), { kind: "home", text: REMOVED_TEXT });
+  strictEqual(REMOVED_TEXT, "The host removed you from this table.");
+});
+check("Spectator chat: a spectator hears the table from Seat 1, the deal from state, nothing twice", () => {
+  // Whose win or loss: a player's own seat; a spectator's Seat 1.
+  strictEqual(soundSeatId({ spectating: false, viewerId: "me", myId: "me" }), "me");
+  strictEqual(soundSeatId({ spectating: true, viewerId: "seat1", myId: null }), "seat1");
+  strictEqual(soundSeatId({ spectating: true, viewerId: NOBODY_SEATED, myId: null }), null);
+  strictEqual(gameOutcome({ players: ["seat1", "b"], winnerId: "seat1", myId: soundSeatId({ spectating: true, viewerId: "seat1", myId: null }), teams: false }), "win");
+  strictEqual(gameOutcome({ players: ["seat1", "b"], winnerId: "b", myId: soundSeatId({ spectating: true, viewerId: "seat1", myId: null }), teams: false }), "loss");
+  // The deal: only on a spectator's screen, only for the hand dealt live.
+  strictEqual(spectatorDealSound({ spectating: true, liveKey: "g:2", handKey: "g:2" }), "g:2");
+  strictEqual(spectatorDealSound({ spectating: true, liveKey: "g:1", handKey: "g:2" }), null, "an older hand");
+  strictEqual(spectatorDealSound({ spectating: true, liveKey: null, handKey: "g:2" }), null, "a hand already dealt when the page loaded");
+  strictEqual(spectatorDealSound({ spectating: false, liveKey: "g:2", handKey: "g:2" }), null, "players: their animation plays it");
+  // No silent mode any more: the hook plays for everyone; keys still play once.
+  const hook = readFileSync("components/table/useTableSounds.ts", "utf8");
+  strictEqual(hook.includes("silent"), false);
+  strictEqual(/const claim = \(key: string\) => \{\s*if \(handledRef\.current\.has\(key\)\) return false;\s*handledRef\.current\.add\(key\);\s*return true;/.test(hook), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("silent: spectating"), false);
+  strictEqual(view.includes("if (spectatorDealKey && phase === \"discard\") tableSound.dealStart(dealKey(spectatorDealKey));"), true);
+  // The game-end sound asks whose seat: Seat 1 (the game's first player) for a spectator.
+  strictEqual(/const myId = soundSeatId\(\{\s*spectating,\s*viewerId: updatedGame\.players\?\.\[0\] \?\? NOBODY_SEATED,\s*myId: myHandRef\.current\?\.userId \?\? null,\s*\}\);/.test(view), true);
+  // A player's own tap still plays their cut and discard once: the games row's key stays quiet after the tap.
+  strictEqual(view.includes("tableSound.card(cutKey(activeGame.id, round, session.user.id));"), true);
+  strictEqual(view.includes("tableSound.card(discardKey(updatedGame.id, updatedGame.hand_no, id), cards, landIn);"), true);
+});
+
 // SPECTATOR SEAT, PART B: the watch page (app/watch/[code]) and the shared
 // table view's spectating mode (components/table/TableView.tsx).
 check("Watching: Seat 1 at the bottom, the others placed as Seat 1 sees them (2, 3, 4 Teams and Solo)", () => {
@@ -1561,7 +1699,6 @@ check("Watching: every action flag of the shared table view is off when spectati
     "const cardAnimationsOn = !spectating &&",
     "const computerTable = !spectating &&",
     "!spectating && finishedGame && finishedGame.winner_id === myUserId",
-    "const chatOn =\n    !spectating &&",
     "const mugginsWinBar =\n    !spectating && isMuggins",
     "{!spectating && myHand.length > 0 && !sortLocked && (",
     "const countActions = view\n    ? isDone && spectating ? (",
@@ -1574,17 +1711,21 @@ check("Watching: every action flag of the shared table view is off when spectati
   const handlers = [...view.matchAll(/\n  (?:async )?function (handle\w+|run\w+Action)\(/g)].map((m) => m[1]);
   deepStrictEqual([...handlers].sort(), [
     "handleAcknowledgeCut", "handleConfirmCount", "handleDiscard", "handleDrawCutCard", "handleLeave", "handleNextHand",
-    "handlePlayCard", "handleSeatMove", "handleStartNewGame", "runCountAction", "runWinAction",
+    "handlePlayCard", "handleRemoveSpectator", "handleSeatMove", "handleStartNewGame", "runCountAction", "runWinAction",
   ]);
   for (const name of handlers) {
     // The handler's signature line ends with "{", and its first statement is the guard.
     strictEqual(new RegExp(`function ${name}\\([^\\n]*\\{\\n    if \\(spectating\\) return`).test(view), true, name);
   }
-  // The spectator's header: Watching and Stop watching -- no chat, speaker, Hide counts or Leave.
-  const start = view.indexOf("const headerRight = spectating ? (");
-  const header = view.slice(start, view.indexOf(") : (", start));
-  strictEqual(header.includes("Watching") && header.includes("Stop watching"), true);
-  for (const absent of ["ChatButton", "SoundToggle", "CountsToggle", "handleLeave"]) strictEqual(header.includes(absent), false, absent);
+  // ONE HEADER (spectator chat): the players' own -- chat, speaker, the "⋯"
+  // menu and Leave -- for a spectator too; a spectator's Leave stops watching
+  // (no "End game & leave" confirm), and "Watching" is a row under it.
+  strictEqual(view.includes("const headerRight = spectating ? ("), false, "no spectator-only header");
+  const start = view.indexOf("const headerRight = (");
+  const header = view.slice(start, view.indexOf("const header = (", start));
+  for (const present of ["<ChatButton", "<SoundToggle />", "<CountsToggle", "<SpectatorsList"]) strictEqual(header.includes(present), true, present);
+  strictEqual(/spectating \? spectateRef\.current\?\.onStop\(\) : activeGame \? setLeaveConfirming\(true\) : handleLeave\(\)/.test(header), true);
+  strictEqual(header.includes("Stop watching"), false);
   // "You" is nobody: identity wording uses meId, placement viewerId.
   strictEqual(view.includes("const meId = spectating ? NOBODY_SEATED : session.user.id;"), true);
   // The cut: read-only for a spectator.
@@ -1592,9 +1733,8 @@ check("Watching: every action flag of the shared table view is off when spectati
   strictEqual(cut.includes("const interactive = !spectating && !iHaveDrawn && !drawPending;"), true);
   strictEqual(cut.includes("if (spectating || iHaveDrawn || drawPending) return;"), true);
   for (const btn of ["{!spectating && isTie && (", "{!spectating && isDecisive && ("]) strictEqual(cut.includes(btn), true, btn);
-  // No sounds: the hook's claims are silent.
-  strictEqual(readFileSync("components/table/useTableSounds.ts", "utf8").includes("return optionsRef.current.silent !== true;"), true);
-  strictEqual(view.includes("silent: spectating,"), true);
+  // Sounds: a spectator hears the table now (from Seat 1; see the spectator chat checks).
+  strictEqual(view.includes("silent: spectating"), false);
 });
 check("Watching: the heartbeat's answers (part C: stay through game over, closed screen, removal goes home)", () => {
   deepStrictEqual(heartbeatStep("ok"), { kind: "continue" });
@@ -1652,7 +1792,10 @@ check("Watching: watch_table's refusals become screens; 'no game yet' waits and 
   strictEqual(page.includes("Waiting for the next game..."), true);
 });
 check("Watching: the RPC allowlist -- the spectator route and its own modules call only the four spectator RPCs and write nothing", () => {
-  const ALLOWED = new Set(["watch_table", "stop_watching", "spectator_heartbeat", "get_spectator_reveals"]);
+  // get_table_spectators (spectator chat): the eye, the list and the chat
+  // roster -- read by players and spectators alike. remove_spectator is the
+  // host's, through the shared view's playerRpc: never in these modules.
+  const ALLOWED = new Set(["watch_table", "stop_watching", "spectator_heartbeat", "get_spectator_reveals", "get_table_spectators"]);
   // The route and every module only it (or the spectating mode) uses.
   const spectatorOnly = ["app/watch/[code]/page.tsx", "lib/spectatorData.ts", "lib/spectators.ts", "lib/lobbyNotice.ts"];
   const WRITE = /\.(insert|upsert|update|delete)\(/;
@@ -1666,8 +1809,14 @@ check("Watching: the RPC allowlist -- the spectator route and its own modules ca
     }
     strictEqual(WRITE.test(src), false, `${f} writes a table`);
     strictEqual(/takeSeat|table_members/.test(src), false, f);
+    strictEqual(src.includes("remove_spectator"), false, `${f}: a spectator never removes`);
   }
-  strictEqual(rpcs, 4, "exactly the four spectator calls");
+  strictEqual(rpcs, 5, "exactly the five spectator calls");
+  strictEqual(codeOnly(readFileSync("lib/spectatorData.ts", "utf8")).includes('supabase.rpc("get_table_spectators", { p_table_id: tableId })'), true);
+  // remove_spectator: only in the shared view, only through playerRpc.
+  const viewSrc = codeOnly(readFileSync("components/table/TableView.tsx", "utf8"));
+  strictEqual((viewSrc.match(/remove_spectator/g) ?? []).length, 1);
+  strictEqual(viewSrc.includes('playerRpc("remove_spectator"'), true);
   // The shared view: one supabase.rpc, inside playerRpc, refused for a spectator;
   // its only write is takeSeat's upsert, which a spectator never reaches.
   const view = readFileSync("components/table/TableView.tsx", "utf8");
@@ -5708,7 +5857,7 @@ check("chat: the cards are a layer above every table element, below the deal and
 check("chat: my own message becomes a card only after an OK ack", () => {
   const me = { nickname: "Walt", avatar_url: "https://x/walt.png" };
   const card = ownChatCard({ result: "ok", text: "gg", me, myUserId: "u1", now: 5000, id: "own-1" });
-  deepStrictEqual(card, { id: "own-1", senderId: "u1", name: "Walt", avatarUrl: "https://x/walt.png", text: "gg", at: 5000 });
+  deepStrictEqual(card, { id: "own-1", senderId: "u1", name: "Walt", avatarUrl: "https://x/walt.png", text: "gg", at: 5000, spectator: false });
   // A failed or throttled send: "Couldn't send" / "Slow down", and no card.
   strictEqual(ownChatCard({ result: "failed", text: "gg", me, myUserId: "u1", now: 5000, id: "x" }), null);
   strictEqual(ownChatCard({ result: "throttled", text: "gg", me, myUserId: "u1", now: 5000, id: "x" }), null);

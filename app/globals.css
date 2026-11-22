@@ -2511,6 +2511,70 @@ section.felt-panel {
   opacity: 0.8;
   vertical-align: -2px;
 }
+/* THE HEADER'S EYE (spectator chat): drawn small beside the code (or as a
+   pill on the Muggins tag line), with the count; its tap target is a 44x44
+   layer centred on it, so the header keeps its height. */
+.spectators-eye {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  margin-inline-start: 0.3rem;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.85;
+}
+.spectators-eye::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+.spectators-eye:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.spectators-eye--pill {
+  margin-inline-start: 0;
+  gap: 3px;
+  opacity: 1;
+}
+/* THE SPECTATORS LIST (components/table/SpectatorsList.tsx): the About
+   dialog's look; the host's Remove is a 44px target with 12px corners. */
+.spectators-dialog {
+  width: min(24rem, calc(100vw - 2rem));
+}
+.spectators-remove {
+  min-height: 44px;
+  padding-inline: 0.875rem;
+  border: 2px solid var(--brass);
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.spectators-remove:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+/* "Watching": a spectator's thin row under the header -- 20px, text only. */
+.watching-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 20px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
 
 .muggins-tag {
   display: inline-block;
@@ -2845,6 +2909,27 @@ body:has(.sq-dealing) .chat-stack {
   display: none;
 }
 /* A chat pill is drawn 32px tall and tapped 44px tall. */
+/* A spectator's mark beside the name on a chat card; for the host a button
+   whose 44x44 tap layer is centred on the 12px eye. */
+.chat-eye {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 3px;
+  vertical-align: -1px;
+  opacity: 0.8;
+}
+.chat-eye-tap {
+  position: relative;
+}
+.chat-eye-tap::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
 .chat-tap {
   position: relative;
 }

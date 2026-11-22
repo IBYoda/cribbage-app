@@ -1,10 +1,12 @@
 import { supabase } from "@/lib/supabase";
 
-// THE SPECTATOR'S CALLS (PRD item 40): the ONLY four RPCs a spectator's
-// screen makes (docs/sql/spectators.sql). Nothing here writes a table; the
-// functions decide everything on the server. Used only by the watch page
-// (app/watch/[code]) and the shared table view's spectating mode
-// (components/table/TableView.tsx, for get_spectator_reveals).
+// THE SPECTATOR'S CALLS (PRD item 40): the ONLY five RPCs a spectator's
+// screen makes (docs/sql/spectators.sql, spectator-chat.sql). Nothing here
+// writes a table; the functions decide everything on the server. Used by
+// the watch page (app/watch/[code]) and the shared table view
+// (components/table/TableView.tsx: get_spectator_reveals while spectating,
+// and get_table_spectators for players and spectators alike -- the eye,
+// the spectators list and the chat roster).
 // scripts/test-phase3.ts scans this file and the watch page for any other
 // .rpc(...) name or a table write.
 
@@ -37,6 +39,39 @@ export async function callSpectatorHeartbeat(tableId: string): Promise<Heartbeat
   if (error) return null;
   const known: HeartbeatStatus[] = ["ok", "removed", "table_ended", "game_ended", "not_watching"];
   return known.includes(data as HeartbeatStatus) ? (data as HeartbeatStatus) : null;
+}
+
+// WHO IS WATCHING (get_table_spectators, docs/sql/spectator-chat.sql): the
+// table's CURRENT spectators (not removed, seen in the last 90 s, judged on
+// the server), oldest first, with their names and avatars from profiles.
+// The server answers only a player seated there or a current spectator of
+// it (anyone else: no rows). null when a read failed: the caller keeps what
+// it had (a failed poll never empties the list).
+export type TableSpectator = { userId: string; joinedAt: string; nickname: string | null; avatarUrl: string | null };
+
+export async function readTableSpectators(tableId: string): Promise<TableSpectator[] | null> {
+  const { data, error } = await supabase.rpc("get_table_spectators", { p_table_id: tableId });
+  if (error || !Array.isArray(data)) return null;
+  const rows = (data as { user_id?: unknown; joined_at?: unknown }[]).filter(
+    (r): r is { user_id: string; joined_at: string } => typeof r.user_id === "string" && typeof r.joined_at === "string"
+  );
+  if (rows.length === 0) return [];
+  const { data: profiles, error: profilesError } = await supabase
+    .from("profiles")
+    .select("id, nickname, avatar_url")
+    .in(
+      "id",
+      rows.map((r) => r.user_id)
+    );
+  // Names are display only: without them the rows still count (the eye and
+  // the chat roster), shown as "A spectator".
+  const byId = new Map((profilesError ? [] : (profiles ?? [])).map((p) => [p.id as string, p]));
+  return rows.map((r) => ({
+    userId: r.user_id,
+    joinedAt: r.joined_at,
+    nickname: (byId.get(r.user_id)?.nickname as string | null | undefined) ?? null,
+    avatarUrl: (byId.get(r.user_id)?.avatar_url as string | null | undefined) ?? null,
+  }));
 }
 
 export type SpectatorReveals = { hands: Record<string, string[]>; crib: string[] | null };

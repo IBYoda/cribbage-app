@@ -2,11 +2,13 @@
 // The channels are components/table/useTableChat.ts; the server's rules are
 // docs/sql/table-chat.sql (chat_topic_allows).
 //
-// Each player sends on a private Realtime Broadcast channel of their own,
-// "chat:<table_id>:<sender_user_id>", and listens to every other seated
-// player's. A message is just { text }: who sent it is the channel it came
-// on (the server lets only that player send there), and their name and
-// avatar come from the table's roster -- never from the message.
+// Each person at the table -- a seated player, or a CURRENT spectator
+// (spectator chat, docs/sql/spectator-chat.sql) -- sends on a private
+// Realtime Broadcast channel of their own, "chat:<table_id>:<sender_user_id>",
+// and listens to everyone else's. A message is just { text }: who sent it is
+// the channel it came on (the server lets only that person send there), and
+// their name, avatar and spectator mark come from the table's roster (the
+// players, then the current spectators) -- never from the message.
 // Nothing is stored anywhere; messages live in memory until closed.
 
 // The longest message, in characters (code points, so an emoji is one).
@@ -106,6 +108,8 @@ export type ChatMessage = {
   avatarUrl: string | null;
   text: string;
   at: number;
+  // A spectator's message: a small eye beside the name (from the roster).
+  spectator?: boolean;
 };
 
 // A new message on top; at most CHAT_MEMORY kept.
@@ -192,13 +196,24 @@ export function ownChatCard({
 }: {
   result: "ok" | "throttled" | "failed";
   text: string | null;
-  me: { nickname: string | null; avatar_url: string | null } | undefined;
+  // Me, from the roster: a seated player, or (spectator chat) a current
+  // spectator, who is in the roster through get_table_spectators -- so a
+  // spectator's own card has their own name, and their eye.
+  me: { nickname: string | null; avatar_url: string | null; spectator?: boolean } | undefined;
   myUserId: string;
   now: number;
   id: string;
 }): ChatMessage | null {
   if (result !== "ok" || text === null) return null;
-  return { id, senderId: myUserId, name: me?.nickname || "Unnamed player", avatarUrl: me?.avatar_url ?? null, text, at: now };
+  return {
+    id,
+    senderId: myUserId,
+    name: me?.nickname || "Unnamed player",
+    avatarUrl: me?.avatar_url ?? null,
+    text,
+    at: now,
+    spectator: me?.spectator === true,
+  };
 }
 
 // Whether my own card still shows at `now` (it goes at exactly OWN_CARD_MS).

@@ -36,14 +36,12 @@ type TableSoundOptions = {
   // The square table, the only one that shows a board.
   square: boolean;
   board: CustomBoard | null;
-  // A spectator's screen (PRD item 40): no sounds at all in v1. Nothing
-  // loads, and every key is claimed silently.
-  silent?: boolean;
+  // (Spectators hear the table too since spectator chat -- from Seat 1; the
+  // page decides whose win or loss it is and plays their deal from state.)
 };
 
 export function useTableSounds(options: TableSoundOptions) {
   const { open, board } = options;
-  const silent = options.silent === true;
   const soundOn = useSoundOn();
   const optionsRef = useRef(options);
   useEffect(() => {
@@ -53,8 +51,8 @@ export function useTableSounds(options: TableSoundOptions) {
   // it), so the saved setting has the last word: sound off loads nothing, and
   // turning it on mid-game runs this again.
   useEffect(() => {
-    if (open && !silent && soundOn && readSoundOn()) prepareSounds(clipsFor(board));
-  }, [open, silent, soundOn, board]);
+    if (open && soundOn && readSoundOn()) prepareSounds(clipsFor(board));
+  }, [open, soundOn, board]);
 
   // Stays with the component: a page load is one set of keys.
   const handledRef = useRef(new Set<string>());
@@ -71,8 +69,7 @@ export function useTableSounds(options: TableSoundOptions) {
     const claim = (key: string) => {
       if (handledRef.current.has(key)) return false;
       handledRef.current.add(key);
-      // Silent (a spectator): claimed, never played.
-      return optionsRef.current.silent !== true;
+      return true;
     };
     const urlFor = (event: SoundEvent) => {
       const { board, isMuggins, square } = optionsRef.current;

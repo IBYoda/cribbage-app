@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { Avatar } from "@/components/Avatar";
+import { SpectatorEyeGlyph } from "@/components/SpectatorsTag";
 import {
   CHAT_LAYER_Z,
   CHAT_MAX_CARDS,
@@ -222,11 +223,16 @@ export function ChatStack({
   room = "game",
   own = null,
   onDismissOwn,
+  onRemoveSpectator,
 }: {
   messages: readonly ChatMessage[];
   onDismiss: (id: string) => void;
   onCloseAll: () => void;
   room?: "game" | "full";
+  // THE HOST ONLY (the page passes it for the host and nobody else): a
+  // spectator's card's eye becomes a 44px button that asks to remove them
+  // (the page's confirm, a native dialog above this layer).
+  onRemoveSpectator?: (userId: string, name: string) => void;
   // My own last message (useTableChat), on top for OWN_CARD_MS. Extra: it
   // shows only if it fits below the others' cards, never displacing one,
   // and never counts in the fold or "+N more".
@@ -383,7 +389,13 @@ export function ChatStack({
                 />
               )}
               {candidates.map((m, i) => (
-                <ChatCard key={m.id} message={m} hidden={i >= shown} onClose={() => onDismiss(m.id)} />
+                <ChatCard
+                  key={m.id}
+                  message={m}
+                  hidden={i >= shown}
+                  onClose={() => onDismiss(m.id)}
+                  onRemove={m.spectator && onRemoveSpectator ? () => onRemoveSpectator(m.senderId, m.name) : undefined}
+                />
               ))}
             </div>
           </div>,
@@ -402,11 +414,14 @@ function ChatCard({
   hidden,
   onClose,
   own = false,
+  onRemove,
 }: {
   message: ChatMessage;
   hidden: boolean;
   onClose: () => void;
   own?: boolean;
+  // The host's shortcut on a spectator's card (ChatStack's onRemoveSpectator).
+  onRemove?: () => void;
 }) {
   return (
     <div
@@ -427,7 +442,30 @@ function ChatCard({
       </span>
       {/* Plain text: a React text node, so nothing in it is ever HTML or a link. */}
       <p className="min-w-0 flex-1 self-center py-0.5 [overflow-wrap:anywhere]">
-        <span className="font-semibold">{m.name}</span>: {m.text}
+        <span className="font-semibold">{m.name}</span>
+        {/* A spectator's message: a small eye after the name. For the host it
+            is a button (a 44px target, .chat-eye-tap) that asks to remove
+            them; for everyone else just the mark. */}
+        {m.spectator &&
+          (onRemove ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              tabIndex={hidden ? -1 : undefined}
+              aria-label={`Remove ${m.name} from watching`}
+              title="Remove from watching"
+              className="chat-eye chat-eye-tap"
+              data-chat-eye="remove"
+            >
+              <SpectatorEyeGlyph size={12} />
+            </button>
+          ) : (
+            <span className="chat-eye" title="Watching" data-chat-eye="">
+              <SpectatorEyeGlyph size={12} />
+              <span className="sr-only"> (watching)</span>
+            </span>
+          ))}
+        : {m.text}
       </p>
       <button
         type="button"

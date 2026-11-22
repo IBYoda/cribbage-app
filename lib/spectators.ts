@@ -256,6 +256,76 @@ export function followGame(watchedGameId: string | null, liveGameId: string | nu
 export const TABLE_CLOSED_TEXT = "This table has closed.";
 
 // ---------------------------------------------------------------------------
+// SPECTATOR CHAT AND THE HOST'S REMOVE (PRD items 39 and 40, spectator chat).
+
+// THE EYE beside the table code (and its pill on a Muggins table's tag line):
+// shown ONLY while at least one current spectator is watching, with the
+// count. Unknown (the list not read yet, or the table doesn't allow
+// spectators): nothing.
+export function spectatorEyeCount(list: readonly unknown[] | null | undefined): number {
+  return list ? list.length : 0;
+}
+
+export function showSpectatorsEye(count: number): boolean {
+  return count > 0;
+}
+
+// THE CHAT ROSTER: the seated players, then the current spectators (flagged:
+// their messages carry the eye). A message is shown only if its sender is in
+// this roster, so a spectator who leaves the list -- removed, stopped, gone
+// stale -- is dropped the moment the list no longer has them. Someone both
+// seated and listed (only for an instant, while a spectator takes a seat)
+// counts as a player.
+export type ChatRosterPerson = { user_id: string; nickname: string | null; avatar_url: string | null; spectator?: boolean };
+
+export function mergeChatRoster(
+  players: readonly { user_id: string; nickname: string | null; avatar_url: string | null }[],
+  spectators: readonly { userId: string; nickname: string | null; avatarUrl: string | null }[] | null | undefined
+): ChatRosterPerson[] {
+  const seated = new Set(players.map((p) => p.user_id));
+  return [
+    ...players.map((p) => ({ user_id: p.user_id, nickname: p.nickname, avatar_url: p.avatar_url, spectator: false })),
+    ...(spectators ?? [])
+      .filter((s) => !seated.has(s.userId))
+      .map((s) => ({ user_id: s.userId, nickname: s.nickname, avatar_url: s.avatarUrl, spectator: true })),
+  ];
+}
+
+// The host's Remove worked: that spectator leaves the list at once on the
+// host's screen (and so the chat roster: their messages stop here now), not
+// at the next poll.
+export function withoutSpectator<T extends { userId: string }>(list: readonly T[] | null, userId: string): T[] | null {
+  return list ? list.filter((s) => s.userId !== userId) : list;
+}
+
+// Who may remove a spectator: the HOST only (the server's remove_spectator
+// checks table_host again), never a spectator, and only someone listed as
+// a spectator.
+export function canRemoveSpectator(t: { isHost: boolean; spectating: boolean; targetIsSpectator: boolean }): boolean {
+  return t.isHost && !t.spectating && t.targetIsSpectator;
+}
+
+// WHOSE EARS a sound uses: a player's own seat; a spectator hears the table
+// from Seat 1, the seat their screen is drawn from (spectatorViewerId) -- a
+// win or a loss is Seat 1's.
+export function soundSeatId(t: { spectating: boolean; viewerId: string; myId: string | null }): string | null {
+  return t.spectating ? (t.viewerId === NOBODY_SEATED ? null : t.viewerId) : t.myId;
+}
+
+// A spectator never taps, so the sounds a player's own tap starts must come
+// from the table's state on a spectator's screen. Cut cards, discards and
+// plays already do (each screen but the tapper's plays them from the games
+// row / the plays). The DEAL is the one sound only the deal animation starts,
+// and a spectator has no deal animation: it plays when a hand is dealt live
+// (the same moment a player's animation would start), keyed like the
+// animation's, so it can never play twice.
+export function spectatorDealSound(t: { spectating: boolean; liveKey: string | null; handKey: string | null }): string | null {
+  return t.spectating && t.liveKey !== null && t.liveKey === t.handKey ? t.liveKey : null;
+}
+
+export const SPECTATOR_REMOVE_CONFIRM = "They can't watch this table again.";
+
+// ---------------------------------------------------------------------------
 // THE SPECTATOR'S WAITING ROOM (the table's own waiting screens, read-only).
 
 // WaitingForPlayer's title: a 2-player table waits for "a second player" (a
