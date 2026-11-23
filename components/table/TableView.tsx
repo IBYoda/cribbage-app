@@ -36,6 +36,7 @@ import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces, winHeadline } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
+import { GENERIC_ERROR_TEXT, joinOutcome, logUnexpectedError, notFoundText, rpcRefusal, tableHref } from "@/lib/oneTable";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { SoundToggle } from "@/components/table/SoundToggle";
@@ -408,10 +409,12 @@ function membersDiff(shown: Member[], fresh: Member[]) {
   return out;
 }
 
-// A closed computer table (leave_computer_table) has no ended_reason: it was
-// closed by its player, not an admin.
+// A closed computer table has no ended_reason: it was closed by its player,
+// not an admin -- with Leave (leave_computer_table), or quietly, by starting,
+// joining or watching another table (docs/sql/join-create.sql: single-player
+// games never block; a tab still open on the old game lands here).
 function tableEndedMessage(endedReason: string | null | undefined, computerLevel?: string | null) {
-  if (computerLevel && endedReason == null) return "This computer table has been closed.";
+  if (computerLevel && endedReason == null) return "This single-player game has ended.";
   return endedReason === "timeout"
     ? "This table was automatically ended after being open for 12 hours."
     : "This table has been ended by an admin.";
@@ -517,6 +520,12 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // just "Back to home" (Retry and another code make no sense there). Set
   // with the error where a table is found closed; cleared by a fresh setup.
   const [closedComputerTable, setClosedComputerTable] = useState(false);
+  // The error on screen is ONE TABLE AT A TIME's refusal (already_at_table,
+  // docs/sql/join-create.sql): the code of the table this player is already
+  // at, for its "Go to table NNNN" button. Cleared by a fresh setup.
+  const [goToCode, setGoToCode] = useState<string | null>(null);
+  // Me, for the stale-tab check below (the roster losing me).
+  const myUserIdRef = useRef<string | null>(null);
   const [activeGame, setActiveGame] = useState<Game | null>(null);
   const [gameStatus, setGameStatus] = useState<"idle" | "creating" | "error">("idle");
   const [gameMessage, setGameMessage] = useState<string | null>(null);
@@ -785,6 +794,35 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     activeGameRef.current = activeGame;
     errorRef.current = error;
   }, [members, activeGame, error]);
+  useEffect(() => {
+    myUserIdRef.current = session?.user.id ?? null;
+  }, [session]);
+
+  // A STALE TAB: this table ended while this screen missed it. Starting,
+  // joining or watching another table quietly ends this player's own
+  // single-player table (docs/sql/join-create.sql), and an admin's Force-End
+  // or the 12-hour timeout ends any table. The realtime tables UPDATE shows
+  // that at once; when it was missed (a sleeping phone, a dropped channel),
+  // the sign is the roster losing ME (my seat is deleted when the table is
+  // closed under me): the table's status is read once, and an ended table
+  // gets its ended screen instead of an empty table or a computer that
+  // can't move. Never for a spectator (never seated) or my own Leave.
+  const checkTableEndedRef = useRef<(tableId: string) => void>(() => {});
+  useEffect(() => {
+    checkTableEndedRef.current = (tableId: string) => {
+      if (spectating || leavingRef.current) return;
+      void supabase
+        .from("tables")
+        .select("status, ended_reason, computer_level")
+        .eq("id", tableId)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (!data || data.status === "open" || leavingRef.current) return;
+          setClosedComputerTable(Boolean(data.computer_level));
+          setError(tableEndedMessage(data.ended_reason, data.computer_level));
+        });
+    };
+  }, [spectating]);
   // Marks one of my RPCs as in flight for its duration (the poll waits).
   const trackAction = useCallback(async <T,>(call: PromiseLike<T>): Promise<T> => {
     actionsInFlightRef.current++;
@@ -1133,6 +1171,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           last_awarded_at: m.last_awarded_at,
         };
       });
+      // The roster lost me (see A STALE TAB): is the table still open?
+      const me = myUserIdRef.current;
+      if (me && membersRef.current.some((m) => m.user_id === me) && !fresh.some((m) => m.user_id === me)) {
+        checkTableEndedRef.current(tableId);
+      }
       if (poll) {
         const diff = membersDiff(membersRef.current, fresh);
         if (diff.length === 0) return null;
@@ -1267,7 +1310,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
 
     // The roster, through the members read guard (loadMembers).
     const membersError = await loadMembers(tableId);
-    if (membersError) setError(membersError);
+    if (membersError) {
+      logUnexpectedError("table_members read", membersError);
+      setError(GENERIC_ERROR_TEXT);
+    }
     setTableRead(true);
   }, [readOwnHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers, tableSound]);
 
@@ -1298,30 +1344,55 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // (The first full read awaits the table's own reads before this runs, so
   // spectatorsAllowedRef already reflects the table row set just before.)
 
-  // Takes my seat at the table (idempotent) and loads it. setTable first, as
-  // before: it starts the realtime subscription while the seat is written.
+  // Takes my seat at the table and loads it. setTable first, as before: it
+  // starts the realtime subscription while the seat is written.
+  //
+  // THE SEAT: join_table_by_code (docs/sql/join-create.sql; it replaced the
+  // direct upsert into table_members, which the lockdown revokes). The server
+  // applies one table at a time (already at another table with other humans:
+  // refused, already_at_table, with "Go to table NNNN"; watching elsewhere,
+  // or an unfinished single-player game of mine: ended quietly), the
+  // wrong-code lockout and 30 joins an hour, and seats me through the seat
+  // trigger (a full table: "This table is full.", as before). Outcomes:
+  // joined / already_seated -> the table; not_found -> the table ended (or
+  // its code changed hands) since it was read. Never raw server text.
+  //
+  // alreadySeated (the setup read me in the roster: a refresh, Rejoin, or the
+  // creator straight from Start a Table or Single Player, seated by
+  // create_table / create_computer_table): NO call -- the old upsert was a
+  // no-op there too, and a player locked out after wrong codes elsewhere
+  // must still reach their own seat.
   const takeSeat = useCallback(
-    async (row: TableRow, isCancelled: () => boolean) => {
+    async (row: TableRow, isCancelled: () => boolean, alreadySeated = false) => {
       // A spectator is NEVER a table_members row (PRD item 40).
       if (spectating) return;
       setTable(row);
 
-      const { error: joinError } = await supabase
-        .from("table_members")
-        .upsert(
-          { table_id: row.id, user_id: session!.user.id },
-          { onConflict: "table_id,user_id", ignoreDuplicates: true }
-        );
-
-      if (isCancelled()) return;
-      if (joinError) {
-        setError(joinError.message);
-        return;
+      if (!alreadySeated) {
+        const { data, error: joinError } = await playerRpc("join_table_by_code", { p_code: row.code });
+        if (isCancelled()) return;
+        if (joinError) {
+          const why = rpcRefusal(joinError);
+          if (why.kind === "unknown") logUnexpectedError("join_table_by_code", joinError);
+          setGoToCode(why.kind === "already_at_table" ? why.tableCode : null);
+          setError(why.text);
+          return;
+        }
+        const outcome = joinOutcome(data);
+        if (outcome === "not_found") {
+          setError(notFoundText(row.code));
+          return;
+        }
+        if (outcome !== "joined" && outcome !== "already_seated") {
+          logUnexpectedError("join_table_by_code", data);
+          setError(GENERIC_ERROR_TEXT);
+          return;
+        }
       }
 
       await refreshTableState(row.id);
     },
-    [spectating, session, refreshTableState]
+    [spectating, playerRpc, refreshTableState]
   );
 
   // Look up the table, join it (idempotent), then load the current roster.
@@ -1334,6 +1405,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     async function setup() {
       setError(null);
       setClosedComputerTable(false);
+      setGoToCode(null);
       setPendingJoin(null);
       setWatchOffer(null);
 
@@ -1346,7 +1418,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       if (cancelled) return;
 
       if (tableError) {
-        setError(tableError.message);
+        logUnexpectedError("tables read", tableError);
+        setError(GENERIC_ERROR_TEXT);
         return;
       }
       if (!tableRow) {
@@ -1449,7 +1522,12 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         }
       }
 
-      await takeSeat(tableRow, () => cancelled);
+      // SLICE B (not built): the "Join table NNNN hosted by X?" confirmation
+      // goes here -- after the nickname gate and the Muggins notice, before
+      // a NEW seat is taken (never for isMember) -- with
+      // join_table_by_code(code, p_preview => true) supplying the host's
+      // nickname once private tables can't be read directly.
+      await takeSeat(tableRow, () => cancelled, isMember);
     }
 
     setup();
@@ -1949,6 +2027,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           membersEventSeqRef.current++; // see the members read guard
 
           setMembers((current) => current.filter((m) => m.user_id !== goneRow.user_id));
+          // MY seat went (see A STALE TAB): is the table still open?
+          if (goneRow.user_id === myUserIdRef.current) checkTableEndedRef.current(table.id);
         }
       )
       // No game_plays listener here (THE PLAY LOG, LIVE, below: its own
@@ -2672,10 +2752,23 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     return (
       <CardRoomFrame backHome={false}>
         <p className="text-[var(--error-on-felt)]">{error}</p>
-        {closedComputerTable ? (
+        {goToCode ? (
+          // Already at another table (one table at a time): straight to it.
+          <div className="flex flex-col gap-2.5">
+            <Link href={tableHref(goToCode)} className="peg-btn peg-btn--brass">
+              Go to table {goToCode}
+            </Link>
+            <Link href="/" className="peg-btn peg-btn--ghost">
+              Back to home
+            </Link>
+          </div>
+        ) : closedComputerTable ? (
           // A closed computer table: there's nothing to retry or rejoin.
           <div className="flex flex-col gap-2.5">
-            <Link href="/" className="peg-btn peg-btn--brass">
+            <Link href="/single-player" className="peg-btn peg-btn--brass">
+              New single-player game
+            </Link>
+            <Link href="/" className="peg-btn peg-btn--ghost">
               Back to home
             </Link>
           </div>

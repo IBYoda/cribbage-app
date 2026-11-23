@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { notFoundText, rpcRefusal } from "@/lib/oneTable";
 
 // THE SPECTATOR'S CALLS (PRD item 40): the ONLY five RPCs a spectator's
 // screen makes (docs/sql/spectators.sql, spectator-chat.sql). Nothing here
@@ -16,13 +17,24 @@ import { supabase } from "@/lib/supabase";
 export type WatchTicket = { tableId: string; code: string; gameId: string | null };
 
 // watch_table(code): become (or stay) a spectator. The table, its code and
-// the live game (null when none is live) -- or the server's refusal
-// message, word for word.
+// the live game (null when none is live) -- or a refusal message for
+// watchRefusal (lib/spectators.ts): the server's own spectator messages word
+// for word; the one-table refusals made plain (lib/oneTable.ts: already at
+// another table, the wrong-code lockout, the hourly limit); and NO ROW, which
+// is how watch_table answers a wrong or unknown code since step 3 slice A
+// (docs/sql/join-create.sql: an exception would undo the count of wrong
+// guesses), as "No table found with code NNNN." like before.
 export async function callWatchTable(code: string): Promise<{ ok: WatchTicket } | { refused: string }> {
   const { data, error } = await supabase.rpc("watch_table", { p_code: code });
-  if (error) return { refused: error.message };
+  if (error) {
+    const why = rpcRefusal(error);
+    if (why.kind === "already_at_table" || why.kind === "locked_out" || why.kind === "rate_limited") {
+      return { refused: why.text };
+    }
+    return { refused: error.message };
+  }
   const row = (Array.isArray(data) ? data[0] : data) as { table_id?: string; code?: string; game_id?: string | null } | null;
-  if (!row?.table_id) return { refused: "Couldn't start watching. Please try again." };
+  if (!row?.table_id) return { refused: notFoundText(code) };
   return { ok: { tableId: row.table_id, code: row.code ?? code, gameId: row.game_id ?? null } };
 }
 

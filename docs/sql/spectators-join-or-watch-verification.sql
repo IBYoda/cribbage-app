@@ -4,6 +4,8 @@
 -- docs/sql/spectators-join-or-watch.sql. The whole file is ONE DO block.
 --
 -- STATUS: run in Supabase on 2026-11-20; verified (ALL 32 CHECKS PASSED, rolled back).
+-- W10 and E1 rewritten on 2026-11-23 for step 3 slice A (docs/sql/join-create.sql);
+-- still 32 checks; NOT RUN since.
 --
 -- It WRITES -- eight temporary accounts in auth.users, test tables, their
 -- seats, a game row, spectator rows, and a few UPDATEs of one existing
@@ -49,7 +51,10 @@
 --   W6  A (seated) watching W: "You are seated at this table."
 --   W7  Z: "This table does not allow spectators." (no game)
 --   W8  E: "This table has ended."   W9  K: "Computer tables cannot be
---       watched."   W10 an unknown code: "No table found with code ...".
+--       watched."   W10 an unknown code: NO ROW and no error, and one
+--       wrong code counted (since step 3 slice A, docs/sql/join-create.sql:
+--       an exception would undo the count; it used to raise "No table found
+--       with code ...").
 --   W11 nobody signed in: "You must be logged in to watch a table."
 --   THE HEARTBEAT WITH NO GAME
 --   H1  S1 (seen 60 s ago): 'game_ended', and last_seen_at refreshed.
@@ -64,8 +69,10 @@
 --   L4  S2 can still watch X afterwards, with a NULL game id.
 --   L5  get_spectator_reveals of the ended game is null.
 --   ENDED TABLE
---   E1  W ends: S1's heartbeat is 'table_ended'; E2 watching W: "This table
---       has ended."
+--   E1  W ends: S5's heartbeat is 'table_ended'; E2 watching W: "This table
+--       has ended." (S5, not S1: since step 3 slice A, S1 watching X in L1
+--       ended S1's watching of W -- one table at a time -- so S1's heartbeat
+--       at W would be 'not_watching'.)
 --   AVATAR ADDRESSES (on one existing profile row)
 --   A1-A6  six bad addresses (another host, a look-alike host, http, a
 --          javascript: address, another bucket, a ".." path) are refused
@@ -328,14 +335,13 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [W7]-[W10] The other refusals keep their messages (S1 asking each time).
+  -- [W7]-[W9] The other refusals keep their messages (S1 asking each time).
   perform set_config('request.jwt.claims', json_build_object('sub', v_s1, 'role', 'authenticated')::text, true);
   for v_rec in
     select * from (values
       ('W7', v_codes[2], 'This table does not allow spectators.'),
       ('W8', v_codes[3], 'This table has ended.'),
-      ('W9', v_codes[4], 'Computer tables cannot be watched.'),
-      ('W10', v_codes[6], 'No table found with code ' || v_codes[6] || '.')
+      ('W9', v_codes[4], 'Computer tables cannot be watched.')
     ) as t(label, code, want)
   loop
     v_msg := null;
@@ -351,6 +357,24 @@ begin
     end if;
     v_checks := v_checks + 1;
   end loop;
+
+  -- [W10] An unknown code: no row, no error, one wrong code counted (step 3
+  -- slice A: watch_table returns nothing instead of raising, so the count
+  -- survives; the app shows "No table found with code ...").
+  v_msg := null; v_n := null;
+  execute 'set local role authenticated';
+  begin
+    select count(*) into v_n from public.watch_table(v_codes[6]);
+  exception when others then
+    v_msg := sqlerrm;
+  end;
+  execute 'reset role';
+  if v_msg is not null or v_n is distinct from 0
+     or (select count(*) from public.attempt_log al where al.user_id = v_s1 and al.action = 'code_guess' and not al.success) <> 1 then
+    raise exception 'FAIL [W10] watching the unknown code %: error %, % row(s); expected no error, no row and one wrong code counted.',
+      v_codes[6], coalesce(v_msg, 'none'), v_n;
+  end if;
+  v_checks := v_checks + 1;
 
   -- [W11] Nobody signed in.
   perform set_config('request.jwt.claims', json_build_object('role', 'authenticated')::text, true);
@@ -511,13 +535,13 @@ begin
 
   -- ==== ENDED TABLE ===============================================================
   update public.tables set status = 'ended', ended_reason = 'admin' where id = v_w;
-  -- [E1] S1's heartbeat at W.
-  perform set_config('request.jwt.claims', json_build_object('sub', v_s1, 'role', 'authenticated')::text, true);
+  -- [E1] S5's heartbeat at W (S5 still has a place there; S1 moved to X).
+  perform set_config('request.jwt.claims', json_build_object('sub', v_s5, 'role', 'authenticated')::text, true);
   execute 'set local role authenticated';
   v_txt := public.spectator_heartbeat(v_w);
   execute 'reset role';
   if v_txt is distinct from 'table_ended' then
-    raise exception 'FAIL [E1] S1''s heartbeat at an ended table: %; expected table_ended.', v_txt;
+    raise exception 'FAIL [E1] S5''s heartbeat at an ended table: %; expected table_ended.', v_txt;
   end if;
   v_checks := v_checks + 1;
 

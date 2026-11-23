@@ -32,7 +32,8 @@ export function startTableOptions(
   };
 }
 
-// The row's options, as Start a Table sends them (with the code and creator).
+// The table's options, as Start a Table picks them (createTableArgs below
+// turns them into create_table's parameters).
 // team_mode only for 4 players -- 2- and 3-player tables keep the database
 // default, exactly as before. SELF-SCORING with 3 or 4 players sends 'solo'
 // whatever the (hidden) Team/Solo choice says: the database requires it for
@@ -70,5 +71,26 @@ export function newTableFields(input: {
       : input.maxPlayers === 4
         ? { team_mode: input.fourPlayerMode }
         : {}),
+  };
+}
+
+// THE create_table CALL (docs/sql/join-create.sql): the same options as the
+// row above, as the function's parameters. The server picks the code, sets
+// created_by and seats the creator. team_mode NULL takes the column default
+// ('teams'), exactly like an omitted column did on the old direct insert.
+export function createTableArgs(input: Parameters<typeof newTableFields>[0]): {
+  p_is_public: boolean;
+  p_is_muggins: boolean;
+  p_max_players: PlayerCount;
+  p_team_mode: FourPlayerMode | null;
+  p_allow_spectators: boolean;
+} {
+  const row = newTableFields(input);
+  return {
+    p_is_public: row.is_public,
+    p_is_muggins: row.is_muggins,
+    p_max_players: row.max_players,
+    p_team_mode: row.team_mode ?? null,
+    p_allow_spectators: row.allow_spectators,
   };
 }

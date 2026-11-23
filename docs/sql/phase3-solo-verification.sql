@@ -22,6 +22,17 @@
 -- because nothing it does survives. It creates no functions, tables or
 -- other schema objects, and touches no existing account or table.
 --
+-- STEP 3, SLICE A (rewritten 2026-11-23, NOT RUN since): the table and the
+-- seats no longer come from direct inserts as a signed-in player, which
+-- docs/sql/join-create-lockdown.sql revokes. C1 creates the Solo table
+-- through create_table as A (who is seated by it, seat 1), and B, C and D
+-- sit through join_table_by_code -- the app's own path. C2 (the
+-- team_mode check constraint itself) and the X tables are made AS THE OWNER:
+-- C2 tests the constraint, not a client path (create_table refuses 'pairs'
+-- with its own message before the insert), and X seats the same players at
+-- two tables at once, which one table at a time refuses through the RPCs.
+-- Works before and after the lockdown; same number of checks.
+--
 -- Same impersonation as the other suites: request.jwt.claims plus "set
 -- local role authenticated" to act as a player, "reset role" to act as the
 -- owner (to set known cards and scores, and to read).
@@ -44,7 +55,8 @@
 -- (15s 2, pairs 2, runs 1 a card); a FAIL prints what the engine did.
 --
 -- WHAT IT CHECKS
---   C  creation: a Solo table is accepted; an unknown team_mode is refused.
+--   C  creation: a Solo table is accepted (create_table, A seated in seat
+--      1); an unknown team_mode is refused by the table check (as the owner).
 --   S  start: a Solo game needs all four seated (as Teams).
 --   D  the deal: 5 cards each, one discard each, the crib is the four
 --      discards, the dealer's left leads.
@@ -79,6 +91,7 @@ declare
   v_tx uuid;
   v_ty uuid;
   v_tz uuid;
+  v_t_code text;
   v_gx uuid;
   v_gy uuid;
   v_player uuid;
@@ -133,30 +146,30 @@ begin
   end if;
 
   -- ==== C: creation ===========================================================
-  -- [C1] A, as a signed-in player, creates a 4-player Solo table (the insert
-  -- Start a Table will make): accepted, and it reads back as 4 / solo / not
-  -- Muggins.
+  -- [C1] A, as a signed-in player, creates a 4-player Solo table through
+  -- create_table (what Start a Table calls): accepted, it reads back as 4 /
+  -- solo / not Muggins, and A is seated in seat 1.
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', v_a::text, true);
   v_msg := null;
   begin
-    insert into public.tables (code, created_by, max_players, team_mode)
-    values (v_codes[1], v_a, 4, 'solo')
-    returning id into v_t;
+    select r.table_id, r.code into v_t, v_t_code from public.create_table(false, false, 4, 'solo', false) r;
   exception when others then
     v_msg := sqlerrm;
   end;
   execute 'reset role';
   select max_players, team_mode, is_muggins into v_rec from public.tables where id = v_t;
-  if v_msg is not null or v_t is null or v_rec.max_players <> 4 or v_rec.team_mode <> 'solo' or v_rec.is_muggins then
-    raise exception 'FAIL [C1] creating a 4-player Solo table: refused %, row % / % / muggins %.',
-      coalesce(v_msg, 'nothing'), v_rec.max_players, v_rec.team_mode, v_rec.is_muggins;
+  if v_msg is not null or v_t is null or v_rec.max_players <> 4 or v_rec.team_mode <> 'solo' or v_rec.is_muggins
+     or not exists (select 1 from public.table_members tm where tm.table_id = v_t and tm.user_id = v_a and tm.seat = 1) then
+    raise exception 'FAIL [C1] creating a 4-player Solo table: refused %, row % / % / muggins %, A in seat 1: %.',
+      coalesce(v_msg, 'nothing'), v_rec.max_players, v_rec.team_mode, v_rec.is_muggins,
+      exists (select 1 from public.table_members tm where tm.table_id = v_t and tm.user_id = v_a and tm.seat = 1);
   end if;
   v_checks := v_checks + 1;
 
-  -- [C2] Any other team_mode is refused by the table check (tables_team_mode_check).
-  execute 'set local role authenticated';
+  -- [C2] Any other team_mode is refused by the table check
+  -- (tables_team_mode_check), as the owner: the constraint itself.
   v_msg := null;
   begin
     insert into public.tables (code, created_by, max_players, team_mode)
@@ -164,19 +177,21 @@ begin
   exception when others then
     v_msg := sqlstate;
   end;
-  execute 'reset role';
   if v_msg is distinct from '23514' then
     raise exception 'FAIL [C2] team_mode ''pairs'': %, expected a check violation (23514).', coalesce(v_msg, 'accepted');
   end if;
   v_checks := v_checks + 1;
 
   -- ==== S: start with three seated, then four =================================
-  -- A, B and C sit (seats 1, 2, 3).
+  -- A sits already (create_table, seat 1); B and C join by the code
+  -- (join_table_by_code: seats 2, 3).
   execute 'set local role authenticated';
-  foreach v_player in array array[v_a, v_b, v_c] loop
+  foreach v_player in array array[v_b, v_c] loop
     perform set_config('request.jwt.claims', json_build_object('sub', v_player, 'role', 'authenticated')::text, true);
     perform set_config('request.jwt.claim.sub', v_player::text, true);
-    insert into public.table_members (table_id, user_id) values (v_t, v_player);
+    if (select j.outcome from public.join_table_by_code(v_t_code) j) is distinct from 'joined' then
+      raise exception 'SETUP: % could not join the Solo table by its code.', v_player;
+    end if;
   end loop;
   -- [S1] The host starts with three seated: refused, exactly as on a Teams
   -- table (E2 [F1]).
@@ -190,11 +205,13 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- D sits (seat 4); the host starts: the first game cuts for deal.
+  -- D joins (seat 4); the host starts: the first game cuts for deal.
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', v_d, 'role', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', v_d::text, true);
-  insert into public.table_members (table_id, user_id) values (v_t, v_d);
+  if (select j.outcome from public.join_table_by_code(v_t_code) j) is distinct from 'joined' then
+    raise exception 'SETUP: D could not join the Solo table by its code.';
+  end if;
   perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', v_a::text, true);
   v_g := public.start_game_with_deal(v_t);
@@ -657,19 +674,18 @@ begin
   -- 4 -- capped at 121, and the game won by seat 1. Both twins must end
   -- exactly alike, one score per player.
   for v_size in 2 .. 3 loop
-    execute 'set local role authenticated';
-    perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
-    perform set_config('request.jwt.claim.sub', v_a::text, true);
+    -- The twin tables and their seats AS THE OWNER (the same players at two
+    -- tables at once: one table at a time refuses that through the RPCs,
+    -- and the lockdown revokes the direct inserts).
     insert into public.tables (code, created_by, max_players, team_mode)
     values (v_codes[1 + v_size], v_a, v_size, 'solo') returning id into v_tx;
     insert into public.tables (code, created_by, max_players, team_mode)
     values (v_codes[3 + v_size], v_a, v_size, 'teams') returning id into v_ty;
     foreach v_player in array v_players[1:v_size] loop
-      perform set_config('request.jwt.claims', json_build_object('sub', v_player, 'role', 'authenticated')::text, true);
-      perform set_config('request.jwt.claim.sub', v_player::text, true);
       insert into public.table_members (table_id, user_id) values (v_tx, v_player);
       insert into public.table_members (table_id, user_id) values (v_ty, v_player);
     end loop;
+    execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
     perform set_config('request.jwt.claim.sub', v_a::text, true);
     v_gx := public.start_game_with_deal(v_tx);

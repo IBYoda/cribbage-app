@@ -4,6 +4,7 @@
 -- docs/sql/spectator-chat.sql. The whole file is ONE DO block.
 --
 -- STATUS: written, NOT RUN yet.
+-- (S1's place at E made a crafted row on 2026-11-23 for step 3 slice A.)
 --
 -- It WRITES -- nine temporary accounts in auth.users, five tables, their
 -- seats, live games, spectator rows (through the real watch_table and
@@ -40,9 +41,10 @@
 --   A, B  seated at X (A created it: the host). B also seated at Y and E.
 --   C     seated at Y (created it).
 --   S1    a CURRENT spectator of X (watch_table). Also a current spectator
---         of E (watched while E was open, then E ended), and crafted rows at
---         Z and K (impossible through the app; made as the owner to prove
---         the table checks).
+--         of E (a crafted row made while E was open, then E ended: since
+--         step 3 slice A a real watch_table of E would end S1's place at X),
+--         and crafted rows at Z and K (impossible through the app; made as
+--         the owner to prove the table checks).
 --   S2    a CURRENT spectator of X, joined BEFORE S1 (joined_at set).
 --   S3    a STALE spectator of X (last_seen_at moved back 91 s).
 --   S4    a REMOVED spectator of X (A removes S4 through remove_spectator).
@@ -296,8 +298,7 @@ begin
       ('S2 at X', v_s2, v_codes[1]),
       ('S3 at X', v_s3, v_codes[1]),
       ('S4 at X', v_s4, v_codes[1]),
-      ('S5 at Y', v_s5, v_codes[2]),
-      ('S1 at E', v_s1, v_codes[4])
+      ('S5 at Y', v_s5, v_codes[2])
     ) as t(label, who, code)
   loop
     perform set_config('request.jwt.claims', json_build_object('sub', v_rec.who, 'role', 'authenticated')::text, true);
@@ -335,10 +336,13 @@ begin
     -- S3 goes stale.
     update public.table_spectators set last_seen_at = now() - interval '91 seconds' where table_id = v_x and user_id = v_s3;
     -- Crafted rows (the app can't make these): S1 "watching" Z (does not
-    -- allow spectators) and K (a computer table), current.
+    -- allow spectators) and K (a computer table), current -- and E too,
+    -- crafted since step 3 slice A (docs/sql/join-create.sql): a real
+    -- watch_table of E would END S1's place at X (one table at a time).
     insert into public.table_spectators (table_id, user_id, joined_at, last_seen_at) values
       (v_z, v_s1, now(), now()),
-      (v_k, v_s1, now(), now());
+      (v_k, v_s1, now(), now()),
+      (v_e, v_s1, now(), now());
     -- E ends (an admin Force-End), with S1 still a current spectator there.
     update public.tables set status = 'ended', ended_reason = 'admin' where id = v_e;
   exception when others then

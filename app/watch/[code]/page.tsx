@@ -10,6 +10,7 @@ import { TableView, type SpectateProps } from "@/components/table/TableView";
 import { nicknameStepHref } from "@/lib/nickname";
 import { fetchNeedsNickname } from "@/lib/profileNickname";
 import { setLobbyNotice } from "@/lib/lobbyNotice";
+import { tableHref } from "@/lib/oneTable";
 import {
   callSpectatorHeartbeat,
   callStopWatching,
@@ -62,7 +63,7 @@ type WatchState =
   | { kind: "loading" }
   | { kind: "waiting" }
   | { kind: "watching"; ticket: WatchTicket }
-  | { kind: "refused"; text: string; login: boolean }
+  | { kind: "refused"; text: string; login: boolean; tableCode?: string }
   | { kind: "closed" };
 
 export default function WatchPage() {
@@ -120,7 +121,10 @@ export default function WatchPage() {
         timer = window.setTimeout(attempt, WATCH_RETRY_MS);
         return;
       }
-      setState({ kind: "refused", text: refusal.text, login: refusal.kind === "login" });
+      // Never raw server text: watchRefusal shows "other" as the generic
+      // message; the details go to the console.
+      if (refusal.kind === "other") console.error("[watch_table] unexpected refusal:", result.refused);
+      setState({ kind: "refused", text: refusal.text, login: refusal.kind === "login", tableCode: refusal.tableCode });
     };
     attempt();
     return () => {
@@ -132,7 +136,7 @@ export default function WatchPage() {
   // LEAVING THE TABLE VIEW, once: home (only for a removal), the closed
   // screen, or a refusal's screen.
   const leave = useCallback(
-    (outcome: { kind: "home"; text: string | null } | { kind: "closed" } | { kind: "screen"; text: string }) => {
+    (outcome: { kind: "home"; text: string | null } | { kind: "closed" } | { kind: "screen"; text: string; tableCode?: string }) => {
       if (exitedRef.current) return;
       exitedRef.current = true;
       if (outcome.kind === "home") {
@@ -141,7 +145,7 @@ export default function WatchPage() {
       } else if (outcome.kind === "closed") {
         setState({ kind: "closed" });
       } else {
-        setState({ kind: "refused", text: outcome.text, login: false });
+        setState({ kind: "refused", text: outcome.text, login: false, tableCode: outcome.tableCode });
       }
     },
     [router]
@@ -255,7 +259,13 @@ export default function WatchPage() {
     return (
       <CardRoomFrame backHome={false}>
         <p>{state.text}</p>
-        <Link href="/" className="peg-btn peg-btn--brass">
+        {/* Already at another table: straight to it (Walt's decision). */}
+        {state.tableCode && (
+          <Link href={tableHref(state.tableCode)} className="peg-btn peg-btn--brass">
+            Go to table {state.tableCode}
+          </Link>
+        )}
+        <Link href="/" className={state.tableCode ? "peg-btn peg-btn--ghost" : "peg-btn peg-btn--brass"}>
           Back to home
         </Link>
       </CardRoomFrame>
