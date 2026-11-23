@@ -68,7 +68,6 @@ import {
   mergeChatRoster,
   showSpectatorsEye,
   soundSeatId,
-  spectatorDealSound,
   spectatorEyeCount,
   withoutSpectator,
   isWatchableTable,
@@ -155,8 +154,14 @@ import {
   safeReturnPath,
 } from "../lib/nickname";
 import {
-  pollIntervalMs,
+  mergePlays,
+  nextPollDelayMs,
+  playsCatchUpApplies,
+  POLL_JITTER,
+  pollRefreshesProfiles,
+  PROFILE_REFRESH_POLLS,
   profilesToFetch,
+  SAFETY_POLL_BACKOFF_MS,
   SAFETY_POLL_CONNECTED_MS,
   SAFETY_POLL_MS,
   wonBoardReusable,
@@ -1600,25 +1605,36 @@ check("Spectator chat: Remove is the host's only -- the list's rows and the chat
   deepStrictEqual(heartbeatStep("removed"), { kind: "home", text: REMOVED_TEXT });
   strictEqual(REMOVED_TEXT, "The host removed you from this table.");
 });
-check("Spectator chat: a spectator hears the table from Seat 1, the deal from state, nothing twice", () => {
+check("Spectator chat: a spectator hears the table from Seat 1, no deal sound, nothing twice", () => {
   // Whose win or loss: a player's own seat; a spectator's Seat 1.
   strictEqual(soundSeatId({ spectating: false, viewerId: "me", myId: "me" }), "me");
   strictEqual(soundSeatId({ spectating: true, viewerId: "seat1", myId: null }), "seat1");
   strictEqual(soundSeatId({ spectating: true, viewerId: NOBODY_SEATED, myId: null }), null);
   strictEqual(gameOutcome({ players: ["seat1", "b"], winnerId: "seat1", myId: soundSeatId({ spectating: true, viewerId: "seat1", myId: null }), teams: false }), "win");
   strictEqual(gameOutcome({ players: ["seat1", "b"], winnerId: "b", myId: soundSeatId({ spectating: true, viewerId: "seat1", myId: null }), teams: false }), "loss");
-  // The deal: only on a spectator's screen, only for the hand dealt live.
-  strictEqual(spectatorDealSound({ spectating: true, liveKey: "g:2", handKey: "g:2" }), "g:2");
-  strictEqual(spectatorDealSound({ spectating: true, liveKey: "g:1", handKey: "g:2" }), null, "an older hand");
-  strictEqual(spectatorDealSound({ spectating: true, liveKey: null, handKey: "g:2" }), null, "a hand already dealt when the page loaded");
-  strictEqual(spectatorDealSound({ spectating: false, liveKey: "g:2", handKey: "g:2" }), null, "players: their animation plays it");
+  // The deal (realtime stopgap, option B): no deal sound for a spectator --
+  // only the deal animation plays it, and a spectator has none. Gone from
+  // the rules and the view; the player's animation still starts it.
+  strictEqual(readFileSync("lib/spectators.ts", "utf8").includes("spectatorDealSound"), false);
+  const dealView = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(dealView.includes("spectatorDealSound"), false);
+  strictEqual(dealView.includes("spectatorDealKey"), false);
+  strictEqual(dealView.includes("onStart={() => tableSound.dealStart(dealKey(dealHandKey))}"), true);
+  strictEqual((dealView.match(/tableSound\.dealStart\(/g) ?? []).length, 1, "only the deal animation starts the deal sound");
+  // The discard tick is unchanged: another player's discard plays from the
+  // games row with the toss's landing delay (0 with no toss, as a spectator).
+  strictEqual(dealView.includes("tableSound.setTossLanding(cardAnimationsOn && !dealInFlight ? TOSS_CARD_MS : 0);"), true);
+  // The watch page no longer claims spectators hear nothing.
+  const watchPage = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual(watchPage.includes("get_spectator_reveals, no sounds."), false);
+  strictEqual(watchPage.includes("but no deal sound"), true);
   // No silent mode any more: the hook plays for everyone; keys still play once.
   const hook = readFileSync("components/table/useTableSounds.ts", "utf8");
   strictEqual(hook.includes("silent"), false);
   strictEqual(/const claim = \(key: string\) => \{\s*if \(handledRef\.current\.has\(key\)\) return false;\s*handledRef\.current\.add\(key\);\s*return true;/.test(hook), true);
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(view.includes("silent: spectating"), false);
-  strictEqual(view.includes("if (spectatorDealKey && phase === \"discard\") tableSound.dealStart(dealKey(spectatorDealKey));"), true);
+  strictEqual(view.includes("if (spectatorDealKey && phase === \"discard\") tableSound.dealStart(dealKey(spectatorDealKey));"), false);
   // The game-end sound asks whose seat: Seat 1 (the game's first player) for a spectator.
   strictEqual(/const myId = soundSeatId\(\{\s*spectating,\s*viewerId: updatedGame\.players\?\.\[0\] \?\? NOBODY_SEATED,\s*myId: myHandRef\.current\?\.userId \?\? null,\s*\}\);/.test(view), true);
   // A player's own tap still plays their cut and discard once: the games row's key stays quiet after the tap.
@@ -1766,8 +1782,10 @@ check("Watching: the heartbeat's answers (part C: stay through game over, closed
   // The table view no longer sends a spectator away when the game ends.
   const tv = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(tv.includes("onGameEnded"), false);
-  // Under the 90 s cutoff: the safety poll's pace either way.
-  strictEqual(SAFETY_POLL_CONNECTED_MS < 90_000 && SAFETY_POLL_MS < 90_000, true);
+  // Under the 90 s cutoff: the safety poll's longest wait, backed off and
+  // jittered up (60 s + 25%), and the connected pace jittered up.
+  strictEqual(nextPollDelayMs({ connected: false, disconnectedPolls: 99, random: 0.999999 }) < 90_000, true);
+  strictEqual(nextPollDelayMs({ connected: true, disconnectedPolls: 0, random: 0.999999 }) < 90_000, true);
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(/async function pollOnce\(\) \{[\s\S]{0,300}spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "on the safety poll");
   strictEqual(/const catchUp = \(\) => \{[\s\S]{0,200}spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "visible / online");
@@ -3350,11 +3368,126 @@ check("rejoin: only the rejoined players' plates are blanked; a Teams plate only
 });
 
 // TABLE SYNC (lib/tableSync.ts): fewer requests, same screen.
-check("table sync: the safety poll is 12 s until realtime is connected, 30 s while it is", () => {
+check("table sync: the safety poll is 30 s connected and backs off 12 s, 24 s, 60 s while not, each +/-25%", () => {
   strictEqual(SAFETY_POLL_MS, 12_000);
   strictEqual(SAFETY_POLL_CONNECTED_MS, 30_000);
-  strictEqual(pollIntervalMs(false), 12_000);
-  strictEqual(pollIntervalMs(true), 30_000);
+  deepStrictEqual([...SAFETY_POLL_BACKOFF_MS], [12_000, 24_000, 60_000]);
+  strictEqual(POLL_JITTER, 0.25);
+  const at = (connected: boolean, disconnectedPolls: number, random: number) =>
+    nextPollDelayMs({ connected, disconnectedPolls, random });
+  // The middle of the jitter is the base.
+  strictEqual(at(true, 0, 0.5), 30_000);
+  strictEqual(at(false, 0, 0.5), 12_000);
+  strictEqual(at(false, 1, 0.5), 24_000);
+  strictEqual(at(false, 2, 0.5), 60_000);
+  strictEqual(at(false, 7, 0.5), 60_000, "stays at 60 s");
+  // Connected ignores the backoff step: reset to 30 s.
+  strictEqual(at(true, 7, 0.5), 30_000);
+  // The bounds: 75% .. 125% of the base, never outside.
+  strictEqual(at(true, 0, 0), 22_500);
+  strictEqual(at(true, 0, 0.999999) <= 37_500 && at(true, 0, 0.999999) > 37_000, true);
+  strictEqual(at(false, 0, 0), 9_000);
+  strictEqual(at(false, 2, 0), 45_000);
+  strictEqual(at(false, 2, 0.999999) <= 75_000, true);
+  strictEqual(at(false, -3, 2), 15_000, "out-of-range input is clamped");
+  for (let i = 0; i < 2000; i++) {
+    const r = Math.random();
+    const connected = at(true, 0, r);
+    const backedOff = at(false, i % 5, r);
+    const base = SAFETY_POLL_BACKOFF_MS[Math.min(i % 5, 2)];
+    strictEqual(connected >= 22_500 && connected <= 37_500, true);
+    strictEqual(backedOff >= base * 0.75 && backedOff <= base * 1.25, true);
+  }
+  // The view: one timeout at a time with the chosen wait, no fixed interval;
+  // a change of channel status restarts the chain (reset on connect).
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("pollIntervalMs"), false);
+  strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
+  strictEqual(view.includes("if (!realtimeConnected) disconnectedPolls++;"), true);
+  const pollStart = view.indexOf("async function pollOnce()");
+  strictEqual(view.slice(pollStart, pollStart + 4000).includes("setInterval"), false);
+  strictEqual(view.includes("}, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);"), true);
+});
+check("realtime stopgap: game_plays is filtered by game, re-subscribed per game, caught up, never doubled", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // No unfiltered game_plays listener anywhere: exactly one, with the filter.
+  strictEqual((view.match(/table: "game_plays"/g) ?? []).length, 1);
+  strictEqual(view.includes('{ event: "INSERT", schema: "public", table: "game_plays", filter: `game_id=eq.${gameId}` }'), true);
+  strictEqual(view.includes('{ event: "INSERT", schema: "public", table: "game_plays" }'), false);
+  // Its own channel, keyed to the game on screen: a new game (or none) is a
+  // new subscription; the old one is removed.
+  strictEqual(view.includes("const playsGameId = activeGame?.id ?? null;"), true);
+  strictEqual(view.includes(".channel(`table-plays-${table.id}-${gameId}`)"), true);
+  strictEqual(view.includes("if (!table || !playsGameId) return;"), true);
+  const effectEnd = "}, [table, playsGameId, tableSound, showGo, catchUpPlays]);";
+  strictEqual(view.includes(effectEnd), true);
+  const playsEffect = view.slice(view.indexOf("const playsGameId = activeGame?.id ?? null;"), view.indexOf(effectEnd));
+  strictEqual(playsEffect.includes("supabase.removeChannel(channel);"), true);
+  // A catch-up read on every SUBSCRIBED (the first and each reconnect).
+  strictEqual(/\.subscribe\(\(status\) => \{\s*if \(status === "SUBSCRIBED" && !cancelled\) void catchUpPlays\(gameId\);/.test(playsEffect), true);
+  // Both paths merge by seq; the catch-up applies only to its game and hand.
+  strictEqual(playsEffect.includes("setPlays((current) => mergePlays(current, [event]));"), true);
+  const catchUpStart = view.indexOf("const catchUpPlays = useCallback(");
+  const catchUp = view.slice(catchUpStart, catchUpStart + 900);
+  strictEqual(catchUp.includes('.eq("game_id", gameId)'), true);
+  strictEqual(catchUp.includes("playsCatchUpApplies(issued, { gameId: activeGameIdRef.current, handNo: activeGameRef.current?.hand_no })"), true);
+  strictEqual(catchUp.includes("setPlays((current) => mergePlays(current, data as PlayEvent[]));"), true);
+  // The sound and the Go splash stay with the live event only.
+  strictEqual(playsEffect.includes("tableSound.card(playKey("), true);
+  strictEqual(playsEffect.includes("showGo(`go:"), true);
+  strictEqual(catchUp.includes("tableSound"), false);
+});
+check("realtime stopgap: mergePlays adds each seq once, in order; the catch-up skips another hand", () => {
+  const p = (seq: number, card: string | null = `c${seq}`) => ({ seq, segment: 1, user_id: "a", kind: "play" as const, card, count_after: seq });
+  const shown = [p(1), p(2)];
+  // A duplicate event: the same array back (nothing re-renders).
+  strictEqual(mergePlays(shown, [p(2)]), shown);
+  strictEqual(mergePlays(shown, []), shown);
+  // The live event and the catch-up read overlapping: each seq once.
+  deepStrictEqual(mergePlays(shown, [p(1), p(2), p(3), p(4)]).map((x) => x.seq), [1, 2, 3, 4]);
+  // Out of order in, in order out; a seq repeated within the input once.
+  deepStrictEqual(mergePlays([p(3)], [p(5), p(1), p(5), p(2)]).map((x) => x.seq), [1, 2, 3, 5]);
+  // The screen's copy of a seq is kept.
+  strictEqual(mergePlays([p(1, "AS")], [p(1, "KH")])[0].card, "AS");
+  // From empty (a new hand): the read's plays.
+  deepStrictEqual(mergePlays([], [p(2), p(1)]).map((x) => x.seq), [1, 2]);
+  // The catch-up: same game and hand only.
+  strictEqual(playsCatchUpApplies({ gameId: "g", handNo: 3 }, { gameId: "g", handNo: 3 }), true);
+  strictEqual(playsCatchUpApplies({ gameId: "g", handNo: 3 }, { gameId: "g", handNo: 4 }), false, "a Next Hand during the read");
+  strictEqual(playsCatchUpApplies({ gameId: "g", handNo: 3 }, { gameId: "h", handNo: 3 }), false, "a new game");
+  strictEqual(playsCatchUpApplies({ gameId: "g", handNo: 3 }, { gameId: null, handNo: undefined }), false, "the game ended");
+  strictEqual(playsCatchUpApplies({ gameId: "g", handNo: undefined }, { gameId: "g", handNo: null }), true);
+});
+check("realtime stopgap: no profiles listener; the poll re-reads every profile every 4th poll", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes('table: "profiles"'), false);
+  strictEqual(PROFILE_REFRESH_POLLS, 4);
+  deepStrictEqual([1, 2, 3, 4, 5, 8, 12].map(pollRefreshesProfiles), [false, false, false, true, false, true, true]);
+  strictEqual(pollRefreshesProfiles(0), false);
+  strictEqual(view.includes("pollCountRef.current++;"), true);
+  strictEqual(view.includes("await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));"), true);
+  // The refresh reads everyone on screen; a poll without it, only new seats.
+  const shown = [
+    { user_id: "a", seat: 1, nickname: "Walt" },
+    { user_id: "b", seat: 2, nickname: "Yoda" },
+  ];
+  const rows = [{ user_id: "a", seat: 1 }, { user_id: "b", seat: 2 }, { user_id: "c", seat: 3 }];
+  deepStrictEqual(profilesToFetch(rows, shown, true), ["c"]);
+  deepStrictEqual(profilesToFetch(rows, shown, true, true), ["a", "b", "c"]);
+  // A changed name or avatar is a difference the poll applies.
+  strictEqual(view.includes("if (s && (s.nickname !== m.nickname || s.avatar_url !== m.avatar_url)) out.push(`profile ${m.user_id}`);"), true);
+});
+check("realtime stopgap: a table_members delete from another table is ignored; leavers have two fallbacks", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // Still listening (filtered), but the table is checked on the client too:
+  // Supabase only filters delete events under replica identity FULL.
+  strictEqual(/event: "DELETE",\s*schema: "public",\s*table: "table_members",\s*filter: `table_id=eq\.\$\{table\.id\}`/.test(view), true);
+  strictEqual(view.includes("if (goneRow.table_id !== undefined && goneRow.table_id !== table.id) return;"), true);
+  // Fallback 1: the poll's roster read notices a leaver.
+  strictEqual(view.includes("for (const s of shown) if (!fresh.some((m) => m.user_id === s.user_id)) out.push(`left ${s.user_id}`);"), true);
+  // Fallback 2 (mid-game): leave_table ends the game, which the filtered
+  // games UPDATE listener brings at once.
+  strictEqual(/event: "UPDATE",\s*schema: "public",\s*table: "games",\s*filter: `table_id=eq\.\$\{table\.id\}`/.test(view), true);
 });
 check("table sync: profiles read for new seats, moved seats and missing names; never for the rest", () => {
   const shown = [

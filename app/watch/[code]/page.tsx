@@ -36,7 +36,9 @@ import {
 //   * The table is the players' own (components/table/TableView.tsx) in its
 //     spectating mode: Seat 1 at the bottom, every hand face-down with its
 //     count, every action off, hands and the crib only through
-//     get_spectator_reveals, no sounds.
+//     get_spectator_reveals. Sounds from Seat 1's side (cut cards, discards,
+//     plays, the end of a game), but no deal sound: only the deal animation
+//     plays it, and a spectator has none.
 //
 // THE FLOW. watch_table(code): let in -> the table, with or without a live
 // game (no game: the table's own waiting room, read-only). The OLD

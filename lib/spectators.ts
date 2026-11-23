@@ -312,16 +312,11 @@ export function soundSeatId(t: { spectating: boolean; viewerId: string; myId: st
   return t.spectating ? (t.viewerId === NOBODY_SEATED ? null : t.viewerId) : t.myId;
 }
 
-// A spectator never taps, so the sounds a player's own tap starts must come
-// from the table's state on a spectator's screen. Cut cards, discards and
-// plays already do (each screen but the tapper's plays them from the games
-// row / the plays). The DEAL is the one sound only the deal animation starts,
-// and a spectator has no deal animation: it plays when a hand is dealt live
-// (the same moment a player's animation would start), keyed like the
-// animation's, so it can never play twice.
-export function spectatorDealSound(t: { spectating: boolean; liveKey: string | null; handKey: string | null }): string | null {
-  return t.spectating && t.liveKey !== null && t.liveKey === t.handKey ? t.liveKey : null;
-}
+// A spectator never taps, so the sounds a player's own tap starts come from
+// the table's state on a spectator's screen: cut cards, discards and plays
+// (each screen but the tapper's plays them from the games row / the plays).
+// The DEAL is not played for a spectator: only the deal animation starts it,
+// and a spectator has no deal animation.
 
 export const SPECTATOR_REMOVE_CONFIRM = "They can't watch this table again.";
 
