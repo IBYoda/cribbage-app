@@ -10,6 +10,8 @@ import { OpponentChooser } from "@/components/brand/OpponentChooser";
 import { DEFAULT_COMPUTER_LEVEL, LEVEL_INFO, isComputerLevel, type ComputerLevel } from "@/lib/computer/config";
 import { nicknameStepHref } from "@/lib/nickname";
 import { fetchNeedsNickname } from "@/lib/profileNickname";
+import { RefusalNotice } from "@/components/brand/RefusalNotice";
+import { GENERIC_ERROR_TEXT, QUIET_CLOSE_NOTE, logUnexpectedError, rpcRefusal, type Refusal } from "@/lib/oneTable";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -36,7 +38,9 @@ export default function SinglePlayerPage() {
   const [level, setLevel] = useState<ComputerLevel>(DEFAULT_COMPUTER_LEVEL);
   const [avatars, setAvatars] = useState<Partial<Record<ComputerLevel, string | null>>>({});
   const [status, setStatus] = useState<"idle" | "creating" | "success" | "error">("idle");
-  const [message, setMessage] = useState<string | null>(null);
+  // Why the game didn't start: its plain message, and for "already at table
+  // NNNN" a button to that table (lib/oneTable.ts).
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
 
   // The nickname gate: a player without a nickname picks one first and
   // comes back here (the page stays "Loading..." meanwhile).
@@ -83,7 +87,7 @@ export default function SinglePlayerPage() {
     if (!session) return;
 
     setStatus("creating");
-    setMessage(null);
+    setRefusal(null);
 
     for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
       const code = generateCode();
@@ -107,16 +111,24 @@ export default function SinglePlayerPage() {
       }
 
       setStatus("error");
-      setMessage(
-        error.message.includes("not set up yet")
-          ? `${LEVEL_INFO[level].name} isn't ready to play yet. Try another level, or try again later.`
-          : error.message
-      );
+      if (error.message.includes("not set up yet")) {
+        setRefusal({
+          kind: "unknown",
+          text: `${LEVEL_INFO[level].name} isn't ready to play yet. Try another level, or try again later.`,
+        });
+        return;
+      }
+      // One table at a time (docs/sql/join-create.sql): seated at a table
+      // with other humans -> already_at_table, with a button to it; 10 games
+      // in the last hour -> rate_limited. Anything else: never raw text.
+      const why = rpcRefusal(error);
+      if (why.kind === "unknown") logUnexpectedError("create_computer_table", error);
+      setRefusal(why.kind === "unknown" ? { kind: "unknown", text: GENERIC_ERROR_TEXT } : why);
       return;
     }
 
     setStatus("error");
-    setMessage("Couldn't generate a unique table code, please try again.");
+    setRefusal({ kind: "unknown", text: "Couldn't generate a unique table code, please try again." });
   }
 
   if (loading) {
@@ -155,7 +167,9 @@ export default function SinglePlayerPage() {
             : `Play ${LEVEL_INFO[level].name}`}
       </button>
 
-      {status === "error" && message && <p className="text-sm text-[var(--error-on-felt)]">{message}</p>}
+      <p className="text-sm">{QUIET_CLOSE_NOTE}</p>
+
+      {status === "error" && refusal && <RefusalNotice refusal={refusal} />}
     </CardRoomFrame>
   );
 }

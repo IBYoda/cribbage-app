@@ -18,6 +18,19 @@
 -- local role authenticated" to act as a player, "reset role" to act as the
 -- owner (to set a game live, set a score, and to read).
 --
+-- STEP 3, SLICE A (rewritten 2026-11-23, NOT RUN since): the tables (M1-M4
+-- and L2's regular table) and every seat are now made AS THE OWNER, not as a
+-- signed-in player: docs/sql/join-create-lockdown.sql revokes the direct
+-- client INSERTs, and the setup seats A and B at four tables at once, which
+-- one table at a time refuses through create_table / join_table_by_code.
+-- M1-M4 test the table constraints themselves (accepted, or 23514 from
+-- tables_muggins_no_teams), which hold for any insert; the client path for a
+-- Self-Scoring table, create_table, is covered by
+-- docs/sql/join-create-verification.sql K2 (4-player Self-Scoring Teams
+-- refused) and K3 (4-player Self-Scoring Solo created). The games are still
+-- started, claimed and confirmed by the real players. Works before and after
+-- the lockdown; same number of checks.
+--
 -- PLAYERS: A, B, C, D and E are ALL temporary accounts created in auth.users
 -- inside this transaction, A-D with a profile (so the leaderboard can list
 -- them). E never sits at a table (the non-member).
@@ -168,13 +181,9 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- ==== M: creation, as A =====================================================
-  execute 'set local role authenticated';
-  perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
-  perform set_config('request.jwt.claim.sub', v_a::text, true);
-
-  -- [M1] 2 players, Muggins, no team_mode sent -- the insert Start a Table
-  -- makes today: accepted.
+  -- ==== M: creation (A's tables, as the owner: see the header) ===============
+  -- [M1] 2 players, Muggins, no team_mode -- the row Start a Table makes for
+  -- 2-player Self-Scoring: accepted.
   v_msg := null;
   begin
     insert into public.tables (code, created_by, max_players, is_muggins)
@@ -228,10 +237,9 @@ begin
   -- The regular table for L2.
   insert into public.tables (code, created_by, max_players) values (v_codes[5], v_a, 2) returning id into v_tr;
 
-  -- Everyone sits (seats in join order), and A starts each game.
+  -- Everyone sits (seats in join order, as the owner: see the header), and
+  -- A starts each game.
   foreach v_player in array array[v_a, v_b, v_c, v_d] loop
-    perform set_config('request.jwt.claims', json_build_object('sub', v_player, 'role', 'authenticated')::text, true);
-    perform set_config('request.jwt.claim.sub', v_player::text, true);
     insert into public.table_members (table_id, user_id) values (v_t4, v_player);
     if v_player <> v_d then
       insert into public.table_members (table_id, user_id) values (v_t3, v_player);
@@ -241,6 +249,7 @@ begin
       insert into public.table_members (table_id, user_id) values (v_tr, v_player);
     end if;
   end loop;
+  execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', v_a::text, true);
   v_g2 := public.start_game_with_deal(v_t2);

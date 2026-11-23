@@ -10,6 +10,11 @@
 -- "ALL n CHECKS PASSED (rolled back) ..." is a pass; anything starting
 -- "FAIL" or "SETUP" is not. Re-runnable, because nothing it does survives.
 --
+-- STEP 3, SLICE A (docs/sql/join-create.sql): create_computer_table now
+-- applies one table at a time, so A must be seated nowhere else when T1 runs
+-- (the guard's fixture tables are made after the T checks), and T8's second
+-- table is B's. Same 81 checks; rewritten 2026-11-23, NOT RUN since.
+--
 -- Same impersonation as the earlier verification scripts:
 -- request.jwt.claims plus "set local role authenticated" (or anon) to act as
 -- a client, and "reset role" to act as the owner between steps.
@@ -45,7 +50,8 @@
 --      private, regular, 2-player table with computer_level; refuses a bad
 --      level, a level with no account, a code collision (23505, as a direct
 --      insert), anon, the computer itself, and no caller; the computer sits
---      at two tables at once.
+--      at two tables at once (A's and B's: since step 3 slice A a second
+--      table of A's would end A's first, docs/sql/join-create.sql).
 --   G  the guard, through computer_start_game_with_deal (table id) AND
 --      computer_hand (game id): refused for the computer itself (a seated
 --      non-creator), a non-member, a stranger, a normal 2-player table, a 3-
@@ -158,38 +164,7 @@ begin
     raise exception 'SETUP: fewer than eight unused table codes.';
   end if;
 
-  -- Fixture tables (as the owner). Members are inserted one at a time so the
-  -- seat trigger seats them in this order.
-  insert into public.tables (code, created_by) values (v_codes[2], v_a) returning id into v_norm;
-  insert into public.table_members (table_id, user_id) values (v_norm, v_a);
-  insert into public.table_members (table_id, user_id) values (v_norm, v_b);
-
-  insert into public.tables (code, created_by, max_players) values (v_codes[3], v_a, 3) returning id into v_t3;
-  insert into public.table_members (table_id, user_id) values (v_t3, v_a);
-  insert into public.table_members (table_id, user_id) values (v_t3, v_c);
-
-  insert into public.tables (code, created_by, max_players) values (v_codes[4], v_a, 4) returning id into v_t4;
-  insert into public.table_members (table_id, user_id) values (v_t4, v_a);
-  insert into public.table_members (table_id, user_id) values (v_t4, v_c);
-
-  insert into public.tables (code, created_by, computer_level) values (v_codes[5], v_a, 'easy') returning id into v_fake;
-  insert into public.table_members (table_id, user_id) values (v_fake, v_a);
-  insert into public.table_members (table_id, user_id) values (v_fake, v_b);
-
-  insert into public.tables (code, created_by, computer_level) values (v_codes[6], v_a, 'easy') returning id into v_alone;
-  insert into public.table_members (table_id, user_id) values (v_alone, v_a);
-
-  -- A game at each, for the game-id guard (cutting, so each is "live").
-  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
-  values (v_norm, v_a, 'cutting', array[v_a, v_b], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_norm;
-  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
-  values (v_t3, v_a, 'cutting', array[v_a, v_c], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_t3;
-  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
-  values (v_t4, v_a, 'cutting', array[v_a, v_c], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_t4;
-  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
-  values (v_fake, v_a, 'cutting', array[v_a, v_b], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_fake;
-  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
-  values (v_alone, v_a, 'cutting', array[v_a], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_alone;
+  -- (The guard's fixture tables are made after the T checks: see there.)
 
   -- ==== S: catalog, as the owner ==============================================
   -- [S1] computer_accounts: RLS on, no policies.
@@ -302,9 +277,9 @@ begin
   v_state := null;
   begin perform 1 from public.computer_accounts; exception when others then v_state := sqlstate; end;
   v_state2 := null;
-  begin perform public._computer_for_table(v_norm); exception when others then v_state2 := sqlstate; end;
+  begin perform public._computer_for_table(gen_random_uuid()); exception when others then v_state2 := sqlstate; end;
   v_txt := null;
-  begin perform public.play_card_as(v_c, v_g_norm, 'AS'); exception when others then v_txt := sqlstate; end;
+  begin perform public.play_card_as(v_c, gen_random_uuid(), 'AS'); exception when others then v_txt := sqlstate; end;
   execute 'reset role';
   if v_state is distinct from '42501' or v_state2 is distinct from '42501' or v_txt is distinct from '42501' then
     raise exception 'FAIL [S6] authenticated: computer_accounts %, helper %, _as %; expected 42501 each.',
@@ -320,11 +295,11 @@ begin
   v_state := null;
   begin perform 1 from public.computer_accounts; exception when others then v_state := sqlstate; end;
   v_state2 := null;
-  begin perform public._computer_for_game(v_g_norm); exception when others then v_state2 := sqlstate; end;
+  begin perform public._computer_for_game(gen_random_uuid()); exception when others then v_state2 := sqlstate; end;
   v_txt := null;
-  begin perform public.next_hand_as(v_c, v_g_norm, 1); exception when others then v_txt := sqlstate; end;
+  begin perform public.next_hand_as(v_c, gen_random_uuid(), 1); exception when others then v_txt := sqlstate; end;
   v_msg := null;
-  begin perform public.computer_draw_cut_card(v_g_norm); exception when others then v_msg := sqlstate; end;
+  begin perform public.computer_draw_cut_card(gen_random_uuid()); exception when others then v_msg := sqlstate; end;
   execute 'reset role';
   if v_state is distinct from '42501' or v_state2 is distinct from '42501'
      or v_txt is distinct from '42501' or v_msg is distinct from '42501' then
@@ -424,10 +399,13 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [T8] A second computer table: the same computer sits at both at once.
+  -- [T8] A second computer table, B's: the same computer sits at both at
+  -- once. (B, not A, since step 3 slice A: a second create_computer_table by
+  -- A would quietly END A's first table -- single-player games never block --
+  -- and the W/H checks below play on it.)
   perform set_config('request.jwt.claim.role', 'authenticated', true);
-  perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
-  perform set_config('request.jwt.claim.sub', v_a::text, true);
+  perform set_config('request.jwt.claims', json_build_object('sub', v_b, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claim.sub', v_b::text, true);
   execute 'set local role authenticated';
   select r.table_id into v_ct2 from public.create_computer_table('easy', v_codes[7]) r;
   execute 'reset role';
@@ -438,14 +416,52 @@ begin
   end if;
   v_checks := v_checks + 1;
 
+  -- Fixture tables (as the owner), for the guard and L3. Made HERE, after
+  -- the T checks, since step 3 slice A (docs/sql/join-create.sql): seated at
+  -- these, A would be refused create_computer_table in T1 (one table at a
+  -- time; v_norm has a human, B), and v_alone (A alone at a computer table)
+  -- would be quietly ended by it. Owner inserts bypass that rule, as the
+  -- guard checks need. Members are inserted one at a time so the seat
+  -- trigger seats them in this order.
+  insert into public.tables (code, created_by) values (v_codes[2], v_a) returning id into v_norm;
+  insert into public.table_members (table_id, user_id) values (v_norm, v_a);
+  insert into public.table_members (table_id, user_id) values (v_norm, v_b);
+
+  insert into public.tables (code, created_by, max_players) values (v_codes[3], v_a, 3) returning id into v_t3;
+  insert into public.table_members (table_id, user_id) values (v_t3, v_a);
+  insert into public.table_members (table_id, user_id) values (v_t3, v_c);
+
+  insert into public.tables (code, created_by, max_players) values (v_codes[4], v_a, 4) returning id into v_t4;
+  insert into public.table_members (table_id, user_id) values (v_t4, v_a);
+  insert into public.table_members (table_id, user_id) values (v_t4, v_c);
+
+  insert into public.tables (code, created_by, computer_level) values (v_codes[5], v_a, 'easy') returning id into v_fake;
+  insert into public.table_members (table_id, user_id) values (v_fake, v_a);
+  insert into public.table_members (table_id, user_id) values (v_fake, v_b);
+
+  insert into public.tables (code, created_by, computer_level) values (v_codes[6], v_a, 'easy') returning id into v_alone;
+  insert into public.table_members (table_id, user_id) values (v_alone, v_a);
+
+  -- A game at each, for the game-id guard (cutting, so each is "live").
+  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
+  values (v_norm, v_a, 'cutting', array[v_a, v_b], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_norm;
+  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
+  values (v_t3, v_a, 'cutting', array[v_a, v_c], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_t3;
+  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
+  values (v_t4, v_a, 'cutting', array[v_a, v_c], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_t4;
+  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
+  values (v_fake, v_a, 'cutting', array[v_a, v_b], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_fake;
+  insert into public.games (table_id, created_by, status, players, deal_cut, created_at)
+  values (v_alone, v_a, 'cutting', array[v_a], '[[]]'::jsonb, now() - interval '1 hour') returning id into v_g_alone;
+
   -- Placeholder ENDED games at the two computer tables, dated an hour back,
   -- for the game-id guard (an ended game blocks nothing).
   insert into public.games (table_id, created_by, status, ended_reason, players, created_at)
   values (v_ct, v_a, 'ended', 'admin', array[v_a, v_c], now() - interval '1 hour') returning id into v_gp;
   insert into public.games (table_id, created_by, status, ended_reason, players, created_at)
-  values (v_ct2, v_a, 'ended', 'admin', array[v_a, v_c], now() - interval '1 hour') returning id into v_gp2;
-  -- The creator no longer seated at the second table (the computer still is).
-  delete from public.table_members where table_id = v_ct2 and user_id = v_a;
+  values (v_ct2, v_b, 'ended', 'admin', array[v_b, v_c], now() - interval '1 hour') returning id into v_gp2;
+  -- The creator (B) no longer seated at the second table (the computer still is).
+  delete from public.table_members where table_id = v_ct2 and user_id = v_b;
 
   -- ==== G: the guard ==========================================================
   -- Each case through BOTH the table-id guard (computer_start_game_with_deal)
@@ -460,7 +476,7 @@ begin
       ('a 4-player table', v_a, v_t4, v_g_t4, 'Only a 2-player table can have a computer opponent.'),
       ('computer_level set, the other member a human', v_a, v_fake, v_g_fake, 'The other player at this table is not a computer.'),
       ('no other member', v_a, v_alone, v_g_alone, 'A computer table has exactly one other player, the computer.'),
-      ('the creator, no longer seated', v_a, v_ct2, v_gp2, 'You are not seated at this table.')
+      ('the creator, no longer seated', v_b, v_ct2, v_gp2, 'You are not seated at this table.')
     ) as t(label, actor, tbl, game, expect)
   loop
     perform set_config('request.jwt.claims', json_build_object('sub', v_rec.actor, 'role', 'authenticated')::text, true);
@@ -968,9 +984,11 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [L6] Cleanup after a plain leave: at the second table A is no longer
-  -- seated but the computer is; A's leave_computer_table removes it and
-  -- closes the table.
+  -- [L6] Cleanup after a plain leave: at the second table its creator, B, is
+  -- no longer seated but the computer is; B's leave_computer_table removes it
+  -- and closes the table.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_b, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claim.sub', v_b::text, true);
   execute 'set local role authenticated';
   perform public.leave_computer_table(v_ct2);
   execute 'reset role';

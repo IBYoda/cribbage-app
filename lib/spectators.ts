@@ -5,6 +5,7 @@
 // show. Tested by scripts/test-phase3.ts.
 
 import { isStaleWaitingTable } from "@/lib/tableListing";
+import { GENERIC_ERROR_TEXT, RATE_LIMITED_TEXT } from "@/lib/oneTable";
 
 // Where watching happens (the watch page, part B of the spectator UI).
 export function watchHref(code: string): string {
@@ -165,13 +166,31 @@ export const REMOVED_TEXT = "The host removed you from this table.";
 export const NOT_ALLOWED_TEXT = "This table doesn't allow spectators.";
 export const FULL_TEXT = "Spectators full: this table already has 4 spectators.";
 
-// What a watch_table refusal (the server's message, word for word) means on
-// screen. "seated" sends the player to their own seat; "waiting" keeps
-// asking (WATCH_RETRY_MS); "login" offers Log in; everything else is a
-// screen with the text and Back to home.
+// What a watch_table refusal means on screen. The message is the server's,
+// word for word, or one callWatchTable (lib/spectatorData.ts) already made
+// plain: "No table found with code NNNN." for no row (a wrong code is
+// answered with no row, not an error, since step 3 slice A), and the
+// one-table refusals (lib/oneTable.ts). "seated" sends the player to their
+// own seat; "waiting" keeps asking (WATCH_RETRY_MS); "login" offers Log in;
+// "already_at_table" adds "Go to table NNNN" (tableCode); everything else is
+// a screen with the text and Back to home. Anything unrecognised is "other"
+// with GENERIC_ERROR_TEXT: never raw server text (the watch page logs it).
 export type WatchRefusal = {
-  kind: "login" | "seated" | "waiting" | "full" | "removed" | "ended" | "not_allowed" | "not_found" | "other";
+  kind:
+    | "login"
+    | "seated"
+    | "waiting"
+    | "full"
+    | "removed"
+    | "ended"
+    | "not_allowed"
+    | "not_found"
+    | "already_at_table"
+    | "locked_out"
+    | "rate_limited"
+    | "other";
   text: string;
+  tableCode?: string;
 };
 
 export function watchRefusal(message: string): WatchRefusal {
@@ -183,8 +202,13 @@ export function watchRefusal(message: string): WatchRefusal {
   if (message === "This table has ended.") return { kind: "ended", text: "This table has ended." };
   if (message === "This table does not allow spectators." || message === "Computer tables cannot be watched.")
     return { kind: "not_allowed", text: NOT_ALLOWED_TEXT };
-  if (message.startsWith("No table found")) return { kind: "not_found", text: message };
-  return { kind: "other", text: message };
+  if (/^No table found with code [0-9]{4}\.$/.test(message)) return { kind: "not_found", text: message };
+  const at = message.match(/^You're already at table ([0-9]{4})\. Rejoin it or leave it first\.$/);
+  if (at) return { kind: "already_at_table", text: message, tableCode: at[1] };
+  if (message.startsWith("Too many wrong table codes.")) return { kind: "locked_out", text: message };
+  if (message === RATE_LIMITED_TEXT || /^You can start watching at most \d+ tables an hour\. Please try again later\.$/.test(message))
+    return { kind: "rate_limited", text: message };
+  return { kind: "other", text: GENERIC_ERROR_TEXT };
 }
 
 // THE HEARTBEAT (spectator_heartbeat), what each answer does (part C):
@@ -227,14 +251,14 @@ export type RewatchOutcome =
   | { kind: "continue" }
   | { kind: "closed" }
   | { kind: "home"; text: string }
-  | { kind: "screen"; text: string };
+  | { kind: "screen"; text: string; tableCode?: string };
 
 export function rewatchOutcome(message: string): RewatchOutcome {
   const r = watchRefusal(message);
   if (r.kind === "waiting") return { kind: "continue" };
   if (r.kind === "removed") return { kind: "home", text: REMOVED_TEXT };
   if (r.kind === "ended") return { kind: "closed" };
-  return { kind: "screen", text: r.text };
+  return r.tableCode ? { kind: "screen", text: r.text, tableCode: r.tableCode } : { kind: "screen", text: r.text };
 }
 
 // The quiet watch_table's whole answer: let in -> STAY, with or without a

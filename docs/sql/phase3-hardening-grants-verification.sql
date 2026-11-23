@@ -16,12 +16,30 @@
 -- them, and one game at one of them. The one existing row it reads is the
 -- hard computer account (create_computer_table seats it at a test table).
 --
+-- STEP 3, SLICE A (rewritten 2026-11-23, NOT RUN since):
+--   * BEFORE the lockdown (join-create.sql live, join-create-lockdown.sql
+--     not yet): runs as before, with two fixes. C1 is called as C, a third
+--     temporary account seated nowhere: A is seated at the tables made in I
+--     and J, and create_computer_table now refuses a player seated at a
+--     table with other humans (one table at a time). G1's column list gains
+--     allow_spectators, granted by spectators-grant-insert.sql (2026-11-20):
+--     without it G1 has failed since that grant, slice A or not.
+--   * AFTER the lockdown this suite stops at G1 BY DESIGN: there is no
+--     client INSERT on tables or table_members at all any more, so the
+--     direct-insert column limits it proves (G, I, M, J, A) no longer exist
+--     to test. Its successor is docs/sql/join-create-verification.sql
+--     (L0-L3: no INSERT for anon or authenticated, the direct inserts get
+--     42501, create_table still works; the K/J/R checks cover create, join
+--     and the seat trigger through the RPCs). Kept for history; do not
+--     re-baseline it to "no INSERT": that is what L0 checks.
+--
 -- Same impersonation as the other suites: request.jwt.claims plus "set
 -- local role authenticated" (or anon) to act as a client, "reset role" to act
 -- as the owner (to read back what a client's statement really did).
 --
--- PLAYERS: A and B are temporary accounts created in auth.users inside this
--- transaction. A creates every table; B joins t1.
+-- PLAYERS: A, B and C are temporary accounts created in auth.users inside
+-- this transaction. A creates every table; B joins t1; C starts the computer
+-- table (C1).
 --
 -- THE TABLES (A's), from free 4-digit codes:
 --   codes 1-7  the seven inserts Start a Table makes (2, 3 and 4 players;
@@ -40,18 +58,19 @@
 --      other ungranted column are refused (42501).
 --   J  the join (table_id, user_id, ON CONFLICT DO NOTHING): seats by the
 --      trigger; a repeat is quiet; a rejoin after leave_table works.
---   C  create_computer_table still sets computer_level.
+--   C  create_computer_table still sets computer_level (called as C).
 --   A  anon can insert into neither table.
 --   U  a signed-in player updating or deleting their own (or another
 --      player's) seat, table or game is refused or changes nothing.
 --
 -- Expected message:
---   ALL 22 CHECKS PASSED (rolled back). A=... B=...
+--   ALL 22 CHECKS PASSED (rolled back). A=... B=... C=...
 
 do $$
 declare
   v_a uuid := gen_random_uuid();
   v_b uuid := gen_random_uuid();
+  v_c uuid := gen_random_uuid();
   v_codes text[];
   v_ids uuid[] := '{}';
   v_t1 uuid;
@@ -68,17 +87,19 @@ declare
   v_exp text;
   v_bad text;
   v_checks int := 0;
-  -- The columns a client may insert (phase3-hardening-grants.sql).
-  v_table_cols text[] := array['code', 'created_by', 'is_public', 'is_muggins', 'max_players', 'team_mode'];
+  -- The columns a client may insert (phase3-hardening-grants.sql, plus
+  -- allow_spectators from spectators-grant-insert.sql).
+  v_table_cols text[] := array['code', 'created_by', 'is_public', 'is_muggins', 'max_players', 'team_mode', 'allow_spectators'];
   v_member_cols text[] := array['table_id', 'user_id'];
 begin
   -- ---- Setup, as the owner ------------------------------------------------
   begin
     insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at) values
       (v_a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'hg-a-' || v_a || '@verification.invalid', now() - interval '2 minutes', now()),
-      (v_b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'hg-b-' || v_b || '@verification.invalid', now() - interval '1 minute', now());
+      (v_b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'hg-b-' || v_b || '@verification.invalid', now() - interval '1 minute', now()),
+      (v_c, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'hg-c-' || v_c || '@verification.invalid', now() - interval '30 seconds', now());
   exception when others then
-    raise exception 'SETUP: could not create the temporary accounts A and B in auth.users: % (%).', sqlerrm, sqlstate;
+    raise exception 'SETUP: could not create the temporary accounts A, B and C in auth.users: % (%).', sqlerrm, sqlstate;
   end;
 
   select array_agg(c) into v_codes from (
@@ -98,7 +119,9 @@ begin
 
   -- ==== G: the grants =========================================================
   -- [G1] tables: authenticated has no table-wide INSERT, and INSERT on
-  -- exactly code, created_by, is_public, is_muggins, max_players, team_mode.
+  -- exactly code, created_by, is_public, is_muggins, max_players, team_mode,
+  -- allow_spectators. (After join-create-lockdown.sql: none at all, so this
+  -- fails by design -- see the header.)
   v_bad := null;
   if has_table_privilege('authenticated', 'public.tables', 'INSERT') then
     v_bad := 'table-wide INSERT';
@@ -401,12 +424,13 @@ begin
   v_checks := v_checks + 1;
 
   -- ==== C: the computer table =================================================
-  -- [C1] A starts a hard computer table: create_computer_table (security
-  -- definer) still writes computer_level, and seats A and the computer.
+  -- [C1] C starts a hard computer table: create_computer_table (security
+  -- definer) still writes computer_level, and seats C and the computer. (C,
+  -- seated nowhere: A is seated at t1..t7, which one table at a time refuses.)
   v_bad := null;
   execute 'set local role authenticated';
-  perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
-  perform set_config('request.jwt.claim.sub', v_a::text, true);
+  perform set_config('request.jwt.claims', json_build_object('sub', v_c, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claim.sub', v_c::text, true);
   begin
     select ct.table_id into v_tc from public.create_computer_table('hard', v_codes[9]) ct;
   exception when others then v_bad := sqlerrm || ' (' || sqlstate || ')'; end;
@@ -558,5 +582,5 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  raise exception 'ALL % CHECKS PASSED (rolled back). A=% B=%.', v_checks, v_a, v_b;
+  raise exception 'ALL % CHECKS PASSED (rolled back). A=% B=% C=%.', v_checks, v_a, v_b, v_c;
 end $$;

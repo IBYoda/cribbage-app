@@ -11,6 +11,12 @@
 -- kept between games); its own verification covers them. Re-run now, this
 -- file stops at R7 and E3 (they expect slice 1's "There is no game to watch
 -- at this table yet."): by design, not a regression.
+-- STEP 3, SLICE A (docs/sql/join-create.sql), rewritten 2026-11-23, NOT RUN
+-- since: T3 is called as N (A is seated at four tables here, and
+-- create_computer_table now refuses a player seated at a table with other
+-- humans: one table at a time); R2 and R3 (an unknown and a null code) now
+-- expect NO ROW and no error (watch_table no longer raises for a wrong code,
+-- so the count of wrong guesses survives). Still stops at R7 as above.
 --
 -- RUN ORDER:
 --   1. docs/sql/spectators-precheck.sql      (read-only)
@@ -78,13 +84,15 @@
 --   TABLE CREATION
 --   T1  a computer table with allow_spectators true is refused (23514).
 --   T2  a computer table with the default inserts (allow_spectators false).
---   T3  create_computer_table, called as A, still works and gives
---       allow_spectators false (skipped if no computer account exists).
+--   T3  create_computer_table, called as N (seated nowhere), still works
+--       and gives allow_spectators false (skipped if no computer account
+--       exists).
 --   REFUSALS
 --   R1-R9  watch_table: nobody signed in; an unknown code; a null code; an
 --       ended table; a computer table; a table without spectators; a table
 --       with no live game; A (seated) at X; B (seated) at P -- each with its
---       exact message.
+--       exact message, except the unknown and the null code: no row and no
+--       error (step 3 slice A).
 --   U1-U4  nobody signed in: stop_watching and remove_spectator refused;
 --       spectator_heartbeat 'not_watching'; get_spectator_reveals null.
 --   A1-A5  anon cannot execute any of the five functions (42501).
@@ -488,13 +496,15 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [T3] create_computer_table, as A, unchanged: allow_spectators false.
+  -- [T3] create_computer_table, as N (seated nowhere: A is seated at four
+  -- tables, which one table at a time refuses), unchanged: allow_spectators
+  -- false.
   select ca.level into v_level from public.computer_accounts ca order by ca.level limit 1;
   if v_level is null then
     v_t3_skipped := true;
     v_skips := v_skips || ' skipped T3: no computer account is set up.';
   else
-    perform set_config('request.jwt.claims', json_build_object('sub', v_a, 'role', 'authenticated')::text, true);
+    perform set_config('request.jwt.claims', json_build_object('sub', v_nn, 'role', 'authenticated')::text, true);
     v_msg := null;
     v_r_table := null;
     execute 'set local role authenticated';
@@ -518,8 +528,10 @@ begin
   for v_rec in
     select * from (values
       ('R1 nobody signed in', null::uuid, v_codes[1], 'You must be logged in to watch a table.'),
-      ('R2 an unknown code', v_s1, v_codes[9], 'No table found with code ' || v_codes[9] || '.'),
-      ('R3 a null code', v_s1, null::text, 'No table found with code .'),
+      -- NULL want: no row and no error (a wrong code is answered with no row
+      -- since step 3 slice A, docs/sql/join-create.sql).
+      ('R2 an unknown code', v_s1, v_codes[9], null::text),
+      ('R3 a null code', v_s1, null::text, null::text),
       ('R4 an ended table (E)', v_s1, v_codes[5], 'This table has ended.'),
       ('R5 a computer table (K)', v_s1, v_codes[6], 'Computer tables cannot be watched.'),
       ('R6 a table without spectators (Z)', v_s1, v_codes[3], 'This table does not allow spectators.'),
@@ -534,6 +546,7 @@ begin
       perform set_config('request.jwt.claims', json_build_object('sub', v_rec.actor, 'role', 'authenticated')::text, true);
     end if;
     v_msg := null;
+    v_r_table := null;
     execute 'set local role authenticated';
     begin
       select w.table_id into v_r_table from public.watch_table(v_rec.code) w;
@@ -541,7 +554,11 @@ begin
       v_msg := sqlerrm;
     end;
     execute 'reset role';
-    if v_msg is distinct from v_rec.want then
+    if v_rec.want is null then
+      if v_msg is not null or v_r_table is not null then
+        raise exception 'FAIL [%] watch_table: error %, table %; expected no row and no error.', v_rec.label, coalesce('"' || v_msg || '"', 'none'), v_r_table;
+      end if;
+    elsif v_msg is distinct from v_rec.want then
       raise exception 'FAIL [%] watch_table: %; expected "%".', v_rec.label, coalesce('"' || v_msg || '"', 'allowed'), v_rec.want;
     end if;
     v_checks := v_checks + 1;

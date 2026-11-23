@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { TABLE_CODE_LENGTH, cleanTableCodeInput, tableCodeError } from "@/lib/tableCode";
+import { QUIET_CLOSE_NOTE } from "@/lib/oneTable";
 
 export default function JoinTablePage() {
   const router = useRouter();
@@ -19,9 +20,9 @@ export default function JoinTablePage() {
       return;
     }
 
-    // The actual "join" (inserting into table_members) happens on the table
-    // page itself, so revisiting this URL later re-confirms membership
-    // instead of erroring on a duplicate join.
+    // The actual join (join_table_by_code, docs/sql/join-create.sql) happens
+    // on the table page itself, so revisiting this URL later finds the seat
+    // already there instead of erroring on a duplicate join.
     router.push(`/tables/${code}`);
   }
 
@@ -50,6 +51,8 @@ export default function JoinTablePage() {
         <button type="submit" className="peg-btn peg-btn--brass">
           Join
         </button>
+
+        <p className="text-sm">{QUIET_CLOSE_NOTE}</p>
 
         {error && (
           <p id="code-error" className="text-sm text-[var(--error-on-felt)]">
