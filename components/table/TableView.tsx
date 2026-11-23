@@ -24,7 +24,6 @@ import {
   playChosenFromSearch,
   SPECTATOR_NO_GAME_TEXT,
   soundSeatId,
-  spectatorDealSound,
   spectatorEyeCount,
   spectatorViewerId,
   watchHref,
@@ -54,7 +53,7 @@ import { mugginsPlateStates } from "@/lib/mugginsPlates";
 import { godLossSplash, hideRejoinedScores, scoreFromThisGame } from "@/lib/resultScores";
 import { GAME_HOLE } from "@/lib/boardLayout";
 import { isGodLevel } from "@/lib/splashPhrases";
-import { pollIntervalMs, profilesToFetch, wonBoardReusable } from "@/lib/tableSync";
+import { mergePlays, nextPollDelayMs, playsCatchUpApplies, pollRefreshesProfiles, profilesToFetch, wonBoardReusable } from "@/lib/tableSync";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -401,6 +400,9 @@ function membersDiff(shown: Member[], fresh: Member[]) {
       out.push(`score ${m.user_id}`);
     // A missed seat move (set_seat) -- the waiting room's order.
     if (s && s.seat !== m.seat) out.push(`seat ${m.user_id}`);
+    // A name or avatar edit (the poll's profile refresh; there is no
+    // profiles listener).
+    if (s && (s.nickname !== m.nickname || s.avatar_url !== m.avatar_url)) out.push(`profile ${m.user_id}`);
   }
   for (const s of shown) if (!fresh.some((m) => m.user_id === s.user_id)) out.push(`left ${s.user_id}`);
   return out;
@@ -718,9 +720,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // played late by the next event; true until the first read has done that.
   // A SPECTATOR hears the table too (spectator chat), from Seat 1 -- the seat
   // their screen is drawn from: cut cards, discards and plays come from the
-  // table's state on every screen but the tapper's anyway; the deal plays
-  // when a hand is dealt live (spectatorDealSound, below); a win or a loss
-  // is Seat 1's (soundSeatId).
+  // table's state on every screen but the tapper's anyway; a win or a loss
+  // is Seat 1's (soundSeatId). No deal sound for a spectator: only the deal
+  // animation plays it, and a spectator has none (the discard tick still
+  // plays, as on a screen with the tosses off).
   const tableSound = useTableSounds({
     open: !!table,
     isMuggins,
@@ -872,6 +875,24 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       .order("seq", { ascending: true });
 
     setPlays((data as PlayEvent[]) ?? []);
+  }, []);
+
+  // THE PLAYS CATCH-UP READ (THE PLAY LOG, LIVE): after the game_plays
+  // channel (re)subscribes. Merged, never replacing (mergePlays): a play that
+  // arrived by realtime while this read was in flight stays. Applied only if
+  // the same game and hand are still on screen (playsCatchUpApplies): plays
+  // are emptied at each next hand and their seq starts again. No sound or
+  // splash: like any read, it only shows what already happened.
+  const catchUpPlays = useCallback(async (gameId: string) => {
+    const issued = { gameId, handNo: activeGameRef.current?.hand_no };
+    const { data, error } = await supabase
+      .from("game_plays")
+      .select("seq, segment, user_id, kind, card, count_after")
+      .eq("game_id", gameId)
+      .order("seq", { ascending: true });
+    if (error || !data) return;
+    if (!playsCatchUpApplies(issued, { gameId: activeGameIdRef.current, handNo: activeGameRef.current?.hand_no })) return;
+    setPlays((current) => mergePlays(current, data as PlayEvent[]));
   }, []);
 
   // Fetches every hand and the crib this player is allowed to see. No
@@ -1046,9 +1067,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // and applies them -- replacing the roster, or merging by user_id if a
   // roster event arrived during the read. Returns an error message, or null.
   // poll: compare with the screen first, apply only a difference, and log it;
-  // profiles are read only for players not already on screen. Otherwise
+  // profiles are read only for players not already on screen (refreshProfiles:
+  // everyone's, so name and avatar edits arrive -- every few polls). Otherwise
   // (a full refresh), also for a changed seat or a name never loaded.
-  const loadMembers = useCallback(async (tableId: string, poll = false): Promise<string | null> => {
+  const loadMembers = useCallback(async (tableId: string, poll = false, refreshProfiles = false): Promise<string | null> => {
     for (let attempt = 0; ; attempt++) {
       const ticket = ++membersReadSeqRef.current;
       const eventsAtIssue = membersEventSeqRef.current;
@@ -1075,12 +1097,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       if (myId && mine) initSeenTier(myId, mine.count);
       const shownById = new Map(membersRef.current.map((m) => [m.user_id, m]));
       // Players already shown with their name, in the same seat, keep it
-      // (profile edits arrive through realtime); a new seat, a rejoin or a
-      // missing name is read (profilesToFetch, lib/tableSync.ts).
+      // (profile edits arrive on the poll's profile refresh); a new seat, a
+      // rejoin or a missing name is read (profilesToFetch, lib/tableSync.ts).
       const profileIds = profilesToFetch(
         rows.map((m) => ({ user_id: m.user_id, seat: m.seat ?? null })),
         membersRef.current,
-        poll
+        poll,
+        refreshProfiles
       );
       const { data: profileRows } = profileIds.length
         ? await supabase.from("profiles").select("id, nickname, avatar_url").in("id", profileIds)
@@ -1248,7 +1271,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     setTableRead(true);
   }, [readOwnHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers, tableSound]);
 
-  // Counted while in flight, so the safety poll waits for it.
   // WHO IS WATCHING, read (get_table_spectators). A failed read keeps the
   // list as it was; a table that doesn't allow spectators is never asked.
   const loadSpectators = useCallback(async (tableId: string) => {
@@ -1257,6 +1279,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (list) setSpectatorList(list);
   }, []);
 
+  // A full refresh, counted while in flight, so the safety poll waits for it.
   const refreshTableState = useCallback(
     async (tableId: string) => {
       refreshesInFlightRef.current++;
@@ -1909,63 +1932,30 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           filter: `table_id=eq.${table.id}`,
         },
         (payload) => {
-          membersEventSeqRef.current++; // see the members read guard
           // DELETE payloads only carry the row's replica identity columns,
           // which defaults to the primary key -- here (table_id, user_id).
-          // That's exactly what's needed: table_id for the filter above,
-          // user_id to know who to drop from the roster.
-          const goneRow = payload.old as { user_id?: string };
+          // THE FILTER ABOVE MAY NOT HOLD: Supabase documents that delete
+          // events can only be filtered when the table's replica identity is
+          // FULL (table_members' is the default, as far as docs/sql shows), and
+          // that RLS is never applied to deletes. So a delete from ANOTHER
+          // table may arrive here: it is ignored by its table_id, which the
+          // primary key always carries. A leaver is also caught by the safety
+          // poll's roster read ("left" in membersDiff), and a leave mid-game
+          // ends the game (leave_table), which the filtered games UPDATE
+          // listener below brings at once.
+          const goneRow = payload.old as { user_id?: string; table_id?: string };
           if (!goneRow?.user_id) return;
+          if (goneRow.table_id !== undefined && goneRow.table_id !== table.id) return;
+          membersEventSeqRef.current++; // see the members read guard
 
           setMembers((current) => current.filter((m) => m.user_id !== goneRow.user_id));
         }
       )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "game_plays" },
-        (payload) => {
-          const event = payload.new as PlayEvent & { game_id: string };
-
-          // Unfiltered subscription, filtered here instead. game_plays has no
-          // table_id to match this channel's table filter on, and the active
-          // game changes within a table -- a game_id filter baked into the
-          // subscription would go stale on the next "New Game". Same approach
-          // as the profiles UPDATE listener: at this scale, letting the client
-          // discard what isn't its own is simpler than re-subscribing.
-          if (event.game_id !== activeGameIdRef.current) return;
-
-          // A CARD PLAYED, on every screen, mine too.
-          if (event.kind === "play") {
-            tableSound.card(playKey(event.game_id, activeGameRef.current?.hand_no, event.seq));
-          }
-
-          // THE GO SPLASH: once per player per run -- a player stuck for
-          // several plays logs a go each time, like the one Go label.
-          if (event.kind === "go") {
-            showGo(`go:${event.game_id}:${activeGameRef.current?.hand_no}:${event.segment}:${event.user_id}`);
-          }
-
-          setPlays((current) => {
-            if (current.some((p) => p.seq === event.seq)) return current; // already have it
-            return [...current, event].sort((a, b) => a.seq - b.seq);
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "profiles" },
-        (payload) => {
-          const updated = payload.new as { id: string; nickname: string; avatar_url: string | null };
-
-          setMembers((current) =>
-            current.map((m) =>
-              m.user_id === updated.id
-                ? { ...m, nickname: updated.nickname, avatar_url: updated.avatar_url }
-                : m
-            )
-          );
-        }
-      )
+      // No game_plays listener here (THE PLAY LOG, LIVE, below: its own
+      // channel, filtered to the game on screen) and no profiles listener
+      // (name and avatar edits come with the safety poll's profile refresh):
+      // both were unfiltered, so every play and every profile edit anywhere
+      // went to every open table.
       .on(
         "postgres_changes",
         {
@@ -2384,7 +2374,57 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, spectating, refreshTableState, readOwnHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGo, showGodLoss, showWings, wingsMoment, applyWings, tableSound]);
+  }, [table, spectating, refreshTableState, readOwnHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGodLoss, showWings, wingsMoment, applyWings, tableSound]);
+
+  // THE PLAY LOG, LIVE (realtime stopgap): game_plays INSERTs for the game on
+  // screen only -- its own channel, filtered by game_id on the server, so a
+  // play at another table never reaches this one. Re-subscribed whenever the
+  // game on screen changes (a new game, the cut's game going active keeps the
+  // same id, a game ending clears it). Every SUBSCRIBED -- the first one and
+  // each reconnect -- is followed by a CATCH-UP READ of this game's plays
+  // (catchUpPlays): postgres_changes only streams what happens while
+  // subscribed, so a play made between the game appearing and the channel
+  // joining would otherwise be lost. Both paths merge by seq (mergePlays), so
+  // a play that comes both ways is applied once.
+  const playsGameId = activeGame?.id ?? null;
+  useEffect(() => {
+    if (!table || !playsGameId) return;
+    const gameId = playsGameId;
+    let cancelled = false;
+    const channel = supabase
+      .channel(`table-plays-${table.id}-${gameId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "game_plays", filter: `game_id=eq.${gameId}` },
+        (payload) => {
+          const event = payload.new as PlayEvent & { game_id: string };
+          // The filter's game, and still the game on screen.
+          if (cancelled || event.game_id !== gameId || event.game_id !== activeGameIdRef.current) return;
+
+          // A CARD PLAYED, on every screen, mine too.
+          if (event.kind === "play") {
+            tableSound.card(playKey(event.game_id, activeGameRef.current?.hand_no, event.seq));
+          }
+
+          // THE GO SPLASH: once per player per run -- a player stuck for
+          // several plays logs a go each time, like the one Go label.
+          if (event.kind === "go") {
+            showGo(`go:${event.game_id}:${activeGameRef.current?.hand_no}:${event.segment}:${event.user_id}`);
+          }
+
+          // Once per seq: a play the catch-up read (or a refresh) already
+          // brought is not added again.
+          setPlays((current) => mergePlays(current, [event]));
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED" && !cancelled) void catchUpPlays(gameId);
+      });
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [table, playsGameId, tableSound, showGo, catchUpPlays]);
 
   // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
   // comes back online -- the same full refresh as on subscribe. A hidden tab
@@ -2408,8 +2448,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   }, [table, refreshTableState]);
 
   // TABLE SYNC: THE SAFETY POLL. While the tab is visible, every
-  // SAFETY_POLL_MS (12 s) -- or SAFETY_POLL_CONNECTED_MS (30 s) while the
-  // channel reports SUBSCRIBED (pollIntervalMs, lib/tableSync.ts) -- a LIGHT read -- the table's live game row and the roster -- to
+  // SAFETY_POLL_CONNECTED_MS (30 s) while the channel reports SUBSCRIBED, and
+  // backing off while it doesn't -- 12 s, 24 s, then 60 s -- each wait
+  // randomised by +/-25% (nextPollDelayMs, lib/tableSync.ts), a LIGHT read --
+  // the table's live game row and the roster -- to
   // repair anything a missed realtime event left wrong. Skipped while the tab
   // is hidden, while one of my actions or a full refresh is in flight, and
   // once the table has ended. A difference is applied (the game through
@@ -2418,17 +2460,20 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // console instead of being silently hidden.
   // "Connected" is exactly the channel's last status being SUBSCRIBED
   // (realtimeStatus, set in the subscribe callback above); "connecting"
-  // (startup) and "disconnected" (CLOSED, TIMED_OUT, CHANNEL_ERROR) poll at
-  // 12 s.
+  // (startup) and "disconnected" (CLOSED, TIMED_OUT, CHANNEL_ERROR) back off
+  // from 12 s; connected again resets to 30 s.
+  // Every PROFILE_REFRESH_POLLS-th poll also re-reads everyone's profile
+  // (pollRefreshesProfiles): name and avatar edits arrive that way.
   const realtimeConnected = realtimeStatus === "connected";
+  const pollCountRef = useRef(0);
   useEffect(() => {
     if (!table) return;
     const tableId = table.id;
     let polling = false;
 
     async function pollOnce() {
-      // A SPECTATOR'S HEARTBEAT rides the safety poll (every 12 s, or 30 s
-      // while realtime is connected: well inside the 90 s cutoff).
+      // A SPECTATOR'S HEARTBEAT rides the safety poll (30 s connected, at
+      // most 75 s backed off: inside the 90 s cutoff).
       spectateRef.current?.heartbeat();
       const eventsAtIssue = gameEventSeqRef.current;
       const shown = activeGameRef.current;
@@ -2459,12 +2504,25 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           }
         }
       }
-      await loadMembers(tableId, true);
+      pollCountRef.current++;
+      await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));
       // Who is watching: the eye, the list and the chat roster.
       await loadSpectators(tableId);
     }
 
-    const timer = window.setInterval(() => {
+    // One timeout at a time, each wait chosen afresh (nextPollDelayMs): the
+    // backoff step counts the polls scheduled since this status began.
+    let disconnectedPolls = 0;
+    let timer: number | null = null;
+    let stopped = false;
+    const schedule = () => {
+      const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });
+      if (!realtimeConnected) disconnectedPolls++;
+      timer = window.setTimeout(tick, delay);
+    };
+    const tick = () => {
+      if (stopped) return;
+      schedule();
       if (
         polling ||
         document.visibilityState !== "visible" ||
@@ -2479,10 +2537,15 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       pollOnce().finally(() => {
         polling = false;
       });
-    }, pollIntervalMs(realtimeConnected));
-    return () => window.clearInterval(timer);
-    // realtimeConnected: a change of channel status restarts the interval at
-    // the new pace, so a disconnect is back to 12 s at once.
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+    // realtimeConnected: a change of channel status starts the chain again
+    // at the new pace -- 30 s once connected, the backoff's first step (12 s)
+    // after a disconnect.
   }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
@@ -2907,12 +2970,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (dealStep.liveKey) setDealLiveKey(dealStep.liveKey);
     setDealSeenKey(dealStep.seenKey);
   }
-  // A SPECTATOR'S DEAL SOUND (spectator chat): a spectator has no deal
-  // animation, which is what plays a player's shuffle and deal; it plays here
-  // instead when a hand is dealt live, under the animation's own key (claimed
-  // once, so a re-render never repeats it). Players: unchanged.
-  const spectatorDealKey = spectatorDealSound({ spectating, liveKey: dealLiveKey, handKey: dealHandKey });
-  if (spectatorDealKey && phase === "discard") tableSound.dealStart(dealKey(spectatorDealKey));
   // The square table (by default for 2, 3 and 4 players, Teams or Solo,
   // self-scoring ones too, without ?layout=classic -- 3- and 4-player
   // self-scoring always): only it shows the
