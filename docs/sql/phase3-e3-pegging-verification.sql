@@ -1,5 +1,16 @@
 -- Phase 3, step E3: VERIFICATION.
 --
+-- STEP 3, SLICE C NOTE (2026-11-24, docs/sql/end-empty-tables.sql): two
+-- triggers now sit on table_members beside table_members_assign_seat:
+-- table_members_end_when_empty (AFTER DELETE: the last non-computer seat
+-- leaving a human table ends it as 'empty') and table_members_require_open
+-- (BEFORE INSERT: no seat at a table that is not open). leave_table,
+-- end_timed_out_sessions, assign_table_seat and table_host are UNCHANGED,
+-- so the md5s this suite expects for them still hold. A table whose last
+-- player leaves (or loses their seat any other way) now ENDS instead of
+-- staying open; this suite stops at its fingerprint checks after C1 anyway
+-- (AGENTS.md), so nothing here was re-baselined.
+--
 -- Run in the Supabase Dashboard -> SQL Editor AFTER
 -- docs/sql/phase3-e3-pegging.sql. The whole file is ONE DO block: run it as
 -- is.
