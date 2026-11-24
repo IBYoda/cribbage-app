@@ -149,18 +149,18 @@ begin
            || case when (tg.tgtype & 8) = 8 then ' DELETE' else '' end
            || case when (tg.tgtype & 16) = 16 then ' UPDATE' else '' end
            || case when (tg.tgtype & 1) = 1 then ' ROW' else ' STATEMENT' end
-           || '|' || tg.tgfoid::regprocedure::text || '|' || tg.tgenabled
+           || '|' || tg.tgfoid::regprocedure::text || '|' || tg.tgenabled::text
     into v_txt
     from pg_trigger tg
-    where tg.tgrelid = 'public.table_members'::regclass and tg.tgname = v_rec.name and not tg.tgisinternal;
+    where tg.tgrelid = 'public.table_members'::regclass and tg.tgname::text = v_rec.name and not tg.tgisinternal;
     if v_txt is distinct from v_rec.kind || '|' || replace(v_rec.fn, 'public.', '') || '|O'
        and v_txt is distinct from v_rec.kind || '|' || v_rec.fn || '|O' then
       raise exception 'FAIL [C2] trigger % is "%"; expected "%|%|O" (enabled).', v_rec.name, coalesce(v_txt, 'missing'), v_rec.kind, v_rec.fn;
     end if;
   end loop;
-  if not ('table_members_require_open' > 'table_members_assign_seat')
+  if not ('table_members_require_open'::text collate "C" > 'table_members_assign_seat'::text collate "C")
      or not exists (select 1 from pg_trigger tg where tg.tgrelid = 'public.table_members'::regclass
-                      and tg.tgname = 'table_members_assign_seat' and tg.tgenabled <> 'D') then
+                      and tg.tgname::text = 'table_members_assign_seat' and tg.tgenabled::text <> 'D') then
     raise exception 'FAIL [C2] table_members_require_open must fire after an enabled table_members_assign_seat.';
   end if;
   v_checks := v_checks + 1;
@@ -212,9 +212,9 @@ begin
   if to_regclass('cron.job') is null then
     v_cron := 'pg_cron not installed: C5 skipped';
   else
-    execute 'select count(*) from cron.job where jobname = $1 and schedule = $2 and command ilike $3'
+    execute 'select count(*)::int from cron.job where jobname::text = $1 and schedule::text = $2 and command::text ilike $3'
     into v_n
-    using 'end-empty-tables', '*/5 * * * *', '%public.end_empty_tables()%';
+    using 'end-empty-tables'::text, '*/5 * * * *'::text, '%public.end_empty_tables()%'::text;
     if v_n <> 1 then
       raise exception 'FAIL [C5] the pg_cron job end-empty-tables (*/5 * * * *, select public.end_empty_tables();) is missing or different (% matching).', v_n;
     end if;
