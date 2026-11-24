@@ -36,7 +36,15 @@ import { WaitingRoom } from "@/components/table/WaitingRoom";
 import { buildPlates, cardsLeft, cribCountDuringDiscard, handSizes, nextSeat, seatOrderFrom, seatPlaces, winHeadline } from "@/lib/phase3";
 import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
-import { GENERIC_ERROR_TEXT, joinOutcome, logUnexpectedError, notFoundText, rpcRefusal, tableHref } from "@/lib/oneTable";
+import {
+  GENERIC_ERROR_TEXT,
+  joinOutcome,
+  logUnexpectedError,
+  notFoundText,
+  rpcRefusal,
+  tableEndedMessage,
+  tableHref,
+} from "@/lib/oneTable";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { SoundToggle } from "@/components/table/SoundToggle";
@@ -409,16 +417,8 @@ function membersDiff(shown: Member[], fresh: Member[]) {
   return out;
 }
 
-// A closed computer table has no ended_reason: it was closed by its player,
-// not an admin -- with Leave (leave_computer_table), or quietly, by starting,
-// joining or watching another table (docs/sql/join-create.sql: single-player
-// games never block; a tab still open on the old game lands here).
-function tableEndedMessage(endedReason: string | null | undefined, computerLevel?: string | null) {
-  if (computerLevel && endedReason == null) return "This single-player game has ended.";
-  return endedReason === "timeout"
-    ? "This table was automatically ended after being open for 12 hours."
-    : "This table has been ended by an admin.";
-}
+// (tableEndedMessage, the message for each tables.ended_reason, lives in
+// lib/oneTable.ts so it can be tested: 'empty' since step 3 slice C.)
 
 function displayName(member: Member | undefined) {
   return member?.nickname || "Unnamed player";

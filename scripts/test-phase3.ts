@@ -56,6 +56,8 @@ import {
   GENERIC_ERROR_TEXT,
   QUIET_CLOSE_NOTE,
   RATE_LIMITED_TEXT,
+  TABLE_EMPTY_ENDED_TEXT,
+  TABLE_ENDED_TEXT,
   TABLE_FULL_TEXT,
   alreadyAtTableText,
   createdTableCode,
@@ -63,6 +65,7 @@ import {
   lockedOutText,
   notFoundText,
   rpcRefusal,
+  tableEndedMessage,
   tableHref,
 } from "../lib/oneTable";
 import {
@@ -1306,6 +1309,30 @@ check("One table at a time: refusals map to plain messages, never raw server tex
   }
   strictEqual(QUIET_CLOSE_NOTE.length > 0, true);
 });
+check("Ended tables: each tables.ended_reason has its own message, 'empty' included; unknown reasons fall through", () => {
+  // Step 3 slice C (docs/sql/end-empty-tables.sql): the last seat leaving ends the table as 'empty'.
+  strictEqual(tableEndedMessage("empty", null), "Everyone left, so this table has closed.");
+  strictEqual(TABLE_EMPTY_ENDED_TEXT, "Everyone left, so this table has closed.");
+  // A computer table the sweep ended (a human seat removed without leave_computer_table).
+  strictEqual(tableEndedMessage("empty", "easy"), TABLE_EMPTY_ENDED_TEXT);
+  // The existing ones, unchanged.
+  strictEqual(tableEndedMessage(null, "easy"), "This single-player game has ended.");
+  strictEqual(tableEndedMessage("timeout", null), "This table was automatically ended after being open for 12 hours.");
+  strictEqual(tableEndedMessage("admin", null), "This table has been ended by an admin.");
+  strictEqual(tableEndedMessage("admin", "hard"), "This table has been ended by an admin.");
+  // Unknown or missing reasons fall through to the admin message, as before.
+  strictEqual(tableEndedMessage("something-new", null), "This table has been ended by an admin.");
+  strictEqual(tableEndedMessage(null, null), "This table has been ended by an admin.");
+  strictEqual(tableEndedMessage(undefined, undefined), "This table has been ended by an admin.");
+  // Every screen that shows a reason goes through it: the realtime UPDATE, the stale-tab check, a reloaded URL.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual((view.match(/setError\(tableEndedMessage\(/g) ?? []).length, 3);
+  strictEqual(view.includes("setError(tableEndedMessage(updatedTable.ended_reason, level));"), true);
+  strictEqual(view.includes("setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));"), true);
+  strictEqual(/function tableEndedMessage\(/.test(view), false, "one definition, in lib/oneTable.ts");
+  // The "table must be open" trigger's refusal reads plainly.
+  deepStrictEqual(rpcRefusal({ message: "This table has ended.", code: "P0001" }), { kind: "ended", text: TABLE_ENDED_TEXT });
+});
 check("Single player: create_computer_table keeps its code retry and 'not set up yet', and maps the one-table refusals", () => {
   const page = readFileSync("app/single-player/page.tsx", "utf8");
   strictEqual(page.includes("if (error.code === UNIQUE_VIOLATION) {\n        continue;\n      }") || page.includes("if (error.code === UNIQUE_VIOLATION) {\r\n        continue;\r\n      }"), true);
@@ -1353,7 +1380,7 @@ check("Stale tab: losing my own seat reads the table's status once; an ended sin
   strictEqual(/checkTableEndedRef\.current = \(tableId: string\) => \{\s*if \(spectating \|\| leavingRef\.current\) return;/.test(view), true);
   strictEqual(/\.select\("status, ended_reason, computer_level"\)\s*\.eq\("id", tableId\)/.test(view), true);
   strictEqual(view.includes("setError(tableEndedMessage(data.ended_reason, data.computer_level));"), true);
-  strictEqual(view.includes('if (computerLevel && endedReason == null) return "This single-player game has ended.";'), true);
+  strictEqual(readFileSync("lib/oneTable.ts", "utf8").includes('if (computerLevel && endedReason == null) return "This single-player game has ended.";'), true);
   // The closed screen offers a new single-player game and home.
   strictEqual(view.includes('<Link href="/single-player" className="peg-btn peg-btn--brass">'), true);
 });

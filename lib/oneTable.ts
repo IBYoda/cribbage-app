@@ -27,6 +27,7 @@ export type RpcErrorLike = {
 
 export type Refusal =
   | { kind: "already_at_table"; text: string; tableCode: string }
+  | { kind: "ended"; text: string }
   | { kind: "locked_out"; text: string }
   | { kind: "rate_limited"; text: string }
   | { kind: "not_found"; text: string }
@@ -35,6 +36,10 @@ export type Refusal =
 
 export const GENERIC_ERROR_TEXT = "Something went wrong. Please try again.";
 export const TABLE_FULL_TEXT = "This table is full.";
+// The "table must be open" trigger's refusal (docs/sql/end-empty-tables.sql):
+// a seat taken just as the table ended (the last player leaving at the same
+// moment, or the empty-table sweep).
+export const TABLE_ENDED_TEXT = "This table has ended.";
 export const RATE_LIMITED_TEXT = "You've done that too many times in the last hour. Please try again later.";
 
 // The one-line note where a start can quietly end a single-player game.
@@ -85,7 +90,29 @@ export function rpcRefusal(error: RpcErrorLike | null | undefined): Refusal {
     return { kind: "rate_limited", text: KNOWN_LIMIT_MESSAGE.test(message) ? message : RATE_LIMITED_TEXT };
   }
   if (message === TABLE_FULL_TEXT) return { kind: "full", text: TABLE_FULL_TEXT };
+  if (message === TABLE_ENDED_TEXT) return { kind: "ended", text: TABLE_ENDED_TEXT };
   return { kind: "unknown", text: GENERIC_ERROR_TEXT };
+}
+
+// WHY A TABLE ENDED, for a player's screen (components/table/TableView.tsx:
+// the realtime tables UPDATE, the stale-tab check, a reloaded old URL --
+// the same account's second tab lands on one of these). tables.ended_reason:
+//   NULL with a computer level  a single-player game closed by its player
+//                               (Leave, or the one-table rule's quiet close)
+//   'empty'                     everyone left (step 3 slice C: the last
+//                               seat's delete, or the empty-table sweep;
+//                               docs/sql/end-empty-tables.sql)
+//   'timeout'                   the 12-hour sweep
+//   anything else ('admin')     an admin's Force-End
+// Spectators never see these: their screen is "This table has closed."
+export const TABLE_EMPTY_ENDED_TEXT = "Everyone left, so this table has closed.";
+
+export function tableEndedMessage(endedReason: string | null | undefined, computerLevel?: string | null): string {
+  if (computerLevel && endedReason == null) return "This single-player game has ended.";
+  if (endedReason === "empty") return TABLE_EMPTY_ENDED_TEXT;
+  return endedReason === "timeout"
+    ? "This table was automatically ended after being open for 12 hours."
+    : "This table has been ended by an admin.";
 }
 
 // join_table_by_code's answer (one row). outcome: joined / already_seated /
