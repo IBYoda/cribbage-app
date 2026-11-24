@@ -22,6 +22,7 @@ import {
   mergeChatRoster,
   NOBODY_SEATED,
   playChosenFromSearch,
+  playHref,
   SPECTATOR_NO_GAME_TEXT,
   soundSeatId,
   spectatorEyeCount,
@@ -38,13 +39,17 @@ import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import {
   GENERIC_ERROR_TEXT,
+  TABLE_ENDED_TEXT,
   joinOutcome,
   logUnexpectedError,
   notFoundText,
   rpcRefusal,
   tableEndedMessage,
   tableHref,
+  tableIdFromSearch,
 } from "@/lib/oneTable";
+import { previewFromRow, previewHasSeat, type JoinPreview } from "@/lib/joinConfirm";
+import { TableConfirm } from "@/components/brand/TableConfirm";
 import { MugginsNotice } from "@/components/brand/MugginsNotice";
 import { CountsToggle } from "@/components/table/CountsToggle";
 import { SoundToggle } from "@/components/table/SoundToggle";
@@ -165,6 +170,26 @@ type TableRow = {
   // is offered "Watch instead".
   allow_spectators: boolean;
 };
+
+// The columns a player's (or spectator's) setup reads, by id.
+const TABLE_ROW_COLUMNS =
+  "id, code, status, ended_reason, is_muggins, created_by, max_players, team_mode, computer_level, allow_spectators";
+
+// A previewed table (join_table_by_code's row, lib/joinConfirm.ts) as the
+// TableRow the page keeps.
+function tableRowFromPreview(p: JoinPreview): TableRow {
+  return {
+    id: p.tableId,
+    code: p.code,
+    status: p.status,
+    is_muggins: p.isMuggins,
+    created_by: p.createdBy ?? "",
+    max_players: p.maxPlayers,
+    team_mode: p.teamMode ?? "teams",
+    computer_level: p.computerLevel,
+    allow_spectators: p.allowSpectators,
+  };
+}
 
 type Member = {
   user_id: string;
@@ -427,6 +452,10 @@ function displayName(member: Member | undefined) {
 // SPECTATING (PRD item 40, part B): the watch page (app/watch/[code]) draws
 // this same table read-only. Present only there; see SpectateProps.
 export type SpectateProps = {
+  // The table being watched, by id (watch_table's answer). The spectating
+  // setup reads THIS table, never "whatever table holds the code now" (step
+  // 3 slice B: codes are freed when a table ends).
+  tableId: string;
   // Called on the safety poll, and when the tab becomes visible or the
   // device comes back online: the watch page's spectator_heartbeat.
   heartbeat: () => void;
@@ -524,6 +553,22 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // docs/sql/join-create.sql): the code of the table this player is already
   // at, for its "Go to table NNNN" button. Cleared by a fresh setup.
   const [goToCode, setGoToCode] = useState<string | null>(null);
+  // ...and that table's id, when the server sent it ("Go to table" carries it).
+  const [goToId, setGoToId] = useState<string | null>(null);
+  // The error on screen is a CLOSED HUMAN TABLE (ended, or the id this page
+  // holds no longer matches its code): Back to home and Try a different code,
+  // no Retry (nothing to retry). Cleared by a fresh setup.
+  const [closedHumanTable, setClosedHumanTable] = useState(false);
+  // THE CONFIRM SCREEN (step 3 slice B): a table previewed by a bare code,
+  // waiting for "Join" (lib/joinConfirm.ts). Cleared by a fresh setup.
+  const [confirm, setConfirm] = useState<JoinPreview | null>(null);
+  // THE TABLE THIS PAGE IS ABOUT, by id, once known (?t=, the preview, or
+  // the watch page's ticket). Every later read -- Retry, Play's re-run, the
+  // seat -- uses it, never the code again: a code is freed when its table
+  // ends, so a second lookup by code could find a stranger's table.
+  const heldIdRef = useRef<string | null>(null);
+  // The same id, for links drawn on screen (Play / Watch instead).
+  const [heldId, setHeldId] = useState<string | null>(null);
   // Me, for the stale-tab check below (the roster losing me).
   const myUserIdRef = useRef<string | null>(null);
   const [activeGame, setActiveGame] = useState<Game | null>(null);
@@ -819,6 +864,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         .then(({ data }) => {
           if (!data || data.status === "open" || leavingRef.current) return;
           setClosedComputerTable(Boolean(data.computer_level));
+          setClosedHumanTable(!data.computer_level);
           setError(tableEndedMessage(data.ended_reason, data.computer_level));
         });
     };
@@ -1369,18 +1415,24 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       setTable(row);
 
       if (!alreadySeated) {
-        const { data, error: joinError } = await playerRpc("join_table_by_code", { p_code: row.code });
+        // BY ID (step 3 slice B): the table this page shows, and no other --
+        // if its code now belongs to a different table, the answer is
+        // not_found (not counted as a wrong guess).
+        const { data, error: joinError } = await playerRpc("join_table_by_code", { p_code: row.code, p_table_id: row.id });
         if (isCancelled()) return;
         if (joinError) {
           const why = rpcRefusal(joinError);
           if (why.kind === "unknown") logUnexpectedError("join_table_by_code", joinError);
           setGoToCode(why.kind === "already_at_table" ? why.tableCode : null);
+          setGoToId(why.kind === "already_at_table" ? (why.tableId ?? null) : null);
           setError(why.text);
           return;
         }
         const outcome = joinOutcome(data);
         if (outcome === "not_found") {
-          setError(notFoundText(row.code));
+          // This table ended (or its code moved on) since it was read.
+          setClosedHumanTable(true);
+          setError(TABLE_ENDED_TEXT);
           return;
         }
         if (outcome !== "joined" && outcome !== "already_seated") {
@@ -1395,6 +1447,18 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     [spectating, playerRpc, refreshTableState]
   );
 
+  // A different table code in the URL (a client-side navigation that keeps
+  // this component): the id held for the old code is dropped first, so the
+  // setup below never reads the old table under the new code.
+  const heldForCodeRef = useRef(code);
+  useEffect(() => {
+    if (heldForCodeRef.current !== code) {
+      heldForCodeRef.current = code;
+      heldIdRef.current = null;
+      setHeldId(null);
+    }
+  }, [code]);
+
   // Look up the table, join it (idempotent), then load the current roster.
   // retryKey lets the error screen's "Retry" button re-run this from scratch.
   useEffect(() => {
@@ -1405,14 +1469,84 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     async function setup() {
       setError(null);
       setClosedComputerTable(false);
+      setClosedHumanTable(false);
       setGoToCode(null);
+      setGoToId(null);
       setPendingJoin(null);
       setWatchOffer(null);
+      setConfirm(null);
+
+      // WHICH TABLE (step 3 slice B). A code is freed when its table ends,
+      // so it is looked up ONCE and the id held from then on:
+      //   * a spectator: the watch page's ticket (watch_table's answer);
+      //   * an id this page already holds (Retry, Play's re-run), or the
+      //     link's ?t= (every in-app link: Open Tables, Rejoin, a new table,
+      //     "Go to table"): that table, read by id. Ended -> its own reason;
+      //     the code now belongs to a different table -> "This table has
+      //     ended." Never a confirm, never a seat elsewhere.
+      //   * a bare code (typed, a shared or old link): the preview, then the
+      //     confirm screen for a new seat (already seated: straight in).
+      const heldId = spectating
+        ? (spectateRef.current?.tableId ?? null)
+        : (heldIdRef.current ?? tableIdFromSearch(window.location.search));
+
+      if (!heldId) {
+        // THE BARE CODE: join_table_by_code's preview (seats nobody, ends
+        // nothing; a wrong code counts toward the lockout).
+        const { data: previewData, error: previewError } = await playerRpc("join_table_by_code", {
+          p_code: code,
+          p_preview: true,
+        });
+        if (cancelled) return;
+        if (previewError) {
+          const why = rpcRefusal(previewError);
+          if (why.kind === "unknown") logUnexpectedError("join_table_by_code preview", previewError);
+          setGoToCode(why.kind === "already_at_table" ? why.tableCode : null);
+          setGoToId(why.kind === "already_at_table" ? (why.tableId ?? null) : null);
+          setError(why.text);
+          return;
+        }
+        const answer = previewFromRow(previewData);
+        if (!answer) {
+          logUnexpectedError("join_table_by_code preview", previewData);
+          setError(GENERIC_ERROR_TEXT);
+          return;
+        }
+        if (answer.outcome === "not_found") {
+          setError(notFoundText(code));
+          return;
+        }
+        heldIdRef.current = answer.preview.tableId;
+        setHeldId(answer.preview.tableId);
+        const previewed = tableRowFromPreview(answer.preview);
+        if (answer.outcome === "already_seated") {
+          // Already seated: no confirm. The URL now carries the id, so a
+          // reload reads this table by id.
+          router.replace(tableHref(code, previewed.id), { scroll: false });
+          await takeSeat(previewed, () => cancelled, true);
+          return;
+        }
+        // A NEW seat by a bare code: the nickname step first (only when there
+        // is a seat to take; back to this bare code after, which previews
+        // again), then THE CONFIRM SCREEN -- Play-or-Watch and the Muggins
+        // agreement are folded into it.
+        if (previewHasSeat(answer.preview)) {
+          const needs = await fetchNeedsNickname(session!.user.id);
+          if (cancelled) return;
+          if (needs === true) {
+            setToNickname(true);
+            router.replace(nicknameStepHref(`/tables/${code}`));
+            return;
+          }
+        }
+        setConfirm(answer.preview);
+        return;
+      }
 
       const { data: tableRow, error: tableError } = await supabase
         .from("tables")
-        .select("id, code, status, ended_reason, is_muggins, created_by, max_players, team_mode, computer_level, allow_spectators")
-        .eq("code", code)
+        .select(TABLE_ROW_COLUMNS)
+        .eq("id", heldId)
         .maybeSingle();
 
       if (cancelled) return;
@@ -1422,16 +1556,25 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         setError(GENERIC_ERROR_TEXT);
         return;
       }
-      if (!tableRow) {
-        setError(`No table found with code ${code}.`);
+      if (!tableRow || tableRow.code !== code) {
+        // The id no longer belongs to this code: that table is gone.
+        if (spectating) {
+          spectateRef.current?.onTableEnded();
+          return;
+        }
+        setClosedHumanTable(true);
+        setError(TABLE_ENDED_TEXT);
         return;
       }
+      heldIdRef.current = tableRow.id;
+      setHeldId(tableRow.id);
       if (tableRow.status !== "open") {
         if (spectating) {
           spectateRef.current?.onTableEnded();
           return;
         }
         setClosedComputerTable(Boolean(tableRow.computer_level));
+        setClosedHumanTable(!tableRow.computer_level);
         setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));
         return;
       }
@@ -1503,7 +1646,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         if (cancelled) return;
         if (needs === true) {
           setToNickname(true);
-          router.replace(nicknameStepHref(`/tables/${tableRow.code}`));
+          const back =
+            playChosenRef.current || playChosenFromSearch(window.location.search)
+              ? playHref(tableRow.code, tableRow.id)
+              : tableHref(tableRow.code, tableRow.id);
+          router.replace(nicknameStepHref(back));
           return;
         }
       }
@@ -1522,11 +1669,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         }
       }
 
-      // SLICE B (not built): the "Join table NNNN hosted by X?" confirmation
-      // goes here -- after the nickname gate and the Muggins notice, before
-      // a NEW seat is taken (never for isMember) -- with
-      // join_table_by_code(code, p_preview => true) supplying the host's
-      // nickname once private tables can't be read directly.
+      // (A bare code's new seat went through the confirm screen above; this
+      // path is an in-app link, by id: Open Tables' rows don't confirm.)
       await takeSeat(tableRow, () => cancelled, isMember);
     }
 
@@ -1535,7 +1679,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     return () => {
       cancelled = true;
     };
-  }, [session, code, retryKey, takeSeat, router, spectating, refreshTableState]);
+  }, [session, code, retryKey, takeSeat, router, spectating, refreshTableState, playerRpc]);
 
   // Creating the game and dealing are one atomic server-side action now. The
   // shuffle happens inside Postgres, so no browser ever receives the full deck
@@ -2430,6 +2574,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           if (updatedTable.status !== "open" && !leavingRef.current) {
             const level = updatedTable.computer_level ?? table.computer_level;
             setClosedComputerTable(Boolean(level));
+            setClosedHumanTable(!level);
             setError(tableEndedMessage(updatedTable.ended_reason, level));
           }
         }
@@ -2755,7 +2900,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         {goToCode ? (
           // Already at another table (one table at a time): straight to it.
           <div className="flex flex-col gap-2.5">
-            <Link href={tableHref(goToCode)} className="peg-btn peg-btn--brass">
+            <Link href={tableHref(goToCode, goToId)} className="peg-btn peg-btn--brass">
               Go to table {goToCode}
             </Link>
             <Link href="/" className="peg-btn peg-btn--ghost">
@@ -2772,6 +2917,16 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               Back to home
             </Link>
           </div>
+        ) : closedHumanTable ? (
+          // A closed human table: nothing to retry (step 3 slice B).
+          <div className="flex flex-col gap-2.5">
+            <Link href="/" className="peg-btn peg-btn--brass">
+              Back to home
+            </Link>
+            <Link href="/tables/join" className="peg-btn peg-btn--ghost">
+              Try a different code
+            </Link>
+          </div>
         ) : (
           <div className="flex flex-col gap-2.5">
             <button
@@ -2785,6 +2940,28 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             </Link>
           </div>
         )}
+      </CardRoomFrame>
+    );
+  }
+
+  // THE CONFIRM SCREEN (step 3 slice B): a bare code's new seat. "Join"
+  // takes the seat at exactly the previewed table (by id), and the URL then
+  // carries the id; Watch goes to the watch page with the id; Back to home.
+  if (confirm) {
+    const previewed = confirm;
+    return (
+      <CardRoomFrame backHome={false}>
+        <TableConfirm
+          preview={previewed}
+          mode="join"
+          onJoin={() => {
+            const row = tableRowFromPreview(previewed);
+            playChosenRef.current = true;
+            setConfirm(null);
+            router.replace(tableHref(code, row.id), { scroll: false });
+            void takeSeat(row, () => false, false);
+          }}
+        />
       </CardRoomFrame>
     );
   }
@@ -2820,6 +2997,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       <CardRoomFrame backHome={false}>
         <JoinChoice
           code={code}
+          tableId={heldId}
           onPlay={() => {
             playChosenRef.current = true;
             setWatchOffer(null);
@@ -2843,7 +3021,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           You can watch the game instead.
         </p>
         <div className="flex flex-col gap-2.5">
-          <Link href={watchHref(code)} className="peg-btn peg-btn--brass">
+          <Link href={watchHref(code, heldId)} className="peg-btn peg-btn--brass">
             Watch instead
           </Link>
           <Link href="/" className="peg-btn peg-btn--ghost">

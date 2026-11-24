@@ -5,6 +5,23 @@
 -- STATUS: written, NOT RUN yet. Kept for reference; run only if slice A has
 -- to come out.
 --
+-- !!! AFTER STEP 3 SLICE B, DO NOT RUN THIS FILE AS IT IS. !!!
+--   * Once slice B part 1 (docs/sql/free-codes-part1.sql) is in,
+--     join_table_by_code and watch_table have new signatures; section 2a
+--     below re-creates watch_table(text) BESIDE watch_table(text, uuid)
+--     (two overloads: calls with one argument become ambiguous) and section
+--     3's "drop function ... join_table_by_code(text, boolean)" misses the
+--     new one. Roll slice B back first: free-codes-part2-rollback.sql (if
+--     part 2 ran), then free-codes-part1-rollback.sql, which restore exactly
+--     the slice A functions this file expects.
+--   * Once slice B part 2 (docs/sql/free-codes-part2.sql) has run and any
+--     code has been REUSED, two tables share a code. Section 2a's
+--     watch_table (spectators-join-or-watch.sql's text) looks a table up by
+--     code with NO status filter and no order -- it could pick the ended
+--     table, or the wrong one -- and tables_code_key can never come back.
+--     Then slice A should not be rolled back at all: keep slice B's
+--     watch_table and fix forward.
+--
 -- BEFORE IT: the app must be back on the direct inserts (Start a Table's
 -- insert into tables, TableView's upsert into table_members). An app that
 -- calls create_table or join_table_by_code breaks the moment this runs

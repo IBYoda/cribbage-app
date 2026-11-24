@@ -16,12 +16,15 @@ import { playHref, watchHref } from "@/lib/spectators";
 
 export function JoinChoice({
   code,
+  tableId,
   hostName,
   onPlay,
   onCancel,
   headingId = "join-choice-title",
 }: {
   code: string;
+  // The table's id: Play and Watch carry it (?t=, step 3 slice B).
+  tableId?: string | null;
   hostName?: string | null;
   // The table page's own choice: stay on the page and take the seat.
   // Omitted (Home): Play is a link to the table page with ?play=1.
@@ -45,11 +48,11 @@ export function JoinChoice({
             Play
           </button>
         ) : (
-          <Link href={playHref(code)} className="peg-btn peg-btn--brass join-choice__btn" autoFocus>
+          <Link href={playHref(code, tableId)} className="peg-btn peg-btn--brass join-choice__btn" autoFocus>
             Play
           </Link>
         )}
-        <Link href={watchHref(code)} className="peg-btn peg-btn--ghost join-choice__btn">
+        <Link href={watchHref(code, tableId)} className="peg-btn peg-btn--ghost join-choice__btn">
           Watch
         </Link>
         <button type="button" onClick={onCancel} className="join-choice__cancel">
@@ -67,7 +70,7 @@ export function JoinChoiceSheet({
   table,
   onClose,
 }: {
-  table: { code: string; hostName: string } | null;
+  table: { code: string; hostName: string; id?: string } | null;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -97,7 +100,7 @@ export function JoinChoiceSheet({
       }}
     >
       {table && (
-        <JoinChoice code={table.code} hostName={table.hostName} onCancel={onClose} headingId="join-sheet-title" />
+        <JoinChoice code={table.code} tableId={table.id} hostName={table.hostName} onCancel={onClose} headingId="join-sheet-title" />
       )}
     </dialog>
   );

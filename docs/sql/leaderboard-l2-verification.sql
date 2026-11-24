@@ -3,6 +3,7 @@
 -- SUPERSEDED once leaderboard-l3-hidden-accounts.sql is applied: run
 -- docs/sql/leaderboard-l3-verification.sql instead, which keeps every check
 -- below that still applies and adds the hidden-account checks.
+-- STATUS 2026-11-24: do not run against the live DB. W1 fails by design once the oldest accounts are in leaderboard_hidden (this suite's player pick does not skip hidden accounts). Use docs/sql/leaderboard-l3-verification.sql instead (35 checks, passes).
 --
 -- Run in the Supabase Dashboard -> SQL Editor AFTER
 -- docs/sql/leaderboard-l2-function.sql (L1 applied too). The whole file is
@@ -141,7 +142,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 8
   ) free_codes;

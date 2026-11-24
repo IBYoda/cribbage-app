@@ -12,6 +12,8 @@ const LIVE_GAME_STATUSES = ["cutting", "active"];
 
 // An open table the viewer is seated at (any visibility).
 export type MyTable = {
+  // The table's id: every link to it carries it (?t=, step 3 slice B).
+  id?: string;
   code: string;
   isMuggins: boolean; // a Muggins table: listed with the "Self-Scoring (Muggins)" tag
   others: string[]; // the other players' names
@@ -21,6 +23,8 @@ export type MyTable = {
 
 // A public table the viewer could join.
 export type JoinableTable = {
+  // The table's id: every link to it carries it (?t=, step 3 slice B).
+  id?: string;
   code: string;
   isMuggins: boolean; // likewise
   hostId?: string; // the first seated player
@@ -72,6 +76,7 @@ export async function loadMyTables(userId: string): Promise<MyTable[] | null> {
   const live = new Set((games ?? []).map((g) => g.table_id));
 
   return open.map((t) => ({
+    id: t.id,
     code: t.code,
     isMuggins: t.isMuggins,
     others: (members ?? [])
@@ -159,6 +164,7 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
   return shown.map((t) => {
     const host = byId.get(t.host);
     return {
+      id: t.id,
       code: t.code,
       isMuggins: t.isMuggins,
       hostId: t.host,
@@ -176,6 +182,8 @@ export async function loadJoinableTables(userId: string): Promise<JoinableTable[
 // A public table the viewer could watch (PRD item 40): its game has started,
 // or it is full and has not started yet.
 export type WatchableTable = {
+  // The table's id: every link to it carries it (?t=, step 3 slice B).
+  id?: string;
   code: string;
   isMuggins: boolean;
   hostId?: string; // the first seated player
@@ -241,6 +249,7 @@ export async function loadWatchableTables(userId: string): Promise<WatchableTabl
     if (!watchable) return [];
     return [
       {
+        id: t.id,
         code: t.code,
         isMuggins: t.is_muggins === true,
         createdAt: t.created_at,
@@ -260,6 +269,7 @@ export async function loadWatchableTables(userId: string): Promise<WatchableTabl
   return shown.map((t) => {
     const host = byId.get(t.host);
     return {
+      id: t.id,
       code: t.code,
       isMuggins: t.isMuggins,
       hostId: t.host,

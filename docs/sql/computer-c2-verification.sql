@@ -108,6 +108,7 @@ declare
   v_s2 text[];
   v_card text;
   v_txt text;
+  v_txt2 text;
   v_msg text;
   v_msg2 text;
   v_state text;
@@ -156,7 +157,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 8
   ) free_codes;
@@ -318,11 +322,15 @@ begin
   select r.table_id, r.code into v_ct, v_txt from public.create_computer_table('easy', v_codes[1]) r;
   execute 'reset role';
   select count(*) into v_n from public.tables t
-  where t.id = v_ct and t.code = v_codes[1] and t.created_by = v_a and t.status = 'open'
+  where t.id = v_ct and t.code = v_txt and t.created_by = v_a and t.status = 'open'
     and t.is_public = false and t.is_muggins = false and t.max_players = 2 and t.computer_level = 'easy';
   select array_agg(tm.user_id order by tm.seat) into v_ids from public.table_members tm where tm.table_id = v_ct;
   select array_agg(tm.seat order by tm.seat)::text into v_msg from public.table_members tm where tm.table_id = v_ct;
-  if v_ct is null or v_txt is distinct from v_codes[1] or v_n <> 1
+  -- The code sent is kept until step 3 slice B part 2; after it the server
+  -- picks one (_pick_table_code) and the one sent is ignored.
+  if v_ct is null
+     or (v_txt is distinct from v_codes[1] and to_regprocedure('public._pick_table_code(integer)') is null)
+     or v_n <> 1
      or v_ids is distinct from array[v_a, v_c] or v_msg is distinct from '{1,2}' then
     raise exception 'FAIL [T1] create_computer_table: returned (%, %), table match %, seats % %; expected A in 1, computer in 2.',
       v_ct, v_txt, v_n, v_ids, v_msg;
@@ -352,13 +360,31 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [T4] A code collision: unique_violation (23505), as a direct insert.
+  -- [T4] The code A sends is already taken (by A's own open table T1).
+  --   Before step 3 slice B part 2: a unique_violation (23505), as a direct
+  --   insert, and nothing changes (the quiet close of T1 is rolled back too).
+  --   After part 2: the code sent is IGNORED -- the server picks a free one
+  --   -- so the call succeeds with another code. It would also quietly end
+  --   T1 (one table at a time), which the W/H checks below still play on, so
+  --   it runs inside a block that is rolled back on purpose.
   execute 'set local role authenticated';
-  v_state := null;
-  begin perform public.create_computer_table('easy', v_codes[1]); exception when others then v_state := sqlstate; end;
+  v_state := null; v_msg := null; v_txt2 := null;
+  begin
+    select r.code into v_txt2 from public.create_computer_table('easy', v_codes[1]) r;
+    raise exception 'T4_ROLLBACK';
+  exception when others then
+    v_state := sqlstate; v_msg := sqlerrm;
+  end;
   execute 'reset role';
-  if v_state is distinct from '23505' then
-    raise exception 'FAIL [T4] code collision: %; expected 23505.', coalesce(v_state, 'no error');
+  if to_regprocedure('public._pick_table_code(integer)') is null then
+    if v_state is distinct from '23505' then
+      raise exception 'FAIL [T4] code collision: %; expected 23505.', coalesce(v_state, 'no error');
+    end if;
+  elsif v_msg is distinct from 'T4_ROLLBACK' or v_txt2 is null or v_txt2 = v_codes[1] then
+    raise exception 'FAIL [T4] after slice B part 2, a taken code sent: error %, code %; expected success with a server-picked code other than %.', v_msg, v_txt2, v_codes[1];
+  end if;
+  if (select t.status from public.tables t where t.id = v_ct) is distinct from 'open' then
+    raise exception 'FAIL [T4] A''s table T1 is no longer open after T4 (the rollback block should have undone everything).';
   end if;
   v_checks := v_checks + 1;
 

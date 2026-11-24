@@ -186,7 +186,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 11
   ) free_codes;

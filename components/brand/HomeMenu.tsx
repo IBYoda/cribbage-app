@@ -7,6 +7,7 @@ import { SiteFooter } from "@/components/brand/SiteFooter";
 import { JoinTableForm } from "@/components/brand/JoinTableForm";
 import type { JoinableTable, MyTable, WatchableTable } from "@/lib/openTables";
 import { joinRowAction, splitOpenTableRows, watchHref, watchRowState } from "@/lib/spectators";
+import { tableHref } from "@/lib/oneTable";
 import { JoinChoiceSheet } from "@/components/brand/JoinChoice";
 import { MugginsTag } from "@/components/MugginsTag";
 import { Avatar } from "@/components/Avatar";
@@ -164,7 +165,7 @@ function OpenTables({
   const { joinRows, watchRows } = splitOpenTableRows(myCodes, joinable ?? [], state.watchable ?? []);
   // PLAY OR WATCH: the Join row whose choice is open (a table that allows
   // spectators); null when none is.
-  const [choosing, setChoosing] = useState<{ code: string; hostName: string } | null>(null);
+  const [choosing, setChoosing] = useState<{ code: string; hostName: string; id?: string } | null>(null);
   const hasRows = myRows.length + joinRows.length + watchRows.length > 0;
   const loading = !failed && !hasRows && (mine === null || joinable === null);
 
@@ -225,7 +226,7 @@ function OpenTables({
                     </span>
                   </span>
                 </span>
-                <Link href={`/tables/${t.code}`} className="rejoin-btn" aria-label={`Rejoin your table ${t.code}`}>
+                <Link href={tableHref(t.code, t.id)} className="rejoin-btn" aria-label={`Rejoin your table ${t.code}`}>
                   Rejoin
                 </Link>
               </li>
@@ -255,7 +256,7 @@ function OpenTables({
                 {joinRowAction({ allowSpectators: t.allowSpectators ?? false, isCreator: t.isCreator }) === "choose" ? (
                   <button
                     type="button"
-                    onClick={() => setChoosing({ code: t.code, hostName: t.hostName })}
+                    onClick={() => setChoosing({ code: t.code, hostName: t.hostName, id: t.id })}
                     className="peg-btn peg-btn--brass peg-btn--small shrink-0"
                     aria-label={`Join ${t.hostName}'s table`}
                     aria-haspopup="dialog"
@@ -264,7 +265,7 @@ function OpenTables({
                   </button>
                 ) : (
                   <Link
-                    href={`/tables/${t.code}`}
+                    href={tableHref(t.code, t.id)}
                     className="peg-btn peg-btn--brass peg-btn--small shrink-0"
                     aria-label={`Join ${t.hostName}'s table`}
                   >
@@ -295,7 +296,7 @@ function OpenTables({
                   </span>
                 </span>
                 <Link
-                  href={watchHref(t.code)}
+                  href={watchHref(t.code, t.id)}
                   className="peg-btn peg-btn--brass peg-btn--small shrink-0"
                   aria-label={`Watch ${t.hostName}'s table`}
                 >

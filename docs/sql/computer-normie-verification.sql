@@ -71,10 +71,16 @@ begin
 
   select min(lpad(n::text, 4, '0')) into v_code
   from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'));
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null));
   select min(lpad(n::text, 4, '0')) into v_code2
   from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     and lpad(n::text, 4, '0') <> v_code;
   if v_code is null or v_code2 is null then
     raise exception 'SETUP: fewer than two unused table codes.';
@@ -114,7 +120,7 @@ begin
   v_state := null;
   begin
     insert into public.tables (code, created_by, computer_level) values (v_code2, v_a, 'casual');
-    delete from public.tables where code = v_code2;
+    delete from public.tables where code = v_code2 and status <> 'ended';  -- only the row just inserted (slice B: ended tables may share a code)
   exception when others then v_state := sqlstate;
   end;
   if v_state is not null then
@@ -174,11 +180,15 @@ begin
   select r.table_id, r.code into v_ct, v_txt from public.create_computer_table('casual', v_code) r;
   execute 'reset role';
   select count(*) into v_n from public.tables t
-  where t.id = v_ct and t.code = v_code and t.created_by = v_a and t.status = 'open'
+  where t.id = v_ct and t.code = v_txt and t.created_by = v_a and t.status = 'open'
     and t.is_public = false and t.is_muggins = false and t.max_players = 2 and t.computer_level = 'casual';
   select array_agg(tm.user_id order by tm.seat) into v_ids from public.table_members tm where tm.table_id = v_ct;
   select array_agg(tm.seat order by tm.seat)::text into v_msg from public.table_members tm where tm.table_id = v_ct;
-  if v_ct is null or v_txt is distinct from v_code or v_n <> 1
+  -- The code sent is kept until step 3 slice B part 2; after it the server
+  -- picks one (_pick_table_code) and the one sent is ignored.
+  if v_ct is null
+     or (v_txt is distinct from v_code and to_regprocedure('public._pick_table_code(integer)') is null)
+     or v_n <> 1
      or v_ids is distinct from array[v_a, v_casual] or v_msg is distinct from '{1,2}' then
     raise exception 'FAIL [T1] create_computer_table(casual): returned (%, %), table match %, seats % %; expected A in 1, Normie in 2.',
       v_ct, v_txt, v_n, v_ids, v_msg;

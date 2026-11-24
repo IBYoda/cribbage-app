@@ -213,7 +213,8 @@ begin
   -- ==== CATALOG ===================================================================
   if to_regclass('public.attempt_log') is null
      or to_regprocedure('public.create_table(boolean, boolean, integer, text, boolean)') is null
-     or to_regprocedure('public.join_table_by_code(text, boolean)') is null then
+     or (to_regprocedure('public.join_table_by_code(text, boolean)') is null
+         and to_regprocedure('public.join_table_by_code(text, boolean, uuid)') is null) then
     raise exception 'SETUP: join-create.sql has not run (attempt_log, create_table or join_table_by_code missing).';
   end if;
 
@@ -259,9 +260,13 @@ begin
       ('public.create_table(boolean, boolean, integer, text, boolean)',
        'p_is_public boolean, p_is_muggins boolean, p_max_players integer, p_team_mode text, p_allow_spectators boolean',
        'TABLE(table_id uuid, code text)'),
-      ('public.join_table_by_code(text, boolean)',
-       'p_code text, p_preview boolean DEFAULT false',
-       'TABLE(outcome text, table_id uuid, code text, status text, ended_reason text, is_public boolean, is_muggins boolean, allow_spectators boolean, created_by uuid, max_players smallint, team_mode text, computer_level text, seat smallint, seated_count integer, game_live boolean, game_id uuid, host_nickname text)')
+      -- Slice A's shape, or -- once step 3 slice B part 1 has run -- its own
+      -- (p_table_id added last, host_avatar_url added last).
+      ('public.join_table_by_code(' || case when to_regprocedure('public.join_table_by_code(text, boolean, uuid)') is not null then 'text, boolean, uuid' else 'text, boolean' end || ')',
+       case when to_regprocedure('public.join_table_by_code(text, boolean, uuid)') is not null then 'p_code text, p_preview boolean DEFAULT false, p_table_id uuid DEFAULT NULL::uuid'
+            else 'p_code text, p_preview boolean DEFAULT false' end,
+       case when to_regprocedure('public.join_table_by_code(text, boolean, uuid)') is not null then 'TABLE(outcome text, table_id uuid, code text, status text, ended_reason text, is_public boolean, is_muggins boolean, allow_spectators boolean, created_by uuid, max_players smallint, team_mode text, computer_level text, seat smallint, seated_count integer, game_live boolean, game_id uuid, host_nickname text, host_avatar_url text)'
+            else 'TABLE(outcome text, table_id uuid, code text, status text, ended_reason text, is_public boolean, is_muggins boolean, allow_spectators boolean, created_by uuid, max_players smallint, team_mode text, computer_level text, seat smallint, seated_count integer, game_live boolean, game_id uuid, host_nickname text)' end)
     ) as t(fn, args, result)
   loop
     select p.prosecdef::text || ' ' || p.provolatile::text || ' '
@@ -293,10 +298,11 @@ begin
   select p.prosecdef::text || ' ' || p.provolatile::text || ' '
          || case when coalesce(p.proconfig, '{}') && array['search_path=""', 'search_path=''''']
                  then 'empty-path' else 'path:' || coalesce(p.proconfig::text, 'none') end
-  into v_txt from pg_proc p where p.oid = to_regprocedure('public.watch_table(text)');
+  -- watch_table(text), or watch_table(text, uuid) once slice B part 1 has run.
+  into v_txt from pg_proc p where p.oid = coalesce(to_regprocedure('public.watch_table(text, uuid)'), to_regprocedure('public.watch_table(text)'));
   if v_txt is distinct from 'true v empty-path'
-     or not has_function_privilege('authenticated', 'public.watch_table(text)', 'EXECUTE')
-     or has_function_privilege('anon', 'public.watch_table(text)', 'EXECUTE') then
+     or not has_function_privilege('authenticated', coalesce(to_regprocedure('public.watch_table(text, uuid)'), to_regprocedure('public.watch_table(text)')), 'EXECUTE')
+     or has_function_privilege('anon', coalesce(to_regprocedure('public.watch_table(text, uuid)'), to_regprocedure('public.watch_table(text)')), 'EXECUTE') then
     raise exception 'FAIL [C3] watch_table is "%" or its grants changed; expected definer, volatile, empty path, authenticated only.', v_txt;
   end if;
   select p.prosecdef::text || ' ' || coalesce(p.proconfig::text, 'none')
@@ -390,7 +396,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 8
   ) free_codes;
@@ -447,7 +456,7 @@ begin
     and t.is_public and not t.is_muggins and t.max_players = 2 and t.team_mode = 'teams'
     and t.allow_spectators and t.computer_level is null;
   select tm.seat into v_seat from public.table_members tm where tm.table_id = v_tid and tm.user_id = v_a;
-  select count(*) into v_n2 from public.tables t where t.code = v_code;
+  select count(*) into v_n2 from public.tables t where t.code = v_code and t.status <> 'ended';  -- slice B: one OPEN table per code
   if v_n <> 1 or v_seat is distinct from 1 or v_code !~ '^[0-9]{4}$' or v_n2 <> 1
      or (select count(*) from public.attempt_log al where al.user_id = v_a and al.action = 'create_table' and al.success) <> 1 then
     raise exception 'FAIL [K1] A''s table: options match %, A''s seat %, code "%" on % tables, create rows %; expected 1, 1, 4 digits on 1, 1.',
@@ -599,7 +608,10 @@ begin
 
   -- [J4] Unknown, ended and (preview) unknown: one answer, each counted.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   for v_rec in
     select * from (values (v_free, false), (v_codes[3], false), (v_free, true)) as t(code, preview)
   loop
@@ -778,7 +790,7 @@ begin
     get stacked diagnostics v_msg = message_text, v_detail = pg_exception_detail, v_hint = pg_exception_hint;
   end;
   execute 'reset role';
-  if v_msg is distinct from v_txt or v_detail is distinct from 'already_at_table' or v_hint is distinct from v_a_code
+  if v_msg is distinct from v_txt or v_detail is distinct from 'already_at_table' or split_part(v_hint, ' ', 1) is distinct from v_a_code  -- slice B: HINT "<code> <id>"
      or (select count(*) from public.tables t where t.created_by = v_a) <> 1 then
     raise exception 'FAIL [R1] A (seated) creating: "%" (%, %); expected "%" (already_at_table, %), no new table.', coalesce(v_msg, 'created'), v_detail, v_hint, v_txt, v_a_code;
   end if;
@@ -814,7 +826,10 @@ begin
 
   -- [R4] A starts a computer game: refused.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   v_msg := null;
   execute 'set local role authenticated';
   begin
@@ -823,7 +838,7 @@ begin
     v_msg := sqlerrm;
   end;
   execute 'reset role';
-  if v_msg is distinct from v_txt or exists (select 1 from public.tables t where t.code = v_free) then
+  if v_msg is distinct from v_txt or exists (select 1 from public.tables t where t.code = v_free and t.status <> 'ended') then
     raise exception 'FAIL [R4] A (seated) starting a computer game: "%"; expected "%", no table.', coalesce(v_msg, 'started'), v_txt;
   end if;
   v_checks := v_checks + 1;
@@ -894,7 +909,10 @@ begin
 
   -- [R7] S3 (watching W) starts a computer game: started, the W row gone.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_s3, 'role', 'authenticated')::text, true);
   v_msg := null; v_tid := null;
   execute 'set local role authenticated';
@@ -964,7 +982,7 @@ begin
   -- [K5] Every code create_table made: distinct, one table each.
   select count(*), count(distinct c) into v_n, v_n2 from unnest(v_made) c;
   if v_n <> v_n2
-     or exists (select 1 from unnest(v_made) c where (select count(*) from public.tables t where t.code = c) <> 1) then
+     or exists (select 1 from unnest(v_made) c where (select count(*) from public.tables t where t.code = c and t.status <> 'ended') <> 1) then
     raise exception 'FAIL [K5] create_table''s codes %: not distinct, or a code is on more than one table.', v_made;
   end if;
   v_checks := v_checks + 1;
@@ -972,7 +990,10 @@ begin
   -- ==== WATCH AND COMPUTER LIMITS ==========================================================
   -- [V1] V watches an unknown code: no exception, no row, one wrong code.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_v, 'role', 'authenticated')::text, true);
   v_msg := null; v_n := null;
   execute 'set local role authenticated';
@@ -1022,7 +1043,10 @@ begin
   insert into public.attempt_log (user_id, action, success, created_at)
   select v_k, 'create_computer_table', true, now() - interval '5 minutes' from generate_series(1, 10);
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_k, 'role', 'authenticated')::text, true);
   v_msg := null; v_detail := null;
   execute 'set local role authenticated';
@@ -1034,7 +1058,7 @@ begin
   execute 'reset role';
   if v_msg is distinct from 'You can start at most 10 single-player games an hour. Please try again later.'
      or v_detail is distinct from 'rate_limited'
-     or exists (select 1 from public.tables t where t.code = v_free) then
+     or exists (select 1 from public.tables t where t.code = v_free and t.status <> 'ended') then
     raise exception 'FAIL [V3] the 11th computer game in an hour: "%" (%); expected the limit message, no table.', coalesce(v_msg, 'started'), v_detail;
   end if;
   update public.attempt_log set created_at = now() - interval '61 minutes' where user_id = v_k and action = 'create_computer_table';
@@ -1062,12 +1086,17 @@ begin
   v_ms := array[v_m1, v_m2, v_m3, v_m4, v_m5, v_m6, v_m7, v_m8];
   for v_i in 1 .. 8 loop
     select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
     perform set_config('request.jwt.claims', json_build_object('sub', v_ms[v_i], 'role', 'authenticated')::text, true);
     v_msg := null; v_tid := null; v_game := null;
     execute 'set local role authenticated';
     begin
-      select r.table_id into v_tid from public.create_computer_table('easy', v_free) r;
+      -- The table's REAL code: since slice B part 2 the server picks it (the
+      -- one sent is ignored).
+      select r.table_id, r.code into v_tid, v_free from public.create_computer_table('easy', v_free) r;
       if v_i in (2, 5, 6, 8) then
         v_game := public.start_game_with_deal(v_tid);
       end if;
@@ -1187,7 +1216,10 @@ begin
 
   -- [SP6] (c) M5, live game, starts a NEW computer game: the old one ends.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_m5, 'role', 'authenticated')::text, true);
   v_msg := null; v_tid := null;
   execute 'set local role authenticated';
@@ -1220,7 +1252,7 @@ begin
     get stacked diagnostics v_msg = message_text, v_detail = pg_exception_detail, v_hint = pg_exception_hint;
   end;
   execute 'reset role';
-  if v_msg is distinct from v_txt or v_detail is distinct from 'already_at_table' or v_hint is distinct from v_y_code
+  if v_msg is distinct from v_txt or v_detail is distinct from 'already_at_table' or split_part(v_hint, ' ', 1) is distinct from v_y_code  -- slice B: HINT "<code> <id>"
      or (select count(*) from public.tables t where t.created_by = v_m6) <> 1
      or not exists (select 1 from public.tables t where t.id = v_ct[6] and t.status = 'open')
      or (select count(*) from public.table_members tm where tm.table_id = v_ct[6]) <> 2
@@ -1277,7 +1309,10 @@ begin
   v_ct := '{}';
   for v_i in 1 .. 2 loop
     select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
     perform set_config('request.jwt.claims', json_build_object('sub', v_ms[v_i], 'role', 'authenticated')::text, true);
     v_msg := null; v_tid := null; v_game := null;
     execute 'set local role authenticated';
@@ -1325,7 +1360,10 @@ begin
 
     -- [L1] [L2] Direct inserts: permission denied.
     select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
     perform set_config('request.jwt.claims', json_build_object('sub', v_l, 'role', 'authenticated')::text, true);
     v_state := null;
     execute 'set local role authenticated';
