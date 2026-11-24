@@ -11,7 +11,7 @@ export function RefusalNotice({ refusal }: { refusal: Refusal }) {
         {refusal.text}
       </p>
       {refusal.kind === "already_at_table" && (
-        <Link href={tableHref(refusal.tableCode)} className="peg-btn peg-btn--brass">
+        <Link href={tableHref(refusal.tableCode, refusal.tableId)} className="peg-btn peg-btn--brass">
           Go to table {refusal.tableCode}
         </Link>
       )}

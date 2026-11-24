@@ -26,7 +26,9 @@ export type RpcErrorLike = {
 };
 
 export type Refusal =
-  | { kind: "already_at_table"; text: string; tableCode: string }
+  // tableId: the table's id when the server sent it (the HINT "<code> <id>",
+  // step 3 slice B), so "Go to table NNNN" opens exactly that table.
+  | { kind: "already_at_table"; text: string; tableCode: string; tableId?: string }
   | { kind: "ended"; text: string }
   | { kind: "locked_out"; text: string }
   | { kind: "rate_limited"; text: string }
@@ -53,9 +55,30 @@ export function notFoundText(code: string): string {
   return `No table found with code ${code}.`;
 }
 
-// "Go to table NNNN": the route that opens a table by its code.
-export function tableHref(tableCode: string): string {
-  return `/tables/${tableCode}`;
+// LINKS CARRY THE TABLE'S ID (step 3 slice B): /tables/<code>?t=<id>. A code
+// is freed when its table ends and may later belong to another table; the
+// id never changes hands. With ?t= the table page reads that table by id --
+// and if it has ended, says so, never seating anyone at whatever table holds
+// the code now. Without ?t= (a typed code, a shared or old link) it looks the
+// code up once and asks first ("Join table NNNN hosted by X?").
+export const TABLE_ID_PARAM = "t";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isTableId(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
+// The table id a URL carries (?t=), or null when missing or malformed.
+export function tableIdFromSearch(search: string): string | null {
+  const id = new URLSearchParams(search).get(TABLE_ID_PARAM);
+  return isTableId(id) ? id.toLowerCase() : null;
+}
+
+// "Go to table NNNN", Rejoin, Join, a new table: the route that opens a table,
+// with its id whenever the app knows it.
+export function tableHref(tableCode: string, tableId?: string | null): string {
+  return isTableId(tableId) ? `/tables/${tableCode}?${TABLE_ID_PARAM}=${tableId}` : `/tables/${tableCode}`;
 }
 
 export function lockedOutText(minutes: number | null): string {
@@ -78,8 +101,16 @@ export function rpcRefusal(error: RpcErrorLike | null | undefined): Refusal {
   const hint = (error?.hint ?? "").trim();
 
   if (details === "already_at_table") {
-    const tableCode = /^[0-9]{4}$/.test(hint) ? hint : (message.match(/already at table ([0-9]{4})/)?.[1] ?? null);
-    if (tableCode) return { kind: "already_at_table", text: alreadyAtTableText(tableCode), tableCode };
+    // HINT: "<code> <id>" since slice B ("<code>" before); else the code
+    // from the message.
+    const fromHint = hint.match(/^([0-9]{4})(?: ([0-9a-f-]{36}))?$/i);
+    const tableCode = fromHint?.[1] ?? message.match(/already at table ([0-9]{4})/)?.[1] ?? null;
+    const tableId = fromHint?.[2] && isTableId(fromHint[2]) ? fromHint[2].toLowerCase() : undefined;
+    if (tableCode) {
+      return tableId
+        ? { kind: "already_at_table", text: alreadyAtTableText(tableCode), tableCode, tableId }
+        : { kind: "already_at_table", text: alreadyAtTableText(tableCode), tableCode };
+    }
     return { kind: "unknown", text: GENERIC_ERROR_TEXT };
   }
   if (details === "locked_out") {
@@ -132,6 +163,14 @@ export function joinOutcome(data: unknown): JoinOutcome | null {
 export function createdTableCode(data: unknown): string | null {
   const row = (Array.isArray(data) ? data[0] : data) as { code?: unknown } | null | undefined;
   return typeof row?.code === "string" && /^[0-9]{4}$/.test(row.code) ? row.code : null;
+}
+
+// create_table's / create_computer_table's answer: the new table's code AND
+// id (the link to it carries the id), or null.
+export function createdTable(data: unknown): { code: string; tableId: string } | null {
+  const row = (Array.isArray(data) ? data[0] : data) as { code?: unknown; table_id?: unknown } | null | undefined;
+  const code = createdTableCode(data);
+  return code && isTableId(row?.table_id) ? { code, tableId: row.table_id } : null;
 }
 
 // The details of anything shown as GENERIC_ERROR_TEXT, for the console.

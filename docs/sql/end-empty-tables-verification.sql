@@ -254,7 +254,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 8
   ) free_codes;
@@ -458,7 +461,10 @@ begin
   -- ==== COMPUTER TABLES ===========================================================
   -- [L10] K: a computer game, then leave_computer_table -- reason NULL, no seat.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_k, 'role', 'authenticated')::text, true);
   v_msg := null; v_ct := null;
   execute 'set local role authenticated';
@@ -479,7 +485,10 @@ begin
 
   -- [L11] M: a computer game, then create_table -- the quiet close, reason NULL.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_m, 'role', 'authenticated')::text, true);
   v_msg := null; v_ct := null; v_tid := null;
   execute 'set local role authenticated';
@@ -502,7 +511,10 @@ begin
   -- [L12] N: a computer game, then a plain leave_table on it (the odd path):
   -- still open, the computer still seated.
   select lpad(n::text, 4, '0') into v_free from generate_series(0, 9999) n
-  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')) order by n limit 1;
+  -- Codes no OPEN table holds -- every table while the old unique key
+  -- exists (before step 3 slice B part 2 frees ended tables' codes).
+  where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                      and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null)) order by n limit 1;
   perform set_config('request.jwt.claims', json_build_object('sub', v_nn, 'role', 'authenticated')::text, true);
   v_msg := null; v_ct := null;
   execute 'set local role authenticated';

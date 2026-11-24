@@ -50,7 +50,8 @@
 --   W5  S5 now watches W (a removed spectator doesn't count toward the cap).
 --   W6  A (seated) watching W: "You are seated at this table."
 --   W7  Z: "This table does not allow spectators." (no game)
---   W8  E: "This table has ended."   W9  K: "Computer tables cannot be
+--   W8  E (ended): NO ROW and no error, counted as a wrong code (slice B:
+--       watch_table only sees open tables).   W9  K: "Computer tables cannot be
 --       watched."   W10 an unknown code: NO ROW and no error, and one
 --       wrong code counted (since step 3 slice A, docs/sql/join-create.sql:
 --       an exception would undo the count; it used to raise "No table found
@@ -69,8 +70,8 @@
 --   L4  S2 can still watch X afterwards, with a NULL game id.
 --   L5  get_spectator_reveals of the ended game is null.
 --   ENDED TABLE
---   E1  W ends: S5's heartbeat is 'table_ended'; E2 watching W: "This table
---       has ended." (S5, not S1: since step 3 slice A, S1 watching X in L1
+--   E1  W ends: S5's heartbeat is 'table_ended'; E2 watching W: no row and no
+--       error (slice B; it used to say "This table has ended.") (S5, not S1: since step 3 slice A, S1 watching X in L1
 --       ended S1's watching of W -- one table at a time -- so S1's heartbeat
 --       at W would be 'not_watching'.)
 --   AVATAR ADDRESSES (on one existing profile row)
@@ -115,12 +116,12 @@ declare
   v_bad text;
 begin
   -- ==== CATALOG ===============================================================
-  if to_regprocedure('public.watch_table(text)') is null
+  if coalesce(to_regprocedure('public.watch_table(text, uuid)'), to_regprocedure('public.watch_table(text)')) is null
      or to_regprocedure('public.spectator_heartbeat(uuid)') is null then
     raise exception 'SETUP: the spectator functions do not exist. Run docs/sql/spectators.sql first.';
   end if;
 
-  select p.prosrc into v_txt from pg_proc p where p.oid = to_regprocedure('public.watch_table(text)');
+  select p.prosrc into v_txt from pg_proc p where p.oid = coalesce(to_regprocedure('public.watch_table(text, uuid)'), to_regprocedure('public.watch_table(text)'));
   if v_txt ilike '%no game to watch%' then
     raise exception 'SETUP: watch_table still has the old "no game" refusal. Run docs/sql/spectators-join-or-watch.sql first.';
   end if;
@@ -128,7 +129,8 @@ begin
   -- [C1] Shape and grants of the two functions.
   for v_rec in
     select * from (values
-      ('public.watch_table(text)'),
+      -- watch_table(text, uuid) once step 3 slice B part 1 has run.
+      (case when to_regprocedure('public.watch_table(text, uuid)') is not null then 'public.watch_table(text, uuid)' else 'public.watch_table(text)' end),
       ('public.spectator_heartbeat(uuid)')
     ) as t(fn)
   loop
@@ -182,7 +184,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 6
   ) free_codes;
@@ -335,12 +340,11 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [W7]-[W9] The other refusals keep their messages (S1 asking each time).
+  -- [W7], [W9] The other refusals keep their messages (S1 asking each time).
   perform set_config('request.jwt.claims', json_build_object('sub', v_s1, 'role', 'authenticated')::text, true);
   for v_rec in
     select * from (values
       ('W7', v_codes[2], 'This table does not allow spectators.'),
-      ('W8', v_codes[3], 'This table has ended.'),
       ('W9', v_codes[4], 'Computer tables cannot be watched.')
     ) as t(label, code, want)
   loop
@@ -358,9 +362,28 @@ begin
     v_checks := v_checks + 1;
   end loop;
 
-  -- [W10] An unknown code: no row, no error, one wrong code counted (step 3
-  -- slice A: watch_table returns nothing instead of raising, so the count
-  -- survives; the app shows "No table found with code ...").
+  -- [W8] The ENDED table E's code: no row, no error, one wrong code counted
+  -- (step 3 slice B: watch_table only sees open tables -- an ended table's
+  -- code may soon belong to another table; it used to say "This table has
+  -- ended.").
+  v_msg := null; v_n := null;
+  execute 'set local role authenticated';
+  begin
+    select count(*) into v_n from public.watch_table(v_codes[3]);
+  exception when others then
+    v_msg := sqlerrm;
+  end;
+  execute 'reset role';
+  if v_msg is not null or v_n is distinct from 0
+     or (select count(*) from public.attempt_log al where al.user_id = v_s1 and al.action = 'code_guess' and not al.success) <> 1 then
+    raise exception 'FAIL [W8] watching the ended table E''s code: error %, % row(s); expected no error, no row and one wrong code counted.',
+      coalesce(v_msg, 'none'), v_n;
+  end if;
+  v_checks := v_checks + 1;
+
+  -- [W10] An unknown code: no row, no error, one more wrong code counted
+  -- (step 3 slice A: watch_table returns nothing instead of raising, so the
+  -- count survives; the app shows "No table found with code ...").
   v_msg := null; v_n := null;
   execute 'set local role authenticated';
   begin
@@ -370,8 +393,8 @@ begin
   end;
   execute 'reset role';
   if v_msg is not null or v_n is distinct from 0
-     or (select count(*) from public.attempt_log al where al.user_id = v_s1 and al.action = 'code_guess' and not al.success) <> 1 then
-    raise exception 'FAIL [W10] watching the unknown code %: error %, % row(s); expected no error, no row and one wrong code counted.',
+     or (select count(*) from public.attempt_log al where al.user_id = v_s1 and al.action = 'code_guess' and not al.success) <> 2 then
+    raise exception 'FAIL [W10] watching the unknown code %: error %, % row(s); expected no error, no row and a second wrong code counted.',
       v_codes[6], coalesce(v_msg, 'none'), v_n;
   end if;
   v_checks := v_checks + 1;
@@ -554,8 +577,8 @@ begin
     v_msg := sqlerrm;
   end;
   execute 'reset role';
-  if v_msg is distinct from 'This table has ended.' then
-    raise exception 'FAIL [E2] watching the ended table W: "%"; expected "This table has ended."', coalesce(v_msg, 'allowed');
+  if v_msg is not null then
+    raise exception 'FAIL [E2] watching the ended table W: "%"; expected no row and no error (step 3 slice B).', v_msg;
   end if;
   v_checks := v_checks + 1;
 

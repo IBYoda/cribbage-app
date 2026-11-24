@@ -67,7 +67,10 @@ import {
   rpcRefusal,
   tableEndedMessage,
   tableHref,
+  tableIdFromSearch,
+  createdTable,
 } from "../lib/oneTable";
+import { confirmView, MUGGINS_CONFIRM_LINE, previewFromRow, previewHasSeat } from "../lib/joinConfirm";
 import {
   FULL_TEXT,
   NOBODY_SEATED,
@@ -1245,8 +1248,9 @@ check("Start a Table: create_table gets every option the form picks, as the func
   // The page: the RPC, its answer's code, the one-table refusals; no insert, no code loop.
   const page = codeOnly(readFileSync("app/tables/new/page.tsx", "utf8"));
   strictEqual(/supabase\.rpc\(\s*"create_table",\s*createTableArgs\(\{ isPublic, isMuggins, maxPlayers, fourPlayerMode, allowSpectators \}\)\s*\)/.test(page), true);
-  strictEqual(page.includes("createdTableCode(data)"), true);
-  strictEqual(page.includes("router.replace(`/tables/${code}`);"), true);
+  // The new table's code AND id (step 3 slice B): the link carries the id.
+  strictEqual(page.includes("createdTable(data)"), true);
+  strictEqual(page.includes("router.replace(tableHref(made.code, made.tableId));"), true);
   strictEqual(/\.from\(\s*"tables"\s*\)|\.insert\(|\.upsert\(|generateCode|UNIQUE_VIOLATION/.test(page), false, "no direct insert, no client-side code loop");
   strictEqual(page.includes("rpcRefusal(error)") && page.includes("<RefusalNotice refusal={refusal} />"), true);
   strictEqual(page.includes("{QUIET_CLOSE_NOTE}"), true);
@@ -1301,7 +1305,7 @@ check("One table at a time: refusals map to plain messages, never raw server tex
   strictEqual(createdTableCode([{ code: "42" }]), null);
   // The button: RefusalNotice links already_at_table to its table.
   const notice = readFileSync("components/brand/RefusalNotice.tsx", "utf8");
-  strictEqual(notice.includes('refusal.kind === "already_at_table"') && notice.includes("href={tableHref(refusal.tableCode)}"), true);
+  strictEqual(notice.includes('refusal.kind === "already_at_table"') && notice.includes("href={tableHref(refusal.tableCode, refusal.tableId)}"), true);
   strictEqual(notice.includes("Go to table {refusal.tableCode}"), true);
   // Every start that can quietly end a single-player game says so.
   for (const f of ["app/tables/new/page.tsx", "app/single-player/page.tsx", "app/tables/join/page.tsx"]) {
@@ -1333,6 +1337,193 @@ check("Ended tables: each tables.ended_reason has its own message, 'empty' inclu
   // The "table must be open" trigger's refusal reads plainly.
   deepStrictEqual(rpcRefusal({ message: "This table has ended.", code: "P0001" }), { kind: "ended", text: TABLE_ENDED_TEXT });
 });
+check("Slice B: links carry the table id (?t=) everywhere the app knows it", () => {
+  const ID = "0f3c2b1a-1234-4abc-8def-0123456789ab";
+  // The helpers: with an id, ?t=; without (or a malformed one), the bare code.
+  strictEqual(tableHref("0815", ID), `/tables/0815?t=${ID}`);
+  strictEqual(tableHref("0815"), "/tables/0815");
+  strictEqual(tableHref("0815", "not-an-id"), "/tables/0815");
+  strictEqual(watchHref("0815", ID), `/watch/0815?t=${ID}`);
+  strictEqual(watchHref("0815"), "/watch/0815");
+  strictEqual(playHref("0815", ID), `/tables/0815?t=${ID}&play=1`);
+  strictEqual(playHref("0815"), "/tables/0815?play=1");
+  strictEqual(playChosenFromSearch(`?t=${ID}&play=1`), true);
+  strictEqual(tableIdFromSearch(`?t=${ID}`), ID);
+  strictEqual(tableIdFromSearch(`?t=${ID.toUpperCase()}&play=1`), ID);
+  strictEqual(tableIdFromSearch("?t=1234"), null);
+  strictEqual(tableIdFromSearch(""), null);
+  // Home: Rejoin, Join, the Play-or-Watch sheet and Watch rows all carry it; the loaders read it.
+  const menu = readFileSync("components/brand/HomeMenu.tsx", "utf8");
+  strictEqual(menu.includes("href={tableHref(t.code, t.id)} className=\"rejoin-btn\""), true);
+  strictEqual(menu.includes("setChoosing({ code: t.code, hostName: t.hostName, id: t.id })"), true);
+  strictEqual(menu.includes("href={watchHref(t.code, t.id)}"), true);
+  strictEqual(/`\/tables\/\$\{/.test(codeOnly(menu)), false, "no bare /tables/ link left on Home");
+  const reads = readFileSync("lib/openTables.ts", "utf8");
+  strictEqual((reads.match(/^\s+id: t\.id,$/gm) ?? []).length, 5, "mine; joinable and watchable, each in its row and its result");
+  const choice = readFileSync("components/brand/JoinChoice.tsx", "utf8");
+  strictEqual(choice.includes("tableId={table.id}"), true);
+  // After a create, single player, "Go to table", the watch page's seated redirect, Watch instead.
+  strictEqual(readFileSync("app/tables/new/page.tsx", "utf8").includes("router.replace(tableHref(made.code, made.tableId));"), true);
+  strictEqual(readFileSync("app/single-player/page.tsx", "utf8").includes("router.replace(made ? tableHref(made.code, made.tableId) : `/tables/${code}`);"), true);
+  strictEqual(readFileSync("components/brand/RefusalNotice.tsx", "utf8").includes("href={tableHref(refusal.tableCode, refusal.tableId)}"), true);
+  const watch = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual(watch.includes("router.replace(tableHref(code, held));"), true);
+  strictEqual(watch.includes("router.replace(tableHref(code, answer.preview.tableId));"), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("<Link href={watchHref(code, heldId)} className=\"peg-btn peg-btn--brass\">"), true);
+  strictEqual(view.includes("tableId={heldId}"), true);
+  // createdTable: code and id, or null.
+  deepStrictEqual(createdTable([{ table_id: ID, code: "0420" }]), { code: "0420", tableId: ID });
+  strictEqual(createdTable([{ table_id: "x", code: "0420" }]), null);
+  strictEqual(createdTable([]), null);
+});
+check("Slice B: the already_at_table HINT carries the id; an older bare HINT still works", () => {
+  const ID = "0f3c2b1a-1234-4abc-8def-0123456789ab";
+  deepStrictEqual(
+    rpcRefusal({ message: "You're already at table 0815. Rejoin it or leave it first.", details: "already_at_table", hint: `0815 ${ID}` }),
+    { kind: "already_at_table", text: "You're already at table 0815. Rejoin it or leave it first.", tableCode: "0815", tableId: ID }
+  );
+  deepStrictEqual(
+    rpcRefusal({ message: "You're already at table 0815. Rejoin it or leave it first.", details: "already_at_table", hint: "0815" }),
+    { kind: "already_at_table", text: "You're already at table 0815. Rejoin it or leave it first.", tableCode: "0815" }
+  );
+  // A HINT the app doesn't understand: the code from the message, no id.
+  strictEqual((rpcRefusal({ message: "You're already at table 0815. Rejoin it or leave it first.", details: "already_at_table", hint: "junk" }) as { tableId?: string }).tableId, undefined);
+});
+check("Slice B: with ?t=, the table is read by id; a code that now belongs to another table reads as ended", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const code = codeOnly(view);
+  // Which table: the watch page's ticket, the id already held (Retry, Play's re-run), or the link's ?t=.
+  strictEqual(code.includes("? (spectateRef.current?.tableId ?? null)"), true);
+  strictEqual(code.includes(": (heldIdRef.current ?? tableIdFromSearch(window.location.search));"), true);
+  // By id, never by code, once an id is known.
+  strictEqual(/\.from\("tables"\)\s*\.select\(TABLE_ROW_COLUMNS\)\s*\.eq\("id", heldId\)/.test(code), true);
+  strictEqual(/\.eq\("code", code\)/.test(code), false, "no lookup by code left");
+  // A different table behind the code, or no row: "This table has ended.", closed (no Retry), never a seat.
+  strictEqual(/if \(!tableRow \|\| tableRow\.code !== code\) \{[\s\S]{0,200}setClosedHumanTable\(true\);\s*setError\(TABLE_ENDED_TEXT\);\s*return;/.test(code), true);
+  // An ended table read by id: its own reason.
+  strictEqual(code.includes("setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));"), true);
+  // The closed human table's screen: Back to home and Try a different code, no Retry.
+  const closed = code.slice(code.indexOf(") : closedHumanTable ? ("), code.indexOf(") : (", code.indexOf(") : closedHumanTable ? (") + 5));
+  strictEqual(closed.includes('<Link href="/" className="peg-btn peg-btn--brass">'), true);
+  strictEqual(closed.includes('<Link href="/tables/join" className="peg-btn peg-btn--ghost">'), true);
+  strictEqual(closed.includes("Retry"), false);
+  strictEqual(TABLE_ENDED_TEXT, "This table has ended.");
+});
+check("Slice B: the confirm screen is only for a brand-new seat by a bare code (typed, or a link without ?t=)", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const code = codeOnly(view);
+  const bare = code.slice(code.indexOf("if (!heldId) {"), code.indexOf('.select(TABLE_ROW_COLUMNS)'));
+  strictEqual(bare.length > 0, true);
+  // The bare code is previewed (seats nobody); not found -> "No table found".
+  strictEqual(bare.includes('playerRpc("join_table_by_code", {\n          p_code: code,\n          p_preview: true,\n        })'), true);
+  strictEqual(bare.includes("setError(notFoundText(code));"), true);
+  // Already seated: no confirm, straight in (no RPC), and the URL then carries the id.
+  strictEqual(/if \(answer\.outcome === "already_seated"\) \{\s*router\.replace\(tableHref\(code, previewed\.id\), \{ scroll: false \}\);\s*await takeSeat\(previewed, \(\) => cancelled, true\);/.test(bare), true);
+  // A new seat: the nickname step only when there's a seat, then the confirm screen.
+  strictEqual(/if \(previewHasSeat\(answer\.preview\)\)[\s\S]{0,300}nicknameStepHref\(`\/tables\/\$\{code\}`\)/.test(bare), true);
+  strictEqual(bare.includes("setConfirm(answer.preview);"), true);
+  // The confirm is set ONLY there: never on the id path (in-app links, Open Tables rows).
+  strictEqual((code.match(/setConfirm\(answer\.preview\)/g) ?? []).length, 1);
+  strictEqual(code.indexOf("setConfirm(answer.preview)") < code.indexOf('.select(TABLE_ROW_COLUMNS)'), true);
+  // Its Join takes exactly the previewed table, by id, and never asks Play again.
+  strictEqual(/onJoin=\{\(\) => \{\s*const row = tableRowFromPreview\(previewed\);\s*playChosenRef\.current = true;\s*setConfirm\(null\);\s*router\.replace\(tableHref\(code, row\.id\), \{ scroll: false \}\);\s*void takeSeat\(row, \(\) => false, false\);/.test(code), true);
+  // The screen's rules (lib/joinConfirm.ts).
+  const base = {
+    tableId: "0f3c2b1a-1234-4abc-8def-0123456789ab", code: "0815", status: "open", endedReason: null, isPublic: true,
+    isMuggins: false, allowSpectators: false, createdBy: null, maxPlayers: 2, teamMode: "teams", computerLevel: null,
+    seatedCount: 1, gameLive: false, hostNickname: "Sam", hostAvatarUrl: null,
+  };
+  const plain = confirmView(base, "join");
+  strictEqual(plain.title, "Join table 0815 hosted by Sam?");
+  deepStrictEqual(plain.join, { label: "Join" });
+  strictEqual(plain.watch, false);
+  strictEqual(plain.mugginsLine, null);
+  strictEqual(plain.seatsLine, "1 of 2 seats taken");
+  deepStrictEqual(plain.badges, ["2 players"]);
+  // Play-or-Watch folded in: Join AND Watch when the table allows spectators.
+  const both = confirmView({ ...base, allowSpectators: true }, "join");
+  strictEqual(both.join !== null && both.watch, true);
+  deepStrictEqual(both.badges, ["2 players", "Spectators allowed"]);
+  // Muggins folded in: the line and the agreeing button.
+  const mug = confirmView({ ...base, isMuggins: true, maxPlayers: 4, teamMode: "solo" }, "join");
+  strictEqual(mug.mugginsLine, MUGGINS_CONFIRM_LINE);
+  deepStrictEqual(mug.join, { label: "Join Self-Scoring (Muggins) table" });
+  deepStrictEqual(mug.badges, ["Self-Scoring (Muggins)", "4 players"]);
+  deepStrictEqual(confirmView({ ...base, maxPlayers: 4, teamMode: "solo" }, "join").badges, ["4 players", "Solo"]);
+  deepStrictEqual(confirmView({ ...base, maxPlayers: 4, teamMode: "teams" }, "join").badges, ["4 players", "Teams"]);
+  // Full or started: no seat; Watch only if allowed.
+  const full = confirmView({ ...base, seatedCount: 2, allowSpectators: true }, "join");
+  strictEqual(full.join, null);
+  strictEqual(full.watch, true);
+  strictEqual(full.notice, "Table 0815 is full. You can watch the game instead.");
+  const started = confirmView({ ...base, gameLive: true }, "join");
+  strictEqual(started.join, null);
+  strictEqual(started.watch, false);
+  strictEqual(started.notice, "The game at table 0815 has already started. This table doesn't allow spectators.");
+  // A single-player table: nothing to take, nothing to watch.
+  const solo = confirmView({ ...base, computerLevel: "easy" }, "join");
+  strictEqual(solo.join === null && !solo.watch, true);
+  strictEqual(solo.title, "Table 0815 is a single-player game.");
+  // No host name: the title without one.
+  strictEqual(confirmView({ ...base, hostNickname: null }, "join").title, "Join table 0815?");
+  strictEqual(previewHasSeat(base), true);
+  strictEqual(previewHasSeat({ ...base, seatedCount: 2 }), false);
+  strictEqual(previewHasSeat({ ...base, gameLive: true }), false);
+  // The preview's row.
+  deepStrictEqual(previewFromRow([{ outcome: "not_found" }]), { outcome: "not_found" });
+  strictEqual(previewFromRow([]), null);
+  strictEqual(previewFromRow([{ outcome: "preview", table_id: "nope", code: "0815" }]), null);
+  const row = previewFromRow([{ outcome: "already_seated", table_id: base.tableId, code: "0815", status: "open", is_muggins: false,
+    allow_spectators: true, max_players: 3, team_mode: "teams", computer_level: null, seated_count: 2, game_live: false,
+    host_nickname: "Sam", host_avatar_url: "https://x/a.png", created_by: base.tableId, is_public: false, ended_reason: null }]);
+  strictEqual(row !== null && row.outcome === "already_seated" && row.preview.maxPlayers === 3 && row.preview.hostAvatarUrl === "https://x/a.png", true);
+});
+check("Slice B: the watch confirm -- a bare /watch/<code> previews first; with ?t= one tap, by id", () => {
+  // Watch mode: Watch only, or why not.
+  const base = {
+    tableId: "0f3c2b1a-1234-4abc-8def-0123456789ab", code: "0815", status: "open", endedReason: null, isPublic: true,
+    isMuggins: false, allowSpectators: true, createdBy: null, maxPlayers: 2, teamMode: "teams", computerLevel: null,
+    seatedCount: 2, gameLive: true, hostNickname: "Sam", hostAvatarUrl: null,
+  };
+  const w = confirmView(base, "watch");
+  strictEqual(w.title, "Watch table 0815 hosted by Sam?");
+  strictEqual(w.watch && w.join === null && w.notice === null, true);
+  const no = confirmView({ ...base, allowSpectators: false }, "watch");
+  strictEqual(!no.watch && no.notice === "This table doesn't allow spectators.", true);
+  strictEqual(confirmView({ ...base, computerLevel: "hard", allowSpectators: false }, "watch").notice, "Computer tables cannot be watched.");
+  const page = codeOnly(readFileSync("app/watch/[code]/page.tsx", "utf8"));
+  // No id: the preview, then the confirm (not found, seated -> the seat, refusals).
+  strictEqual(page.includes("const held = heldIdRef.current ?? tableIdFromSearch(window.location.search);"), true);
+  strictEqual(/if \(!held\) \{\s*const answer = await callTablePreview\(code\);/.test(page), true);
+  strictEqual(page.includes('setState({ kind: "confirm", preview: answer.preview });'), true);
+  strictEqual(page.includes("setState({ kind: \"refused\", text: notFoundText(code), login: false });"), true);
+  // With the id: watch_table by id; no row = closed.
+  strictEqual(page.includes("const result = await callWatchTable(code, held);"), true);
+  strictEqual(/if \("closed" in result\) \{\s*setState\(\{ kind: "closed" \}\);/.test(page), true);
+  // The confirm's Watch: by the previewed id, the URL then carries it.
+  strictEqual(/onWatch=\{\(\) => \{\s*heldIdRef\.current = previewed\.tableId;\s*router\.replace\(watchHref\(code, previewed\.tableId\), \{ scroll: false \}\);/.test(page), true);
+  strictEqual(page.includes('mode="watch"'), true);
+  // The preview changes nothing: it is join_table_by_code with p_preview: true, and only that.
+  strictEqual(readFileSync("lib/spectatorData.ts", "utf8").includes('supabase.rpc("join_table_by_code", { p_code: code, p_preview: true })'), true);
+});
+check("Slice B: the spectator's rewatch, the seat and Retry go by id", () => {
+  const page = codeOnly(readFileSync("app/watch/[code]/page.tsx", "utf8"));
+  strictEqual(page.includes("const again = await callWatchTable(code, ticketRef.current?.tableId ?? heldIdRef.current);"), true);
+  // A rewatch with no row by id: closed, never the table that holds the code now.
+  deepStrictEqual(rewatchStep({ closed: true }), { kind: "closed" });
+  const data = codeOnly(readFileSync("lib/spectatorData.ts", "utf8"));
+  strictEqual(data.includes('tableId ? { p_code: code, p_table_id: tableId } : { p_code: code }'), true);
+  // The spectating table view reads the ticket's table, by id.
+  strictEqual(page.includes("tableId: watchingTableId,"), true);
+  const view = codeOnly(readFileSync("components/table/TableView.tsx", "utf8"));
+  // The seat: by id.
+  strictEqual(view.includes('playerRpc("join_table_by_code", { p_code: row.code, p_table_id: row.id })'), true);
+  // Retry and Play's re-run re-run the setup, which reads heldIdRef first (set once the table is known).
+  strictEqual(view.includes("heldIdRef.current = tableRow.id;"), true);
+  strictEqual(view.includes("heldIdRef.current = answer.preview.tableId;"), true);
+  strictEqual(view.includes("setRetryKey((k) => k + 1)"), true);
+});
 check("Single player: create_computer_table keeps its code retry and 'not set up yet', and maps the one-table refusals", () => {
   const page = readFileSync("app/single-player/page.tsx", "utf8");
   strictEqual(page.includes("if (error.code === UNIQUE_VIOLATION) {\n        continue;\n      }") || page.includes("if (error.code === UNIQUE_VIOLATION) {\r\n        continue;\r\n      }"), true);
@@ -1350,21 +1541,24 @@ check("Join: takeSeat seats through join_table_by_code and maps every outcome; a
   strictEqual(seat.length > 0, true);
   // A seated player (a refresh, Rejoin, the creator from create_table) makes no call.
   strictEqual(/async \(row: TableRow, isCancelled: \(\) => boolean, alreadySeated = false\) => \{/.test(seat), true);
-  strictEqual(/if \(!alreadySeated\) \{\s*const \{ data, error: joinError \} = await playerRpc\("join_table_by_code", \{ p_code: row\.code \}\);/.test(seat), true);
+  // By the table's id (step 3 slice B): exactly this table, never whatever holds the code now.
+  strictEqual(seat.includes('const { data, error: joinError } = await playerRpc("join_table_by_code", { p_code: row.code, p_table_id: row.id });'), true);
+  strictEqual(/if \(!alreadySeated\) \{/.test(seat), true);
   // Refusals: plain text, already_at_table keeps its code for the button, unknown is logged.
   strictEqual(seat.includes("const why = rpcRefusal(joinError);"), true);
   strictEqual(seat.includes('setGoToCode(why.kind === "already_at_table" ? why.tableCode : null);'), true);
   strictEqual(seat.includes('if (why.kind === "unknown") logUnexpectedError("join_table_by_code", joinError);'), true);
   strictEqual(seat.includes("setError(joinError.message)"), false, "never raw server text");
   // Outcomes: not_found -> not found; joined / already_seated -> the table; anything else -> generic.
-  strictEqual(/if \(outcome === "not_found"\) \{\s*setError\(notFoundText\(row\.code\)\);/.test(seat), true);
+  // not_found with the id = this table ended (or its code moved on): closed, "This table has ended."
+  strictEqual(/if \(outcome === "not_found"\) \{\s*setClosedHumanTable\(true\);\s*setError\(TABLE_ENDED_TEXT\);/.test(seat), true);
   strictEqual(/if \(outcome !== "joined" && outcome !== "already_seated"\) \{[\s\S]{0,120}setError\(GENERIC_ERROR_TEXT\);/.test(seat), true);
   strictEqual(seat.includes("await refreshTableState(row.id);"), true);
   // The setup passes isMember; the Muggins notice's Join is a new seat.
   strictEqual(code.includes("await takeSeat(tableRow, () => cancelled, isMember);"), true);
   strictEqual(code.includes("takeSeat(row, () => false);"), true);
   // The error screen: Go to table NNNN for already_at_table.
-  strictEqual(view.includes("<Link href={tableHref(goToCode)} className=\"peg-btn peg-btn--brass\">"), true);
+  strictEqual(view.includes("<Link href={tableHref(goToCode, goToId)} className=\"peg-btn peg-btn--brass\">"), true);
   strictEqual(view.includes("Go to table {goToCode}"), true);
   // Play-or-Watch still comes before the nickname gate, the Muggins notice and the seat.
   strictEqual(view.indexOf('setWatchOffer("choose")') < view.indexOf("// THE NICKNAME GATE."), true);
@@ -1386,11 +1580,12 @@ check("Stale tab: losing my own seat reads the table's status once; an ended sin
 });
 check("Watch page: an already_at_table refusal gets its Go to table button; unknown refusals are logged", () => {
   const page = readFileSync("app/watch/[code]/page.tsx", "utf8");
-  strictEqual(page.includes("href={tableHref(state.tableCode)}"), true);
+  strictEqual(page.includes("href={tableHref(state.tableCode, state.tableId)}"), true);
   strictEqual(page.includes("Go to table {state.tableCode}"), true);
   strictEqual(page.includes('if (refusal.kind === "other") console.error('), true);
   const data = readFileSync("lib/spectatorData.ts", "utf8");
-  strictEqual(data.includes('if (why.kind === "already_at_table" || why.kind === "locked_out" || why.kind === "rate_limited")'), true);
+  strictEqual(data.includes('return { refused: why.text, goTo: { code: why.tableCode, tableId: why.tableId } };'), true);
+  strictEqual(data.includes('if (why.kind === "locked_out" || why.kind === "rate_limited")'), true);
 });
 check("Start a Table: allow_spectators is always sent, false unless ticked", () => {
   for (const n of [2, 3, 4] as const) {
@@ -1514,8 +1709,9 @@ check("Join-or-Watch: choosing Play never asks again (?play=1 from Home, a flag 
   strictEqual(playChosenFromSearch("?layout=classic"), false);
   // Home's sheet: Play links to playHref; Watch to the watch page; Cancel closes.
   const choice = readFileSync("components/brand/JoinChoice.tsx", "utf8");
-  strictEqual(choice.includes("<Link href={playHref(code)}"), true);
-  strictEqual(choice.includes("<Link href={watchHref(code)}"), true);
+  // Both carry the table's id (?t=, step 3 slice B).
+  strictEqual(choice.includes("<Link href={playHref(code, tableId)}"), true);
+  strictEqual(choice.includes("<Link href={watchHref(code, tableId)}"), true);
   strictEqual(choice.includes("onClick={onCancel}"), true);
   // 44px targets with 12px corners.
   const css = readFileSync("app/globals.css", "utf8");
@@ -1562,9 +1758,9 @@ check("Open Tables: one row per table -- Join (with the choice), Join (straight 
   const menu = readFileSync("components/brand/HomeMenu.tsx", "utf8");
   strictEqual(menu.includes("splitOpenTableRows(myCodes, joinable ?? [], state.watchable ?? [])"), true);
   strictEqual(/joinRowAction\(\{ allowSpectators: t\.allowSpectators \?\? false, isCreator: t\.isCreator \}\) === "choose" \? \(\s*<button[\s\S]{0,120}onClick=\{\(\) => setChoosing\(/.test(menu), true);
-  strictEqual(/<Link\s+href=\{`\/tables\/\$\{t\.code\}`\}[\s\S]{0,160}>\s*Join\s*</.test(menu), true);
+  strictEqual(/<Link\s+href=\{tableHref\(t\.code, t\.id\)\}[\s\S]{0,160}>\s*Join\s*</.test(menu), true);
   strictEqual(menu.includes("<JoinChoiceSheet table={choosing} onClose={() => setChoosing(null)} />"), true);
-  strictEqual(menu.includes("href={watchHref(t.code)}"), true);
+  strictEqual(menu.includes("href={watchHref(t.code, t.id)}"), true);
   strictEqual(/key=\{`watch-\$\{t\.code\}`\}[\s\S]{0,1200}\{watchRowState\(t\.gameLive \?\? true\)\}[\s\S]{0,400}>\s*Watch\s*</.test(menu), true);
   // Every row's button is the same small brass button, so rows keep one height.
   strictEqual((menu.match(/className="peg-btn peg-btn--brass peg-btn--small shrink-0"/g) ?? []).length, 3);
@@ -1627,7 +1823,8 @@ check("Watching with no game: a NULL game id is accepted, and the old refusal st
   strictEqual(data.includes("export type WatchTicket = { tableId: string; code: string; gameId: string | null };"), true);
   // No row = a wrong or unknown code since step 3 slice A (watch_table
   // returns no row instead of raising): "No table found" again.
-  strictEqual(data.includes("if (!row?.table_id) return { refused: notFoundText(code) };"), true);
+  // ...and with the table's id (step 3 slice B), no row means that table is gone: closed.
+  strictEqual(data.includes("if (!row?.table_id) return tableId ? { closed: true } : { refused: notFoundText(code) };"), true);
   strictEqual(data.includes("gameId: row.game_id ?? null"), true);
   strictEqual(data.includes("!row.game_id"), false);
   // Reveals: only ever a real game id.
@@ -1989,14 +2186,16 @@ check("Watching: watch_table's refusals become screens; 'no game yet' waits and 
   // The page: waiting re-asks on a timer; seated goes to the player's own seat.
   const page = readFileSync("app/watch/[code]/page.tsx", "utf8");
   strictEqual(page.includes("timer = window.setTimeout(attempt, WATCH_RETRY_MS);"), true);
-  strictEqual(page.includes("router.replace(`/tables/${code}`);"), true);
+  strictEqual(page.includes("router.replace(tableHref(code, held));"), true);
   strictEqual(page.includes("Waiting for the next game..."), true);
 });
 check("Watching: the RPC allowlist -- the spectator route and its own modules call only the four spectator RPCs and write nothing", () => {
   // get_table_spectators (spectator chat): the eye, the list and the chat
   // roster -- read by players and spectators alike. remove_spectator is the
   // host's, through the shared view's playerRpc: never in these modules.
-  const ALLOWED = new Set(["watch_table", "stop_watching", "spectator_heartbeat", "get_spectator_reveals", "get_table_spectators"]);
+  // join_table_by_code: ONLY as the watch confirm's preview (p_preview: true,
+  // step 3 slice B) -- it seats nobody and changes nothing.
+  const ALLOWED = new Set(["watch_table", "stop_watching", "spectator_heartbeat", "get_spectator_reveals", "get_table_spectators", "join_table_by_code"]);
   // The route and every module only it (or the spectating mode) uses.
   const spectatorOnly = ["app/watch/[code]/page.tsx", "lib/spectatorData.ts", "lib/spectators.ts", "lib/lobbyNotice.ts"];
   const WRITE = /\.(insert|upsert|update|delete)\(/;
@@ -2012,7 +2211,12 @@ check("Watching: the RPC allowlist -- the spectator route and its own modules ca
     strictEqual(/takeSeat|table_members/.test(src), false, f);
     strictEqual(src.includes("remove_spectator"), false, `${f}: a spectator never removes`);
   }
-  strictEqual(rpcs, 5, "exactly the five spectator calls");
+  strictEqual(rpcs, 6, "exactly the five spectator calls and the preview");
+  {
+    const data = codeOnly(readFileSync("lib/spectatorData.ts", "utf8"));
+    strictEqual((data.match(/\.rpc\(\s*"join_table_by_code"/g) ?? []).length, 1);
+    strictEqual(data.includes('supabase.rpc("join_table_by_code", { p_code: code, p_preview: true })'), true, "only ever a preview");
+  }
   strictEqual(codeOnly(readFileSync("lib/spectatorData.ts", "utf8")).includes('supabase.rpc("get_table_spectators", { p_table_id: tableId })'), true);
   // remove_spectator: only in the shared view, only through playerRpc.
   const viewSrc = codeOnly(readFileSync("components/table/TableView.tsx", "utf8"));
@@ -2027,7 +2231,7 @@ check("Watching: the RPC allowlist -- the spectator route and its own modules ca
   strictEqual(/const playerRpc = useCallback\(\s*\([^)]*\)[^{]*\{\s*if \(spectating\) \{/.test(view), true);
   strictEqual((view.match(/\.(insert|update|delete)\(/g) ?? []).length, 0);
   strictEqual((view.match(/\.upsert\(/g) ?? []).length, 0);
-  strictEqual(view.includes('const { data, error: joinError } = await playerRpc("join_table_by_code", { p_code: row.code });'), true);
+  strictEqual(view.includes('const { data, error: joinError } = await playerRpc("join_table_by_code", { p_code: row.code, p_table_id: row.id });'), true);
   strictEqual(/const takeSeat = useCallback\(\s*async \([^\n]*=> \{\s*\/\/[^\n]*\n\s*if \(spectating\) return;/.test(view), true);
   // A spectator's setup never reaches the seat code.
   strictEqual(/if \(spectating\) \{\s*setTable\(tableRow\);\s*await refreshTableState\(tableRow\.id\);\s*return;\s*\}/.test(view), true);

@@ -11,7 +11,15 @@ import { DEFAULT_COMPUTER_LEVEL, LEVEL_INFO, isComputerLevel, type ComputerLevel
 import { nicknameStepHref } from "@/lib/nickname";
 import { fetchNeedsNickname } from "@/lib/profileNickname";
 import { RefusalNotice } from "@/components/brand/RefusalNotice";
-import { GENERIC_ERROR_TEXT, QUIET_CLOSE_NOTE, logUnexpectedError, rpcRefusal, type Refusal } from "@/lib/oneTable";
+import {
+  GENERIC_ERROR_TEXT,
+  QUIET_CLOSE_NOTE,
+  createdTable,
+  logUnexpectedError,
+  rpcRefusal,
+  tableHref,
+  type Refusal,
+} from "@/lib/oneTable";
 
 const UNIQUE_VIOLATION = "23505";
 const MAX_CODE_ATTEMPTS = 5;
@@ -98,11 +106,14 @@ export default function SinglePlayerPage() {
       });
 
       if (!error) {
-        const row = (data as { table_id: string; code: string }[] | null)?.[0];
+        // The server's code (since step 3 slice B it picks one itself, with
+        // the 24-hour reuse cooldown; the one sent is ignored) and the
+        // table's id: the link carries it, so the page reads it by id.
+        const made = createdTable(data);
         setStatus("success");
         // replace: Back from the table shouldn't land here, one tap away
         // from a second table.
-        router.replace(`/tables/${row?.code ?? code}`);
+        router.replace(made ? tableHref(made.code, made.tableId) : `/tables/${code}`);
         return;
       }
 

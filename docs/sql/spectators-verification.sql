@@ -158,7 +158,8 @@
 --   E4  B leaves P (leave_table: its game ends 'player_left'): S1's
 --       get_spectator_reveals for P's game is null; E5 heartbeat
 --       'game_ended'.
---   E6  X ENDED (admin): S1's heartbeat is 'table_ended'; E7 watch_table:
+--   E6  X ENDED (admin): S1's heartbeat is 'table_ended'; E7 watch_table
+--       (no row and no error since step 3 slice B; before it):
 --       "This table has ended."; E8 A's remove_spectator: "This table has
 --       ended."
 --
@@ -330,7 +331,8 @@ begin
   -- (provolatile is type "char": cast it with ::text before joining it.)
   for v_rec in
     select * from (values
-      ('public.watch_table(text)', 'record set definer v empty-path'),
+      -- watch_table(text, uuid) once step 3 slice B part 1 has run.
+      (case when to_regprocedure('public.watch_table(text, uuid)') is not null then 'public.watch_table(text, uuid)' else 'public.watch_table(text)' end, 'record set definer v empty-path'),
       ('public.stop_watching(uuid)', 'void one definer v empty-path'),
       ('public.remove_spectator(uuid, uuid)', 'void one definer v empty-path'),
       ('public.spectator_heartbeat(uuid)', 'text one definer v empty-path'),
@@ -420,7 +422,10 @@ begin
   select array_agg(c) into v_codes from (
     select lpad(n::text, 4, '0') as c
     from generate_series(0, 9999) n
-    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0'))
+    -- Codes no OPEN table holds -- every table while the old unique key
+    -- exists (before step 3 slice B part 2 frees ended tables' codes).
+    where not exists (select 1 from public.tables t where t.code = lpad(n::text, 4, '0')
+                        and (t.status <> 'ended' or to_regclass('public.tables_code_open_key') is null))
     order by n
     limit 9
   ) free_codes;
@@ -532,7 +537,9 @@ begin
       -- since step 3 slice A, docs/sql/join-create.sql).
       ('R2 an unknown code', v_s1, v_codes[9], null::text),
       ('R3 a null code', v_s1, null::text, null::text),
-      ('R4 an ended table (E)', v_s1, v_codes[5], 'This table has ended.'),
+      -- An ended table's code: no row either (step 3 slice B: watch_table
+      -- only sees open tables).
+      ('R4 an ended table (E)', v_s1, v_codes[5], null::text),
       ('R5 a computer table (K)', v_s1, v_codes[6], 'Computer tables cannot be watched.'),
       ('R6 a table without spectators (Z)', v_s1, v_codes[3], 'This table does not allow spectators.'),
       ('R7 a table with no live game (W)', v_s1, v_codes[4], 'There is no game to watch at this table yet.'),
@@ -1252,8 +1259,8 @@ begin
     raise exception 'FAIL [E6] S1''s heartbeat at the ended table: %; expected table_ended.', v_txt;
   end if;
   v_checks := v_checks + 1;
-  if v_msg is distinct from 'This table has ended.' then
-    raise exception 'FAIL [E7] watching the ended table: %; expected "This table has ended."', coalesce(v_msg, 'allowed');
+  if v_msg is not null then
+    raise exception 'FAIL [E7] watching the ended table: %; expected no row and no error (step 3 slice B).', v_msg;
   end if;
   v_checks := v_checks + 1;
   if v_txt2 is distinct from 'This table has ended.' then

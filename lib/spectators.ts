@@ -5,11 +5,14 @@
 // show. Tested by scripts/test-phase3.ts.
 
 import { isStaleWaitingTable } from "@/lib/tableListing";
-import { GENERIC_ERROR_TEXT, RATE_LIMITED_TEXT } from "@/lib/oneTable";
+import { GENERIC_ERROR_TEXT, RATE_LIMITED_TEXT, TABLE_ID_PARAM, isTableId } from "@/lib/oneTable";
 
-// Where watching happens (the watch page, part B of the spectator UI).
-export function watchHref(code: string): string {
-  return `/watch/${code}`;
+// Where watching happens (the watch page, part B of the spectator UI). With
+// the table's id whenever the app knows it (?t=, step 3 slice B): an in-app
+// Watch is one tap, by id; a bare /watch/<code> asks "Watch table NNNN
+// hosted by X?" first.
+export function watchHref(code: string, tableId?: string | null): string {
+  return isTableId(tableId) ? `/watch/${code}?${TABLE_ID_PARAM}=${tableId}` : `/watch/${code}`;
 }
 
 // A game is live while it is being cut for or played -- what watch_table
@@ -132,8 +135,10 @@ export function joinOrWatch(t: {
 // playChosen and answers "seat" (unless the seat has gone meanwhile).
 export const PLAY_PARAM = "play";
 
-export function playHref(code: string): string {
-  return `/tables/${code}?${PLAY_PARAM}=1`;
+export function playHref(code: string, tableId?: string | null): string {
+  return isTableId(tableId)
+    ? `/tables/${code}?${TABLE_ID_PARAM}=${tableId}&${PLAY_PARAM}=1`
+    : `/tables/${code}?${PLAY_PARAM}=1`;
 }
 
 export function playChosenFromSearch(search: string): boolean {
@@ -265,8 +270,14 @@ export function rewatchOutcome(message: string): RewatchOutcome {
 // live game (the new SQL answers a NULL game id in the waiting room and
 // between games); refused -> rewatchOutcome (the old SQL's "no game yet"
 // stays too).
-export function rewatchStep(result: { ok: { gameId: string | null } } | { refused: string }): RewatchOutcome {
-  return "ok" in result ? { kind: "continue" } : rewatchOutcome(result.refused);
+export function rewatchStep(
+  result: { ok: { gameId: string | null } } | { refused: string } | { closed: true }
+): RewatchOutcome {
+  if ("ok" in result) return { kind: "continue" };
+  // By id (step 3 slice B): no such open table any more -- closed, never the
+  // table that holds the code now.
+  if ("closed" in result) return { kind: "closed" };
+  return rewatchOutcome(result.refused);
 }
 
 // FOLLOWING THE TABLE'S GAME: the table view reports each live game on

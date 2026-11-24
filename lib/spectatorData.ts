@@ -1,8 +1,11 @@
 import { supabase } from "@/lib/supabase";
-import { notFoundText, rpcRefusal } from "@/lib/oneTable";
+import { logUnexpectedError, notFoundText, rpcRefusal, type Refusal } from "@/lib/oneTable";
+import { previewFromRow, type PreviewAnswer } from "@/lib/joinConfirm";
 
-// THE SPECTATOR'S CALLS (PRD item 40): the ONLY five RPCs a spectator's
-// screen makes (docs/sql/spectators.sql, spectator-chat.sql). Nothing here
+// THE SPECTATOR'S CALLS (PRD item 40): the ONLY six RPCs a spectator's
+// screen makes (docs/sql/spectators.sql, spectator-chat.sql), plus
+// join_table_by_code ONLY as a preview (p_preview: true -- it seats nobody
+// and changes nothing) for the watch confirm (step 3 slice B). Nothing here
 // writes a table; the functions decide everything on the server. Used by
 // the watch page (app/watch/[code]) and the shared table view
 // (components/table/TableView.tsx: get_spectator_reveals while spectating,
@@ -16,26 +19,59 @@ import { notFoundText, rpcRefusal } from "@/lib/oneTable";
 // spectator in with no game; the old one refused instead).
 export type WatchTicket = { tableId: string; code: string; gameId: string | null };
 
-// watch_table(code): become (or stay) a spectator. The table, its code and
-// the live game (null when none is live) -- or a refusal message for
-// watchRefusal (lib/spectators.ts): the server's own spectator messages word
-// for word; the one-table refusals made plain (lib/oneTable.ts: already at
-// another table, the wrong-code lockout, the hourly limit); and NO ROW, which
-// is how watch_table answers a wrong or unknown code since step 3 slice A
-// (docs/sql/join-create.sql: an exception would undo the count of wrong
-// guesses), as "No table found with code NNNN." like before.
-export async function callWatchTable(code: string): Promise<{ ok: WatchTicket } | { refused: string }> {
-  const { data, error } = await supabase.rpc("watch_table", { p_code: code });
+// watch_table(code, table id): become (or stay) a spectator. The table, its
+// code and the live game (null when none is live) -- or:
+//   refused  a message for watchRefusal (lib/spectators.ts): the server's own
+//            spectator messages word for word; the one-table refusals made
+//            plain (lib/oneTable.ts: already at another table -- goTo, with
+//            the table's id when the server sent it -- the wrong-code
+//            lockout, the hourly limit); "No table found with code NNNN."
+//            for NO ROW on a bare code (a wrong, unknown or ended code: no
+//            such open table, counted as a wrong guess since slice B).
+//   closed   NO ROW with the table's id (step 3 slice B): that table has
+//            ended, or its code now belongs to another table -- the
+//            spectator's table is gone ("This table has closed."), never the
+//            new one. Not counted as a wrong guess.
+export type WatchAnswer =
+  | { ok: WatchTicket }
+  | { refused: string; goTo?: { code: string; tableId?: string } }
+  | { closed: true };
+
+export async function callWatchTable(code: string, tableId?: string | null): Promise<WatchAnswer> {
+  const { data, error } = await supabase.rpc(
+    "watch_table",
+    tableId ? { p_code: code, p_table_id: tableId } : { p_code: code }
+  );
   if (error) {
     const why = rpcRefusal(error);
-    if (why.kind === "already_at_table" || why.kind === "locked_out" || why.kind === "rate_limited") {
+    if (why.kind === "already_at_table") {
+      return { refused: why.text, goTo: { code: why.tableCode, tableId: why.tableId } };
+    }
+    if (why.kind === "locked_out" || why.kind === "rate_limited") {
       return { refused: why.text };
     }
     return { refused: error.message };
   }
   const row = (Array.isArray(data) ? data[0] : data) as { table_id?: string; code?: string; game_id?: string | null } | null;
-  if (!row?.table_id) return { refused: notFoundText(code) };
+  if (!row?.table_id) return tableId ? { closed: true } : { refused: notFoundText(code) };
   return { ok: { tableId: row.table_id, code: row.code ?? code, gameId: row.game_id ?? null } };
+}
+
+// THE WATCH CONFIRM's lookup (a bare /watch/<code>, no ?t=): the table by
+// its code, previewed -- join_table_by_code with p_preview: true. It seats
+// nobody, ends nothing (not a single-player game, not watching) and isn't
+// counted toward any hourly limit; a wrong code counts toward the lockout.
+// The one-table refusals come back as a Refusal (already_at_table etc.).
+export async function callTablePreview(code: string): Promise<PreviewAnswer | { refusal: Refusal }> {
+  const { data, error } = await supabase.rpc("join_table_by_code", { p_code: code, p_preview: true });
+  if (error) {
+    const why = rpcRefusal(error);
+    if (why.kind === "unknown") logUnexpectedError("join_table_by_code preview", error);
+    return { refusal: why };
+  }
+  const answer = previewFromRow(data);
+  if (answer === null) logUnexpectedError("join_table_by_code preview", data);
+  return answer;
 }
 
 export async function callStopWatching(tableId: string): Promise<void> {

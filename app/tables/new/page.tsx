@@ -15,9 +15,10 @@ import { fetchNeedsNickname } from "@/lib/profileNickname";
 import {
   GENERIC_ERROR_TEXT,
   QUIET_CLOSE_NOTE,
-  createdTableCode,
+  createdTable,
   logUnexpectedError,
   rpcRefusal,
+  tableHref,
   type Refusal,
 } from "@/lib/oneTable";
 
@@ -86,15 +87,16 @@ export default function NewTablePage() {
       "create_table",
       createTableArgs({ isPublic, isMuggins, maxPlayers, fourPlayerMode, allowSpectators })
     );
-    const code = error ? null : createdTableCode(data);
+    const made = error ? null : createdTable(data);
 
-    if (code) {
+    if (made) {
       // Straight to the table, where the creator is already seated and waits
       // for the other players (the table page shows the code to send).
       // replace, not push: Back from the table shouldn't land on this page,
-      // one tap away from opening a second table.
+      // one tap away from opening a second table. The link carries the new
+      // table's id (step 3 slice B), so the page reads it by id: no confirm.
       setStatus("success");
-      router.replace(`/tables/${code}`);
+      router.replace(tableHref(made.code, made.tableId));
       return;
     }
 

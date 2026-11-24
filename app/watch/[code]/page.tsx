@@ -10,10 +10,13 @@ import { TableView, type SpectateProps } from "@/components/table/TableView";
 import { nicknameStepHref } from "@/lib/nickname";
 import { fetchNeedsNickname } from "@/lib/profileNickname";
 import { setLobbyNotice } from "@/lib/lobbyNotice";
-import { tableHref } from "@/lib/oneTable";
+import { GENERIC_ERROR_TEXT, notFoundText, tableHref, tableIdFromSearch } from "@/lib/oneTable";
+import { type JoinPreview } from "@/lib/joinConfirm";
+import { TableConfirm } from "@/components/brand/TableConfirm";
 import {
   callSpectatorHeartbeat,
   callStopWatching,
+  callTablePreview,
   callWatchTable,
   type WatchTicket,
 } from "@/lib/spectatorData";
@@ -23,6 +26,7 @@ import {
   rewatchStep,
   TABLE_CLOSED_TEXT,
   WATCH_RETRY_MS,
+  watchHref,
   watchRefusal,
   type RewatchOutcome,
 } from "@/lib/spectators";
@@ -63,7 +67,8 @@ type WatchState =
   | { kind: "loading" }
   | { kind: "waiting" }
   | { kind: "watching"; ticket: WatchTicket }
-  | { kind: "refused"; text: string; login: boolean; tableCode?: string }
+  | { kind: "refused"; text: string; login: boolean; tableCode?: string; tableId?: string }
+  | { kind: "confirm"; preview: JoinPreview }
   | { kind: "closed" };
 
 export default function WatchPage() {
@@ -77,6 +82,13 @@ export default function WatchPage() {
   // followed now), and whether this page has already left the table view.
   const ticketRef = useRef<WatchTicket | null>(null);
   const exitedRef = useRef(false);
+  // THE TABLE, by id (step 3 slice B): the link's ?t= (every in-app Watch),
+  // or the one the watch confirm previewed. Every watch_table call -- the
+  // first, the waiting retries, the quiet rewatches -- passes it, so a code
+  // that now belongs to another table never makes this a spectator there.
+  const heldIdRef = useRef<string | null>(null);
+  // "Watch" on the confirm screen: run the watch again, now by id.
+  const [watchGo, setWatchGo] = useState(0);
 
   // Signed in, and the nickname step first if this player has none (the
   // host will see spectators by name).
@@ -85,7 +97,7 @@ export default function WatchPage() {
     supabase.auth.getSession().then(async ({ data }) => {
       if (cancelled) return;
       if (data.session && (await fetchNeedsNickname(data.session.user.id)) === true) {
-        if (!cancelled) router.replace(nicknameStepHref(`/watch/${code}`));
+        if (!cancelled) router.replace(nicknameStepHref(watchHref(code, tableIdFromSearch(window.location.search))));
         return;
       }
       if (cancelled) return;
@@ -99,21 +111,61 @@ export default function WatchPage() {
 
   // WATCH_TABLE: once signed in, and again every WATCH_RETRY_MS while there
   // is no game yet.
+  //   * With the table's id (?t=, or after the confirm): watch_table by id.
+  //     No row means THAT table is gone: "This table has closed."
+  //   * A bare /watch/<code> (typed, a shared or old link): the preview first
+  //     -- "Watch table NNNN hosted by X?" (changes nothing, ends nothing; a
+  //     wrong code counts toward the lockout) -- and only its Watch watches.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
     let timer: number | null = null;
     const attempt = async () => {
-      const result = await callWatchTable(code);
+      const held = heldIdRef.current ?? tableIdFromSearch(window.location.search);
+      if (!held) {
+        const answer = await callTablePreview(code);
+        if (cancelled) return;
+        if (answer === null) {
+          setState({ kind: "refused", text: GENERIC_ERROR_TEXT, login: false });
+          return;
+        }
+        if ("refusal" in answer) {
+          const r = answer.refusal;
+          setState(
+            r.kind === "already_at_table"
+              ? { kind: "refused", text: r.text, login: false, tableCode: r.tableCode, tableId: r.tableId }
+              : { kind: "refused", text: r.text, login: false }
+          );
+          return;
+        }
+        if (answer.outcome === "not_found") {
+          setState({ kind: "refused", text: notFoundText(code), login: false });
+          return;
+        }
+        if (answer.outcome === "already_seated") {
+          // Seated there: the player's own seat, by id.
+          router.replace(tableHref(code, answer.preview.tableId));
+          return;
+        }
+        heldIdRef.current = answer.preview.tableId;
+        setState({ kind: "confirm", preview: answer.preview });
+        return;
+      }
+      heldIdRef.current = held;
+      const result = await callWatchTable(code, held);
       if (cancelled) return;
       if ("ok" in result) {
         ticketRef.current = result.ok;
         setState({ kind: "watching", ticket: result.ok });
         return;
       }
+      if ("closed" in result) {
+        setState({ kind: "closed" });
+        return;
+      }
       const refusal = watchRefusal(result.refused);
       if (refusal.kind === "seated") {
-        router.replace(`/tables/${code}`);
+        router.replace(tableHref(code, held));
         return;
       }
       if (refusal.kind === "waiting") {
@@ -124,14 +176,20 @@ export default function WatchPage() {
       // Never raw server text: watchRefusal shows "other" as the generic
       // message; the details go to the console.
       if (refusal.kind === "other") console.error("[watch_table] unexpected refusal:", result.refused);
-      setState({ kind: "refused", text: refusal.text, login: refusal.kind === "login", tableCode: refusal.tableCode });
+      setState({
+        kind: "refused",
+        text: refusal.text,
+        login: refusal.kind === "login",
+        tableCode: result.goTo?.code ?? refusal.tableCode,
+        tableId: result.goTo?.tableId,
+      });
     };
     attempt();
     return () => {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [session, code, router]);
+  }, [session, code, router, watchGo]);
 
   // LEAVING THE TABLE VIEW, once: home (only for a removal), the closed
   // screen, or a refusal's screen.
@@ -155,7 +213,9 @@ export default function WatchPage() {
   // STAY, the ticket moves on (a NULL game id too: the waiting room or
   // between games); refused -> rewatchOutcome ("no game yet" stays).
   const rewatch = useCallback(async () => {
-    const again = await callWatchTable(code);
+    // By the ticket's id: if that table has gone, closed -- never the table
+    // that holds the code now.
+    const again = await callWatchTable(code, ticketRef.current?.tableId ?? heldIdRef.current);
     if ("ok" in again) ticketRef.current = again.ok;
     const outcome: RewatchOutcome = rewatchStep(again);
     if (outcome.kind !== "continue") leave(outcome);
@@ -192,8 +252,11 @@ export default function WatchPage() {
     [rewatch]
   );
 
+  // The table view's props, with the ticket's table (read by id).
+  const watchingTableId = state.kind === "watching" ? state.ticket.tableId : "";
   const spectate: SpectateProps = useMemo(
     () => ({
+      tableId: watchingTableId,
       heartbeat: () => {
         void heartbeat();
       },
@@ -208,7 +271,7 @@ export default function WatchPage() {
         );
       },
     }),
-    [heartbeat, onLiveGame, leave]
+    [heartbeat, onLiveGame, leave, watchingTableId]
   );
 
   if (!authRead && state.kind === "loading") {
@@ -255,13 +318,33 @@ export default function WatchPage() {
     );
   }
 
+  // THE WATCH CONFIRM (step 3 slice B): a bare /watch/<code>. Watch watches
+  // exactly the previewed table, by id (and the URL then carries it).
+  if (state.kind === "confirm") {
+    const previewed = state.preview;
+    return (
+      <CardRoomFrame backHome={false}>
+        <TableConfirm
+          preview={previewed}
+          mode="watch"
+          onWatch={() => {
+            heldIdRef.current = previewed.tableId;
+            router.replace(watchHref(code, previewed.tableId), { scroll: false });
+            setState({ kind: "loading" });
+            setWatchGo((g) => g + 1);
+          }}
+        />
+      </CardRoomFrame>
+    );
+  }
+
   if (state.kind === "refused") {
     return (
       <CardRoomFrame backHome={false}>
         <p>{state.text}</p>
         {/* Already at another table: straight to it (Walt's decision). */}
         {state.tableCode && (
-          <Link href={tableHref(state.tableCode)} className="peg-btn peg-btn--brass">
+          <Link href={tableHref(state.tableCode, state.tableId)} className="peg-btn peg-btn--brass">
             Go to table {state.tableCode}
           </Link>
         )}
