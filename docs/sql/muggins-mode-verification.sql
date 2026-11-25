@@ -186,10 +186,15 @@ begin
   v_checks := v_checks + 1;
 
   -- [S6] The tables policies are unchanged: exactly the three known ones.
+  -- (The SELECT one under either name: step 3 slice D's private-tables-part2.sql
+  -- replaces "Tables are viewable by any logged-in user" with "Public tables,
+  -- or private ones the caller may read" -- docs/sql/private-tables-verification.sql
+  -- proves the read rules now.)
   select count(*) into v_n from pg_policies where schemaname = 'public' and tablename = 'tables';
   if v_n <> 3
      or not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'tables'
-                    and cmd = 'SELECT' and policyname = 'Tables are viewable by any logged-in user')
+                    and cmd = 'SELECT' and policyname in ('Tables are viewable by any logged-in user',
+                                                              'Public tables, or private ones the caller may read'))
      or not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'tables'
                     and cmd = 'INSERT' and policyname = 'Users can create their own table')
      or not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'tables'

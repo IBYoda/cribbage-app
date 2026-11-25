@@ -222,20 +222,29 @@ export default function WatchPage() {
   }, [code, leave]);
 
   // THE HEARTBEAT (heartbeatStep, lib/spectators.ts). One at a time; none
-  // once the table view is gone.
+  // once the table view is gone. The table view AWAITS it before reading
+  // (step 3 slice D: a private table is readable by a current spectator
+  // only), so a call while one is in flight waits for that one.
   const beatingRef = useRef(false);
+  const beatInFlightRef = useRef<Promise<void> | null>(null);
   const heartbeat = useCallback(async () => {
     const ticket = ticketRef.current;
+    if (beatingRef.current) return beatInFlightRef.current ?? undefined;
     if (!ticket || beatingRef.current || exitedRef.current) return;
     beatingRef.current = true;
-    try {
-      const step = heartbeatStep(await callSpectatorHeartbeat(ticket.tableId));
-      if (step.kind === "continue") return;
-      if (step.kind === "rewatch") await rewatch();
-      else leave(step);
-    } finally {
-      beatingRef.current = false;
-    }
+    const beat = (async () => {
+      try {
+        const step = heartbeatStep(await callSpectatorHeartbeat(ticket.tableId));
+        if (step.kind === "continue") return;
+        if (step.kind === "rewatch") await rewatch();
+        else leave(step);
+      } finally {
+        beatingRef.current = false;
+        beatInFlightRef.current = null;
+      }
+    })();
+    beatInFlightRef.current = beat;
+    return beat;
   }, [rewatch, leave]);
 
   // FOLLOWING THE GAME: the table view reports the live game on screen; a
@@ -257,9 +266,7 @@ export default function WatchPage() {
   const spectate: SpectateProps = useMemo(
     () => ({
       tableId: watchingTableId,
-      heartbeat: () => {
-        void heartbeat();
-      },
+      heartbeat: () => heartbeat(),
       onLiveGame,
       onTableEnded: () => leave({ kind: "closed" }),
       onStop: () => {

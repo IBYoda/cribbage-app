@@ -457,8 +457,11 @@ export type SpectateProps = {
   // 3 slice B: codes are freed when a table ends).
   tableId: string;
   // Called on the safety poll, and when the tab becomes visible or the
-  // device comes back online: the watch page's spectator_heartbeat.
-  heartbeat: () => void;
+  // device comes back online: the watch page's spectator_heartbeat. AWAITED
+  // before those reads (step 3 slice D): a private table is readable by a
+  // CURRENT spectator only (seen in the last 90 seconds), so after a hidden
+  // tab the place is refreshed first, then the table is read.
+  heartbeat: () => Promise<void>;
   // A live game is on screen: its id, every time it changes (the first
   // one, a rematch, the next game after the table waited). A game ENDING
   // changes nothing here: a spectator stays, on the same game-over and
@@ -843,41 +846,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     myUserIdRef.current = session?.user.id ?? null;
   }, [session]);
 
-  // A STALE TAB: this table ended while this screen missed it. Starting,
-  // joining or watching another table quietly ends this player's own
-  // single-player table (docs/sql/join-create.sql), and an admin's Force-End
-  // or the 12-hour timeout ends any table. The realtime tables UPDATE shows
-  // that at once; when it was missed (a sleeping phone, a dropped channel),
-  // the sign is the roster losing ME (my seat is deleted when the table is
-  // closed under me): the table's status is read once, and an ended table
-  // gets its ended screen instead of an empty table or a computer that
-  // can't move. Never for a spectator (never seated) or my own Leave.
-  const checkTableEndedRef = useRef<(tableId: string) => void>(() => {});
-  useEffect(() => {
-    checkTableEndedRef.current = (tableId: string) => {
-      if (spectating || leavingRef.current) return;
-      void supabase
-        .from("tables")
-        .select("status, ended_reason, computer_level")
-        .eq("id", tableId)
-        .maybeSingle()
-        .then(({ data }) => {
-          if (!data || data.status === "open" || leavingRef.current) return;
-          setClosedComputerTable(Boolean(data.computer_level));
-          setClosedHumanTable(!data.computer_level);
-          setError(tableEndedMessage(data.ended_reason, data.computer_level));
-        });
-    };
-  }, [spectating]);
-  // Marks one of my RPCs as in flight for its duration (the poll waits).
-  const trackAction = useCallback(async <T,>(call: PromiseLike<T>): Promise<T> => {
-    actionsInFlightRef.current++;
-    try {
-      return await call;
-    } finally {
-      actionsInFlightRef.current--;
-    }
-  }, []);
   // EVERY GAME OR TABLE RPC this page makes goes through here. A spectator
   // is refused before anything is sent (a supabase.rpc builder sends nothing
   // until it is awaited; this never builds one). The handlers below also
@@ -898,6 +866,60 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     [spectating]
   );
 
+  // A STALE TAB: this table ended while this screen missed it. Starting,
+  // joining or watching another table quietly ends this player's own
+  // single-player table (docs/sql/join-create.sql), and an admin's Force-End
+  // or the 12-hour timeout ends any table. The realtime tables UPDATE shows
+  // that at once; when it was missed (a sleeping phone, a dropped channel),
+  // the sign is the roster losing ME (my seat is deleted when the table is
+  // closed under me): the table's status is read once, and an ended table
+  // gets its ended screen instead of an empty table or a computer that
+  // can't move. Never for a spectator (never seated) or my own Leave.
+  //
+  // PRIVATE TABLES (step 3 slice D): once my seat is gone, a private table
+  // reads as NO ROW unless I played one of its games. No row is then asked
+  // of join_table_by_code's preview BY ID (security definer; it seats
+  // nobody, and a by-id miss is not counted as a wrong code): not_found
+  // means the table has ended (or its code moved on) -- the generic ended
+  // screen, since the reason can't be read. Anything else: nothing to do.
+  const checkTableEndedRef = useRef<(tableId: string) => void>(() => {});
+  useEffect(() => {
+    checkTableEndedRef.current = (tableId: string) => {
+      if (spectating || leavingRef.current) return;
+      void supabase
+        .from("tables")
+        .select("status, ended_reason, computer_level")
+        .eq("id", tableId)
+        .maybeSingle()
+        .then(async ({ data, error: readError }) => {
+          if (!data && !readError) {
+            const { data: previewData, error: previewError } = await playerRpc("join_table_by_code", {
+              p_code: code,
+              p_table_id: tableId,
+              p_preview: true,
+            });
+            if (previewError || leavingRef.current) return;
+            if (previewFromRow(previewData)?.outcome !== "not_found") return;
+            setClosedHumanTable(true);
+            setError(TABLE_ENDED_TEXT);
+            return;
+          }
+          if (!data || data.status === "open" || leavingRef.current) return;
+          setClosedComputerTable(Boolean(data.computer_level));
+          setClosedHumanTable(!data.computer_level);
+          setError(tableEndedMessage(data.ended_reason, data.computer_level));
+        });
+    };
+  }, [spectating, code, playerRpc]);
+  // Marks one of my RPCs as in flight for its duration (the poll waits).
+  const trackAction = useCallback(async <T,>(call: PromiseLike<T>): Promise<T> => {
+    actionsInFlightRef.current++;
+    try {
+      return await call;
+    } finally {
+      actionsInFlightRef.current--;
+    }
+  }, []);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -1543,7 +1565,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         return;
       }
 
-      const { data: tableRow, error: tableError } = await supabase
+      const { data: readRow, error: tableError } = await supabase
         .from("tables")
         .select(TABLE_ROW_COLUMNS)
         .eq("id", heldId)
@@ -1555,6 +1577,47 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         logUnexpectedError("tables read", tableError);
         setError(GENERIC_ERROR_TEXT);
         return;
+      }
+
+      // PRIVATE TABLES (step 3 slice D): a private table is readable only by
+      // its seated players, current spectators, the players of its games and
+      // admins, so a NON-MEMBER holding its id (Retry after the confirm
+      // screen, a copied ?t= link) reads NO ROW. Never for a spectator
+      // (playerRpc refuses them; watch_table already let them in, so they
+      // read the table). A player asks join_table_by_code's preview BY ID
+      // instead (security definer: it seats nobody, ends nothing, a by-id
+      // miss is not counted as a wrong code): the table row, the seat count,
+      // whether I'm seated and the live game all come from its answer, so the
+      // seats and live-game reads below are skipped. not_found: the table has
+      // ended (or its code moved on) -- the ended screen, as before.
+      let tableRow: (TableRow & { ended_reason?: string | null }) | null = readRow;
+      let previewed: JoinPreview | null = null;
+      let previewSeated = false;
+      if (!readRow && !spectating) {
+        const { data: previewData, error: previewError } = await playerRpc("join_table_by_code", {
+          p_code: code,
+          p_table_id: heldId,
+          p_preview: true,
+        });
+        if (cancelled) return;
+        if (previewError) {
+          const why = rpcRefusal(previewError);
+          if (why.kind === "unknown") logUnexpectedError("join_table_by_code preview by id", previewError);
+          setGoToCode(why.kind === "already_at_table" ? why.tableCode : null);
+          setGoToId(why.kind === "already_at_table" ? (why.tableId ?? null) : null);
+          setError(why.text);
+          return;
+        }
+        const answer = previewFromRow(previewData);
+        if (answer && answer.outcome !== "not_found") {
+          previewed = answer.preview;
+          previewSeated = answer.outcome === "already_seated";
+          tableRow = tableRowFromPreview(answer.preview);
+        } else if (!answer) {
+          logUnexpectedError("join_table_by_code preview by id", previewData);
+          setError(GENERIC_ERROR_TEXT);
+          return;
+        }
       }
       if (!tableRow || tableRow.code !== code) {
         // The id no longer belongs to this code: that table is gone.
@@ -1589,33 +1652,38 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       }
 
       // Who is seated: for the nickname gate and the Muggins notice below.
-      const { data: seats, error: seatsError } = await supabase
-        .from("table_members")
-        .select("user_id")
-        .eq("table_id", tableRow.id);
+      // From the preview when the table could only be previewed (slice D).
+      const { data: seats, error: seatsError } = previewed
+        ? { data: null, error: null }
+        : await supabase.from("table_members").select("user_id").eq("table_id", tableRow.id);
       if (cancelled) return;
       const seated = (seats ?? []).map((m) => m.user_id);
-      const isMember = !seatsError && seated.includes(session!.user.id);
-      const isFull = !seatsError && seated.length >= (tableRow.max_players ?? 2);
+      const seatedCount = previewed ? previewed.seatedCount : seated.length;
+      const isMember = previewed ? previewSeated : !seatsError && seated.includes(session!.user.id);
+      const isFull = !seatsError && seatedCount >= (tableRow.max_players ?? 2);
 
       // WATCH INSTEAD (joinOrWatch, lib/spectators.ts): only at a human table
       // that allows spectators, for someone not seated there -- one extra
       // read (is a game live?), and only then. If it fails, nothing is
       // offered and the seat is tried as before.
       if (!seatsError && !isMember && tableRow.allow_spectators === true && !tableRow.computer_level) {
-        const { data: liveGame, error: liveError } = await supabase
-          .from("games")
-          .select("id")
-          .eq("table_id", tableRow.id)
-          .in("status", LIVE_GAME_STATUSES)
-          .limit(1)
-          .maybeSingle();
+        // The live game: from the preview when the table could only be
+        // previewed (slice D: a private table's games aren't readable here).
+        const { data: liveGame, error: liveError } = previewed
+          ? { data: previewed.gameLive ? { id: "live" } : null, error: null }
+          : await supabase
+              .from("games")
+              .select("id")
+              .eq("table_id", tableRow.id)
+              .in("status", LIVE_GAME_STATUSES)
+              .limit(1)
+              .maybeSingle();
         if (cancelled) return;
         const choice = liveError
           ? "seat"
           : joinOrWatch({
               isMember,
-              seated: seated.length,
+              seated: seatedCount,
               capacity: tableRow.max_players ?? 2,
               gameLive: !!liveGame,
               allowSpectators: tableRow.allow_spectators,
@@ -2659,10 +2727,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (!table) return;
     const catchUp = () => {
       if (document.visibilityState !== "visible" || errorRef.current) return;
-      // A spectator's place is refreshed (or found gone) at once.
-      spectateRef.current?.heartbeat();
+      // A spectator's place is refreshed (or found gone) at once -- and
+      // FIRST (slice D: a lapsed spectator reads nothing of a private table).
+      const beat = spectateRef.current?.heartbeat();
       soundCatchUpRef.current = true;
-      refreshTableState(table.id);
+      void Promise.resolve(beat).then(() => refreshTableState(table.id));
     };
     document.addEventListener("visibilitychange", catchUp);
     window.addEventListener("online", catchUp);
@@ -2698,8 +2767,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
 
     async function pollOnce() {
       // A SPECTATOR'S HEARTBEAT rides the safety poll (30 s connected, at
-      // most 75 s backed off: inside the 90 s cutoff).
-      spectateRef.current?.heartbeat();
+      // most 75 s backed off: inside the 90 s cutoff), awaited before the
+      // reads (slice D: they need a current place at a private table).
+      await spectateRef.current?.heartbeat();
       const eventsAtIssue = gameEventSeqRef.current;
       const shown = activeGameRef.current;
       const { data: fresh, error: gameError } = await supabase
