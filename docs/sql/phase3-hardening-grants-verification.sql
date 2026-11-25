@@ -33,6 +33,16 @@
 --     and the seat trigger through the RPCs). Kept for history; do not
 --     re-baseline it to "no INSERT": that is what L0 checks.
 --
+-- STEP 3, SLICE E (2026-11-25): NOT re-baselined, on purpose. It still
+-- stops at G1 by design (no client INSERT on tables or table_members since
+-- the slice A lockdown), and its I, M, J and A checks prove direct-insert
+-- column limits that no longer exist, so no rewrite of G1-G4 could let it
+-- run past them. G4 (SELECT on tables/table_members, UPDATE on
+-- tables/games) is still true after slice E part 3. The complete grant
+-- picture -- every table x authenticated / anon / PUBLIC, every function's
+-- EXECUTE -- is proven by docs/sql/slice-e-grants-verification.sql (T1, T2,
+-- X1-X3); the inserts by docs/sql/join-create-verification.sql (L0-L3).
+--
 -- Same impersonation as the other suites: request.jwt.claims plus "set
 -- local role authenticated" (or anon) to act as a client, "reset role" to act
 -- as the owner (to read back what a client's statement really did).

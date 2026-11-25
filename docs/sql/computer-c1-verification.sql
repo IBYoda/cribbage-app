@@ -39,6 +39,16 @@
 --  14  authenticated calling the _as function is refused, 42501;
 --  15  anon calling the _as function is refused, 42501.
 --
+-- STEP 3 SLICE E (2026-11-25): start_game_with_deal_as gained the games cap
+-- (block (E1), docs/sql/slice-e-part2.sql), so its two values changed:
+-- as_md5 8d6ceb9ba00b9f2b6b9b8613e10609df -> 8b4528a51247b63a47b36bd703f81492,
+-- orig_md5 3feaa7508cf434b4a3f8d78a8ad9896a -> 4f5e5a5dd5809d0d2f71d4c588197a71
+-- (the old values are the ones slice-e-part2-rollback.sql restores). Run this
+-- suite AFTER slice-e-part2.sql; before it, check 6 fails for
+-- start_game_with_deal by design. The (E1) block reads no caller identity
+-- (check 7 still holds). The phase3-e* suites' own fingerprint of
+-- start_game_with_deal no longer matches either; they already stop at
+-- their fingerprint checks after C1, by design.
 -- Expected message:
 --   ALL 120 CHECKS PASSED (rolled back). anon EXECUTE on the pre-6b
 --   wrappers: draw_cut_card=..., acknowledge_deal_cut=...
@@ -58,7 +68,7 @@ declare
 begin
   for v_rec in
     select * from (values
-    ('start_game_with_deal', 'uuid', 'uuid, uuid', 'uuid', '3feaa7508cf434b4a3f8d78a8ad9896a', '8d6ceb9ba00b9f2b6b9b8613e10609df', 'f7df18aedee7d95216674a7687c405a0', 'You must be logged in to start a game.', true),
+    ('start_game_with_deal', 'uuid', 'uuid, uuid', 'uuid', '4f5e5a5dd5809d0d2f71d4c588197a71', '8b4528a51247b63a47b36bd703f81492', 'f7df18aedee7d95216674a7687c405a0', 'You must be logged in to start a game.', true),
     ('draw_cut_card', 'uuid', 'uuid, uuid', 'text', '2ca8d114de4e45861e21c23b2e4b65f8', 'e52f927759d991e13b55a6fa73d39781', '0edacf243b6383d9a6977fedb4bd8392', 'You must be logged in to cut for deal.', false),
     ('acknowledge_deal_cut', 'uuid', 'uuid, uuid', 'void', '5b06eec819234121db1bf802ea462c02', '1e6e9b06a58d59628ca8b4ae19e6605d', '3ca1514190fa9f57ebd1b78166c26f52', 'You must be logged in to continue.', false),
     ('discard_to_crib', 'uuid, text[]', 'uuid, uuid, text[]', 'void', '69ab74268ce6c799c40777436a8cfafd', 'fe4d1bb43ee5d4c38dacac502a8817ab', '325b1a01178582eba9a55d8117db0803', 'You must be logged in to discard.', true),

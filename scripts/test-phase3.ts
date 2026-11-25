@@ -165,6 +165,7 @@ import {
   zeroSplashPhrases,
 } from "../lib/splashPhrases";
 import {
+  NICKNAME_LOCKED_FALLBACK,
   NICKNAME_MAX_LENGTH,
   needsNickname,
   nicknameProblem,
@@ -371,6 +372,8 @@ import {
   FOLLOW_FAILED_MESSAGE,
   FOLLOW_LIMIT_MESSAGE,
   FOLLOW_NOBODY_HINT,
+  FOLLOW_RATE_MESSAGE,
+  followErrorOutcome,
   followMessage,
   followSucceeded,
   friendsHint,
@@ -378,6 +381,7 @@ import {
   rankWithTies,
   toggledSet,
 } from "../lib/follows";
+import { AVATAR_TYPE_MESSAGE, avatarExtension, avatarPath } from "../lib/avatarPath";
 import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
 import { scoreHand } from "../lib/scoring";
 import {
@@ -3992,6 +3996,19 @@ check("nickname: the save's rules and messages are the Profile page's", () => {
   strictEqual(nicknameSaveErrorMessage({ code: "42501", message: "permission denied" }), "permission denied");
   strictEqual(nicknameSaveErrorMessage({ message: "Failed to fetch" }), "Failed to fetch");
 });
+check("nickname: the 7-day lock (step 3 slice E) shows the server's words, or a plain fallback", () => {
+  strictEqual(
+    nicknameSaveErrorMessage({ code: "P0001", message: "You can change your nickname again in 3 days.", details: "nickname_locked" }),
+    "You can change your nickname again in 3 days."
+  );
+  strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: "", details: "nickname_locked" }), NICKNAME_LOCKED_FALLBACK);
+  // Still: a taken nickname in words, anything else as sent.
+  strictEqual(nicknameSaveErrorMessage({ code: "23505", message: "duplicate key value", details: "Key exists" }), "That nickname is taken.");
+  strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: "something else", details: null }), "something else");
+  // The save sends the error object as Supabase returns it (details included).
+  const save = readFileSync("lib/profileNickname.ts", "utf8");
+  strictEqual(save.includes("if (error) return { ok: false, message: nicknameSaveErrorMessage(error) };"), true);
+});
 check("nickname: the return path is a same-site path or the home page", () => {
   // Fine.
   strictEqual(safeReturnPath("/tables/1234"), "/tables/1234");
@@ -6089,6 +6106,40 @@ check("follow outcomes: success, the cap message, and the failure message", () =
   strictEqual(followMessage(true, "not_allowed"), FOLLOW_FAILED_MESSAGE);
   strictEqual(followMessage(true, "error"), "Couldn't update that just now.");
   strictEqual(followMessage(false, "error"), "Couldn't update that just now.");
+});
+check("follow outcomes: the churn limit (step 3 slice E) has its own message", () => {
+  strictEqual(followErrorOutcome({ details: "rate_limited" }), "rate_limited");
+  strictEqual(followErrorOutcome({ details: null }), "error");
+  strictEqual(followErrorOutcome(null), "error");
+  strictEqual(followSucceeded(true, "rate_limited"), false);
+  strictEqual(followSucceeded(false, "rate_limited"), false);
+  strictEqual(followMessage(true, "rate_limited"), FOLLOW_RATE_MESSAGE);
+  strictEqual(followMessage(false, "rate_limited"), FOLLOW_RATE_MESSAGE);
+  strictEqual(FOLLOW_RATE_MESSAGE, "You can follow or unfollow 30 times an hour. Please try again a little later.");
+  const src = readFileSync("lib/follows.ts", "utf8");
+  strictEqual(src.includes("if (error) return followErrorOutcome(error);"), true);
+});
+check("avatar file names (step 3 slice E): one fixed, lower-case name per type", () => {
+  strictEqual(avatarPath("u1", { type: "image/png", name: "Me.PNG" }), "u1/avatar.png");
+  strictEqual(avatarPath("u1", { type: "image/jpeg", name: "me.JPEG" }), "u1/avatar.jpg");
+  strictEqual(avatarPath("u1", { type: "image/webp", name: "x" }), "u1/avatar.webp");
+  strictEqual(avatarPath("u1", { type: "IMAGE/PNG", name: "a.gif" }), "u1/avatar.png", "the type decides");
+  // No type: the extension, in any case.
+  strictEqual(avatarPath("u1", { type: "", name: "photo.JPG" }), "u1/avatar.jpg");
+  strictEqual(avatarPath("u1", { type: "", name: "photo.jpeg" }), "u1/avatar.jpg");
+  strictEqual(avatarExtension({ type: "", name: "noext" }), null);
+  // Anything the bucket won't take: no path.
+  strictEqual(avatarPath("u1", { type: "image/gif", name: "a.gif" }), null);
+  strictEqual(avatarPath("u1", { type: "image/heic", name: "a.png" }), null);
+  strictEqual(avatarPath("u1", { type: "", name: "a.svg" }), null);
+  // Every name produced is one of the four the storage policy allows.
+  for (const ext of ["png", "jpg", "webp"]) strictEqual(["png", "jpg", "jpeg", "webp"].includes(ext), true);
+  // The profile page uses it, and refuses with the message when it says no.
+  const page = readFileSync("app/profile/page.tsx", "utf8");
+  strictEqual(page.includes("const path = avatarPath(session.user.id, avatarFile);"), true);
+  strictEqual(/if \(!path\) \{\s*setStatus\("error"\);\s*setMessage\(AVATAR_TYPE_MESSAGE\);\s*return;/.test(page), true);
+  strictEqual(page.includes('avatarFile.name.split(".").pop()'), false, "no raw extension any more");
+  strictEqual(AVATAR_TYPE_MESSAGE, "Please choose a PNG, JPEG or WebP picture.");
 });
 
 // ---- Hand calculator (lib/handBreakdown.ts) --------------------------------

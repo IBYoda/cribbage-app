@@ -23,10 +23,16 @@ export function nicknameProblem(raw: string): string | null {
   return null;
 }
 
-// The message for a refused save: a taken nickname in words, anything else
-// as Supabase said it.
-export function nicknameSaveErrorMessage(error: { code?: string | null; message: string }): string {
-  return error.code === UNIQUE_VIOLATION ? "That nickname is taken." : error.message;
+// The message for a refused save: a taken nickname in words; the 7-day lock
+// (step 3 slice E, detail nickname_locked) as the server words it ("You can
+// change your nickname again in N days."), or a plain version if it sent
+// none; anything else as Supabase said it.
+export const NICKNAME_LOCKED_FALLBACK = "You changed your nickname recently. You can change it again 7 days after that change.";
+
+export function nicknameSaveErrorMessage(error: { code?: string | null; message: string; details?: string | null }): string {
+  if (error.code === UNIQUE_VIOLATION) return "That nickname is taken.";
+  if (error.details === "nickname_locked") return error.message?.trim() ? error.message : NICKNAME_LOCKED_FALLBACK;
+  return error.message;
 }
 
 // Where the nickname step goes back to. Only a same-site relative path is
