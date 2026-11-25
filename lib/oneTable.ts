@@ -10,6 +10,12 @@
 //                     minutes are left ("Please wait N minutes ...").
 //   rate_limited      too many creates / joins / watches / computer games in
 //                     the last hour.
+// One plain server message has a kind of its own:
+//   "You can't join this table."  the moderation M1 refusal
+//                     (docs/sql/moderation-m1-part2.sql): from join and
+//                     watch, for a person the table's creator has on their
+//                     Block List. It never says why -- and neither does the
+//                     app: shown word for word, like "This table is full.".
 // A wrong code is NOT an error: join_table_by_code answers outcome
 // 'not_found' and watch_table answers no row (an exception would undo the
 // count of wrong guesses).
@@ -34,6 +40,7 @@ export type Refusal =
   | { kind: "rate_limited"; text: string }
   | { kind: "not_found"; text: string }
   | { kind: "full"; text: string }
+  | { kind: "refused"; text: string }
   | { kind: "unknown"; text: string };
 
 export const GENERIC_ERROR_TEXT = "Something went wrong. Please try again.";
@@ -43,6 +50,10 @@ export const TABLE_FULL_TEXT = "This table is full.";
 // moment, or the empty-table sweep).
 export const TABLE_ENDED_TEXT = "This table has ended.";
 export const RATE_LIMITED_TEXT = "You've done that too many times in the last hour. Please try again later.";
+// THE PLAIN REFUSAL (moderation M1): join_table_by_code and watch_table's
+// answer, word for word, when the table's creator has blocked the caller.
+// One wording for joining and watching alike, and no reason.
+export const REFUSED_TEXT = "You can't join this table.";
 
 // The one-line note where a start can quietly end a single-player game.
 export const QUIET_CLOSE_NOTE = "Starting or joining another table ends any single-player game you have open.";
@@ -93,8 +104,9 @@ export function lockedOutText(minutes: number | null): string {
 // plain RATE_LIMITED_TEXT.
 const KNOWN_LIMIT_MESSAGE = /^You can (?:start|join|start watching) at most \d+ [a-z -]+ an hour\. Please try again later\.$/;
 
-// What a refusal means. The seat trigger's "This table is full." is the one
-// plain server message shown as it is.
+// What a refusal means. The plain server messages shown as they are: the
+// seat trigger's "This table is full.", "This table has ended." and the
+// Block List's "You can't join this table." (moderation M1).
 export function rpcRefusal(error: RpcErrorLike | null | undefined): Refusal {
   const message = (error?.message ?? "").trim();
   const details = (error?.details ?? "").trim();
@@ -122,6 +134,7 @@ export function rpcRefusal(error: RpcErrorLike | null | undefined): Refusal {
   }
   if (message === TABLE_FULL_TEXT) return { kind: "full", text: TABLE_FULL_TEXT };
   if (message === TABLE_ENDED_TEXT) return { kind: "ended", text: TABLE_ENDED_TEXT };
+  if (message === REFUSED_TEXT) return { kind: "refused", text: REFUSED_TEXT };
   return { kind: "unknown", text: GENERIC_ERROR_TEXT };
 }
 

@@ -5,7 +5,7 @@
 // show. Tested by scripts/test-phase3.ts.
 
 import { isStaleWaitingTable } from "@/lib/tableListing";
-import { GENERIC_ERROR_TEXT, RATE_LIMITED_TEXT, TABLE_ID_PARAM, isTableId } from "@/lib/oneTable";
+import { GENERIC_ERROR_TEXT, RATE_LIMITED_TEXT, REFUSED_TEXT, TABLE_ID_PARAM, isTableId } from "@/lib/oneTable";
 
 // Where watching happens (the watch page, part B of the spectator UI). With
 // the table's id whenever the app knows it (?t=, step 3 slice B): an in-app
@@ -193,6 +193,7 @@ export type WatchRefusal = {
     | "already_at_table"
     | "locked_out"
     | "rate_limited"
+    | "refused"
     | "other";
   text: string;
   tableCode?: string;
@@ -213,6 +214,8 @@ export function watchRefusal(message: string): WatchRefusal {
   if (message.startsWith("Too many wrong table codes.")) return { kind: "locked_out", text: message };
   if (message === RATE_LIMITED_TEXT || /^You can start watching at most \d+ tables an hour\. Please try again later\.$/.test(message))
     return { kind: "rate_limited", text: message };
+  // The Block List's plain refusal (moderation M1): word for word, no reason.
+  if (message === REFUSED_TEXT) return { kind: "refused", text: REFUSED_TEXT };
   return { kind: "other", text: GENERIC_ERROR_TEXT };
 }
 
