@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
@@ -12,6 +12,7 @@ import {
   createChatThrottle,
   createPerSenderThrottle,
   ownChatCard,
+  withoutSenders,
   type ChatMessage,
 } from "@/lib/tableChat";
 
@@ -49,6 +50,14 @@ import {
 // nothing is read from the message but `text`, which is cleaned
 // (cleanChatText) and throttled per sender; anything else is dropped.
 //
+// MUTED SENDERS (moderation M2): `muted` -- the people I hid in chat plus
+// the people on my Block List (lib/tableChat.ts mutedSenders). Their
+// messages are dropped as they arrive, before anything is stored (so the
+// stack never shows them and the screen reader never reads them); any that
+// arrived before the set changed are filtered out of what the hook returns,
+// and dropSender (the card's Hide / Block) forgets them for good. Their
+// channels stay joined: muting changes nothing anyone else sees.
+//
 // MY OWN MESSAGE: once a send is ACKed "ok", `own` holds it for OWN_CARD_MS
 // (lib/tableChat.ts) -- one at a time, apart from `messages`.
 //
@@ -79,17 +88,20 @@ function removeChatChannel(topic: string, channel: RealtimeChannel) {
 }
 
 let idSeq = 0;
+const NOBODY_MUTED: ReadonlySet<string> = new Set();
 
 export function useTableChat({
   enabled,
   tableId,
   myUserId,
   roster,
+  muted = NOBODY_MUTED,
 }: {
   enabled: boolean;
   tableId: string | null;
   myUserId: string | null;
   roster: readonly ChatRosterEntry[];
+  muted?: ReadonlySet<string>;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [available, setAvailable] = useState(false);
@@ -105,6 +117,12 @@ export function useTableChat({
     rosterRef.current = roster;
     meRef.current = myUserId;
   }, [roster, myUserId]);
+
+  // Muted senders: read at arrival from the ref (dropped, never stored).
+  const mutedRef = useRef(muted);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
 
   // My own card goes by itself after OWN_CARD_MS (a newer one restarts it).
   useEffect(() => {
@@ -204,6 +222,8 @@ export function useTableChat({
                 payload && typeof payload === "object" ? (payload as { text?: unknown }).text : undefined
               );
               if (text === null) return;
+              // Hidden or blocked by me (moderation M2): dropped, never stored.
+              if (mutedRef.current.has(senderId)) return;
               const member = rosterRef.current.find((m) => m.user_id === senderId);
               // Not in the roster (left, removed, no longer watching): dropped.
               if (!member) return;
@@ -274,6 +294,15 @@ export function useTableChat({
   }, []);
   const closeAll = useCallback(() => setMessages([]), []);
   const dismissOwn = useCallback(() => setOwn(null), []);
+  // Hide / Block from a card (moderation M2): that sender's messages go from
+  // memory at once, so an Unhide later doesn't bring old ones back.
+  const dropSender = useCallback((senderId: string) => {
+    setMessages((list) => withoutSenders(list, new Set([senderId])));
+  }, []);
 
-  return { messages, own: on ? own : null, send, dismiss, closeAll, dismissOwn, available: on && available };
+  // What shows: never a muted sender's message -- also one that arrived
+  // before they were muted (a block made on the Profile page in another tab).
+  const shown = useMemo(() => withoutSenders(messages, muted), [messages, muted]);
+
+  return { messages: shown, own: on ? own : null, send, dismiss, closeAll, dismissOwn, dropSender, available: on && available };
 }

@@ -117,6 +117,20 @@ export function addChatMessage(list: readonly ChatMessage[], message: ChatMessag
   return [message, ...list].slice(0, CHAT_MEMORY);
 }
 
+// MUTED SENDERS (moderation M2): the people whose messages never show on
+// this screen -- the ones I hid in chat (lib/chatHide.ts, this browser) and
+// the ones on my Block List (lib/blocks.ts, the server). A muted sender's
+// messages are dropped as they arrive, and any already showing go at once.
+export function mutedSenders(hidden: Iterable<string>, blocked: Iterable<string>): Set<string> {
+  return new Set([...hidden, ...blocked]);
+}
+
+// The list without any muted sender's messages (the same list when none).
+export function withoutSenders(list: readonly ChatMessage[], muted: ReadonlySet<string>): ChatMessage[] {
+  if (muted.size === 0 || !list.some((m) => muted.has(m.senderId))) return list as ChatMessage[];
+  return list.filter((m) => !muted.has(m.senderId));
+}
+
 // What the stack shows: the newest `max` cards, and how many more wait.
 export function visibleChatCards(list: readonly ChatMessage[], max = CHAT_MAX_CARDS) {
   const room = Math.max(1, max);

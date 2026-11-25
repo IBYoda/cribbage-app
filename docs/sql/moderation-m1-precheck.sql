@@ -319,6 +319,7 @@ from (
   select 3, 2, p.oid::regprocedure::text, 'names', 'function ' || p.oid::regprocedure::text,
          'contains "block"',
          case when p.proname in ('block_player', 'unblock_player', 'get_my_blocks', '_is_blocked_from_table') then 'M1''s own (the part1 rows check it)'
+              when p.proname = 'block_player_by_id' then 'INFO: moderation M2''s (moderation-m2-precheck.sql checks it)'
               else 'STOP: not M1''s; look at it first' end
   from pg_proc p
   join pg_namespace ns on ns.oid = p.pronamespace
@@ -363,14 +364,23 @@ from (
                                 where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m))
                 and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
              then 'after part 1: slice E''s 49 plus block_player, unblock_player, get_my_blocks'
-           else 'STOP: neither 49 nor 52; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 53
+                and to_regprocedure('public.block_player_by_id(uuid)') is not null
+                and not exists (select 1 from client_fns cf
+                                where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
+                                  and cf.name <> 'block_player_by_id')
+                and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
+             then 'after moderation M2 part 1: the 52 plus block_player_by_id'
+           else 'STOP: neither 49, 52 nor 53; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
-  select 4, 2, '', 'grants', 'executable by authenticated but in neither list',
+  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id aside)',
          coalesce((select string_agg(cf.name, ', ' order by cf.name) from client_fns cf
-                   where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)), '(none)'),
+                   where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
+                     and cf.name <> 'block_player_by_id'), '(none)'),
          case when exists (select 1 from client_fns cf
-                           where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m))
+                           where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
+                             and cf.name <> 'block_player_by_id')
               then 'STOP: paste back' else '' end
 
   union all
