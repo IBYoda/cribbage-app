@@ -24,7 +24,9 @@
 --   K2  the pg_cron job attempt-log-cleanup: exactly one, '17 * * * *',
 --       active, running select public.cleanup_attempt_log();.
 --   K3  attempt_log_action_check allows exactly the seven actions (the five
---       slice A ones plus game_start and follow_change).
+--       slice A ones plus game_start and follow_change) -- or, once
+--       moderation M1 part 1 is in (public.blocks exists), exactly those
+--       eight with block_change.
 --   K4  the cleanup deletes rows older than 7 days and keeps the rest: of
 --       the temporary account's rows at 8 days, 7 days and a minute, 6 days
 --       and 23 hours, and now, the last two stay; afterwards no row older
@@ -77,15 +79,22 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [K3] The seven actions.
+  -- [K3] The seven actions -- eight with block_change once moderation M1
+  -- part 1 is in (its table exists; slice-e-grants-verification.sql decides
+  -- the same way).
   select pg_get_constraintdef(con.oid) into v_txt
   from pg_constraint con
   where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check';
   if v_txt is null
-     or (length(v_txt) - length(replace(v_txt, '::text', ''))) / 6 <> 7
+     or (length(v_txt) - length(replace(v_txt, '::text', ''))) / 6
+          <> (case when to_regclass('public.blocks') is not null then 8 else 7 end)
      or v_txt !~ '''create_table''' or v_txt !~ '''create_computer_table''' or v_txt !~ '''join'''
-     or v_txt !~ '''watch''' or v_txt !~ '''code_guess''' or v_txt !~ '''game_start''' or v_txt !~ '''follow_change''' then
-    raise exception 'FAIL [K3] attempt_log_action_check is "%"; expected exactly the seven actions.', coalesce(v_txt, 'missing');
+     or v_txt !~ '''watch''' or v_txt !~ '''code_guess''' or v_txt !~ '''game_start''' or v_txt !~ '''follow_change'''
+     or (to_regclass('public.blocks') is not null and v_txt !~ '''block_change''') then
+    raise exception 'FAIL [K3] attempt_log_action_check is "%"; expected exactly %.', coalesce(v_txt, 'missing'),
+      case when to_regclass('public.blocks') is not null
+           then 'the eight actions (the seven slice A/E ones plus block_change: moderation M1 part 1 is in)'
+           else 'the seven actions (the five slice A ones plus game_start and follow_change)' end;
   end if;
   v_checks := v_checks + 1;
 
