@@ -30,6 +30,9 @@ import {
   watchHref,
   withoutSpectator,
 } from "@/lib/spectators";
+import { chatBlockConfirmText, chatBlockFailureText, readMyBlocks, writeBlockById } from "@/lib/blocks";
+import { hideSender, parseHidden, rawHidden, subscribeHidden } from "@/lib/chatHide";
+import { mutedSenders } from "@/lib/tableChat";
 import { JoinChoice } from "@/components/brand/JoinChoice";
 import { readSpectatorReveals, readTableSpectators, type TableSpectator } from "@/lib/spectatorData";
 import { SpectatorsList, type SpectatorsListMode } from "@/components/table/SpectatorsList";
@@ -2951,12 +2954,87 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // the eye on their messages). A sender not in it is dropped, so a
   // spectator leaves everyone's chat as soon as they leave the list.
   const chatRoster = useMemo(() => mergeChatRoster(members, allowsSpectators ? spectatorList : null), [members, spectatorList, allowsSpectators]);
+
+  // HIDE AND BLOCK IN CHAT (moderation M2). The MUTED set -- people I hid in
+  // chat on this browser (lib/chatHide.ts) plus people on my Block List
+  // (lib/blocks.ts, read with get_my_blocks) -- never shows on my screen
+  // (useTableChat drops them). The hidden list follows changes from this tab
+  // and others (Settings' Unhide included). The Block List is read when chat
+  // turns on, right after a Block from a card, and whenever this tab comes
+  // back into view (a change on the Profile page elsewhere). A failed read
+  // keeps what it had. Block never writes the hide list: Unblock on the
+  // Profile page brings their chat back.
+  const hiddenRaw = useSyncExternalStore(
+    useCallback((onChange: () => void) => (myUserId ? subscribeHidden(myUserId, onChange) : () => {}), [myUserId]),
+    () => (myUserId ? rawHidden(myUserId) : ""),
+    () => ""
+  );
+  const hiddenIds = useMemo(() => parseHidden(hiddenRaw).map((p) => p.userId), [hiddenRaw]);
+  const [blockedIds, setBlockedIds] = useState<string[]>([]);
+  const [chatBlockNote, setChatBlockNote] = useState<string | null>(null);
+  const reloadBlocks = useCallback(async () => {
+    const read = await readMyBlocks();
+    if (read.ok) setBlockedIds(read.data.map((p) => p.userId));
+  }, []);
+  useEffect(() => {
+    if (!chatOn) return;
+    let cancelled = false;
+    const load = () => {
+      readMyBlocks().then((read) => {
+        if (!cancelled && read.ok) setBlockedIds(read.data.map((p) => p.userId));
+      });
+    };
+    load();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [chatOn]);
+  useEffect(() => {
+    if (!chatBlockNote) return;
+    const t = window.setTimeout(() => setChatBlockNote(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [chatBlockNote]);
+  const chatMuted = useMemo(() => mutedSenders(hiddenIds, blockedIds), [hiddenIds, blockedIds]);
   const chat = useTableChat({
     enabled: chatOn,
     tableId: table?.id ?? null,
     myUserId,
     roster: chatRoster,
+    muted: chatMuted,
   });
+  // "Hide <name>": this browser only, no confirm.
+  const hideInChat = useCallback(
+    (userId: string, name: string) => {
+      if (myUserId) hideSender(myUserId, { userId, name });
+      chat.dropSender(userId);
+    },
+    [myUserId, chat]
+  );
+  // "Block <name>": a native confirm first (Walt's wording), then the Block
+  // List by the sender's account id. Muted at once; then the list is read.
+  const blockInChat = useCallback(
+    async (userId: string, name: string) => {
+      if (!window.confirm(chatBlockConfirmText(name))) return;
+      const outcome = await writeBlockById(userId);
+      const failure = chatBlockFailureText(outcome);
+      if (failure) {
+        setChatBlockNote(failure);
+        return;
+      }
+      setBlockedIds((ids) => (ids.includes(userId) ? ids : [...ids, userId]));
+      chat.dropSender(userId);
+      void reloadBlocks();
+    },
+    [reloadBlocks, chat]
+  );
+
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const chatButtonRef = useRef<HTMLButtonElement>(null);
@@ -3788,6 +3866,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     (playStatus === "error" && playMessage) ||
     (gameStatus === "error" && gameMessage) ||
     (seatStatus === "error" && seatMessage) ||
+    // A chat card's Block that didn't go through (moderation M2).
+    chatBlockNote ||
     null;
 
   // The header's controls -- the same in the square view's header, and the
@@ -3918,6 +3998,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               }
             : undefined
         }
+        onHide={hideInChat}
+        onBlock={blockInChat}
       />
       {gameEndedNotice && (
         <div data-table-notice="" className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">

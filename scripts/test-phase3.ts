@@ -397,8 +397,21 @@ import {
   blockErrorOutcome,
   blockMessage,
   blockedPlayersFromRows,
+  chatBlockConfirmText,
+  chatBlockFailureText,
   unblockMessage,
 } from "../lib/blocks";
+import {
+  CHAT_HIDDEN_LIMIT,
+  chatHiddenKey,
+  hideSender,
+  parseHidden,
+  rawHidden,
+  readHidden,
+  unhideSender,
+  withHidden,
+  withoutHidden,
+} from "../lib/chatHide";
 import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
 import { scoreHand } from "../lib/scoring";
 import {
@@ -419,7 +432,9 @@ import {
   createPerSenderThrottle,
   ownCardShowing,
   ownChatCard,
+  mutedSenders,
   visibleChatCards,
+  withoutSenders,
   type ChatMessage,
 } from "../lib/tableChat";
 import { suitSymbol } from "../lib/cards";
@@ -6236,7 +6251,8 @@ check("block list: Profile messages say only whether it worked", () => {
 });
 check("block list: the app reads and writes it only through the three RPCs, never the table", () => {
   const lib = readFileSync("lib/blocks.ts", "utf8");
-  deepStrictEqual([...lib.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]), ["get_my_blocks", "block_player", "unblock_player"]);
+  // (moderation M2 added block_player_by_id, the chat card's Block by account id.)
+  deepStrictEqual([...lib.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]), ["get_my_blocks", "block_player", "block_player_by_id", "unblock_player"]);
   strictEqual(lib.includes('{ p_nickname: nickname }') && lib.includes('{ p_target: userId }'), true);
   strictEqual(lib.includes("if (error) return blockErrorOutcome(error);"), true);
   const ui = readFileSync("components/brand/BlockedPlayers.tsx", "utf8");
@@ -6280,6 +6296,182 @@ check("block list: the SQL keeps every client out of the table and the helper", 
     const raw = readFileSync(`docs/sql/moderation-m1-${f}.sql`);
     strictEqual(raw.includes(Buffer.from("\r\n")), true, f);
     strictEqual(/(?<!\r)\n/.test(raw.toString("latin1")), false, `${f}: a bare LF`);
+  }
+});
+
+// ---- Hide and block in chat (moderation M2) -------------------------------
+// A tiny in-memory localStorage for the storage helpers (restored after).
+function withFakeStorage(store: Map<string, string> | "broken", fn: () => void) {
+  const before = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const fake =
+    store === "broken"
+      ? {
+          getItem: () => {
+            throw new Error("blocked");
+          },
+          setItem: () => {
+            throw new Error("blocked");
+          },
+        }
+      : { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+  Object.defineProperty(globalThis, "localStorage", { value: fake, configurable: true, writable: true });
+  try {
+    fn();
+  } finally {
+    if (before) Object.defineProperty(globalThis, "localStorage", before);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+}
+check("chat hide: a per-player key, and a stored value always reads as a clean list", () => {
+  strictEqual(chatHiddenKey("u1"), "nobs:chat-hidden:v1:u1");
+  for (const raw of [null, undefined, "", "x", "{}", "null", "[1,2]"]) deepStrictEqual(parseHidden(raw), [], String(raw));
+  deepStrictEqual(
+    parseHidden(JSON.stringify([
+      { userId: "a", name: "Ann", hiddenAt: 1 },
+      { userId: "b", name: "Bo", hiddenAt: 5 },
+      { userId: "a", name: "Ann again", hiddenAt: 9 },
+      { name: "no id" },
+      { userId: "c", hiddenAt: "soon" },
+    ])),
+    [
+      { userId: "b", name: "Bo", hiddenAt: 5 },
+      { userId: "a", name: "Ann", hiddenAt: 1 },
+      { userId: "c", name: "", hiddenAt: 0 },
+    ]
+  );
+  const list = withHidden(withHidden([], { userId: "a", name: "Ann", hiddenAt: 1 }), { userId: "a", name: "Ann", hiddenAt: 2 });
+  deepStrictEqual(list, [{ userId: "a", name: "Ann", hiddenAt: 2 }], "hiding twice keeps one entry");
+  deepStrictEqual(withoutHidden(list, "a"), []);
+  let many: ReturnType<typeof parseHidden> = [];
+  for (let i = 0; i < CHAT_HIDDEN_LIMIT + 5; i++) many = withHidden(many, { userId: `u${i}`, name: "", hiddenAt: i });
+  strictEqual(many.length, CHAT_HIDDEN_LIMIT);
+  strictEqual(many[0].userId, `u${CHAT_HIDDEN_LIMIT + 4}`, "newest kept");
+});
+check("chat hide: stored per signed-in player on this browser; broken storage is just an empty list", () => {
+  const store = new Map<string, string>();
+  withFakeStorage(store, () => {
+    hideSender("me", { userId: "a", name: "Ann" }, 1);
+    hideSender("me", { userId: "b", name: "Bo" }, 2);
+    hideSender("me", { userId: "a", name: "Ann" }, 3);
+    hideSender("me", { userId: "me", name: "Myself" }, 4); // never yourself
+    hideSender("other", { userId: "a", name: "Ann" }, 5);
+    deepStrictEqual(readHidden("me").map((p) => p.userId), ["a", "b"]);
+    deepStrictEqual(readHidden("other").map((p) => p.userId), ["a"]);
+    unhideSender("me", "a");
+    deepStrictEqual(readHidden("me").map((p) => p.userId), ["b"]);
+    strictEqual(rawHidden("me"), store.get("nobs:chat-hidden:v1:me"));
+    strictEqual(rawHidden("nobody"), "");
+  });
+  withFakeStorage("broken", () => {
+    deepStrictEqual(readHidden("me"), []);
+    strictEqual(rawHidden("me"), "");
+    hideSender("me", { userId: "a", name: "Ann" }); // no throw
+    unhideSender("me", "a");
+  });
+});
+check("chat: muted senders (hidden + blocked) are filtered; nothing muted leaves the list as it is", () => {
+  const msg = (id: string, senderId: string) => ({ id, senderId, name: senderId, avatarUrl: null, text: "hi", at: 0 });
+  const list = [msg("1", "a"), msg("2", "b"), msg("3", "a")];
+  const muted = mutedSenders(["a"], ["c"]);
+  deepStrictEqual([...muted].sort(), ["a", "c"]);
+  deepStrictEqual(withoutSenders(list, muted).map((m) => m.id), ["2"]);
+  strictEqual(withoutSenders(list, new Set()), list);
+  strictEqual(withoutSenders(list, new Set(["z"])), list);
+  // The hook: dropped on arrival before anything is stored, filtered from
+  // what shows, and forgotten for good by a card's Hide / Block.
+  const hook = readFileSync("components/table/useTableChat.ts", "utf8");
+  const drop = hook.indexOf("if (mutedRef.current.has(senderId)) return;");
+  strictEqual(drop > 0 && drop < hook.indexOf("addChatMessage(list, {"), true);
+  strictEqual(hook.includes("const shown = useMemo(() => withoutSenders(messages, muted), [messages, muted]);"), true);
+  strictEqual(hook.includes("return { messages: shown,"), true);
+  strictEqual(hook.includes("const dropSender = useCallback("), true);
+  // The page passes the muted set, from the hide list and the Block List.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("const chatMuted = useMemo(() => mutedSenders(hiddenIds, blockedIds), [hiddenIds, blockedIds]);"), true);
+  strictEqual(view.includes("    muted: chatMuted,\n  });"), true);
+  // The Block List is re-read on open (chat on), after a Block, and on tab focus.
+  strictEqual(/useEffect\(\(\) => \{\s*if \(!chatOn\) return;[\s\S]{0,300}readMyBlocks\(\)[\s\S]{0,400}addEventListener\("focus", onVisible\);\s*document\.addEventListener\("visibilitychange", onVisible\);/.test(view), true);
+});
+check("chat card menu: a visible ... on other people's cards only, with Hide and Block, laid over the stack", () => {
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  const card = ui.slice(ui.indexOf("function ChatCard("), ui.indexOf("export function ChatAnnouncer"));
+  strictEqual(card.includes("const showMenu = !own && menu;"), true, "never on my own card");
+  strictEqual(card.includes("aria-label={`More for ${m.name}`}"), true);
+  strictEqual(card.includes('aria-haspopup="menu"'), true);
+  strictEqual(card.includes("h-11 w-9"), true, "as tall as the x: the card's height doesn't change");
+  strictEqual(card.includes("Hide {m.name}"), true);
+  strictEqual(card.includes("Block {m.name}"), true);
+  strictEqual(/role="menu"[\s\S]{0,120}className="absolute /.test(card), true, "the menu is absolute: no height added");
+  strictEqual(/Report/.test(card.replace(/\{\/\*[\s\S]*?\*\/\}/g, "")), false, "no Report yet");
+  // My own card gets no menu; the others get it only when the page gives both actions.
+  const stack = ui.slice(ui.indexOf("export function ChatStack"), ui.indexOf("function ChatCard("));
+  const ownBlock = stack.slice(stack.indexOf("{own && ("), stack.indexOf("{candidates.map("));
+  strictEqual(ownBlock.includes("menu="), false);
+  strictEqual(stack.includes("onHide && onBlock"), true);
+  // Escape, a tap outside (capture phase), and picking an action close it.
+  strictEqual(stack.includes('if (e.key === "Escape") setMenuFor(null);'), true);
+  strictEqual(stack.includes('document.addEventListener("pointerdown", onDown, true);'), true);
+  strictEqual((stack.match(/setMenuFor\(null\);\s*on(Hide|Block)\(m\.senderId, m\.name\);/g) ?? []).length, 2);
+  // The host's eye/Remove and the close button are untouched.
+  strictEqual(card.includes('data-chat-eye="remove"'), true);
+  strictEqual(card.includes("aria-label={own ? \"Close your message\" : `Close message from ${m.name}`}"), true);
+  // The component only draws: it calls nothing on the server itself.
+  strictEqual(/lib\/blocks|lib\/chatHide|supabase/.test(ui), false);
+});
+check("chat Block: Walt's confirm first, then the Block List by account id only; Hide never asks", () => {
+  strictEqual(chatBlockConfirmText("Elsa"), "Block Elsa? They won't be able to join or watch tables you start, and you won't see their chat.");
+  strictEqual(chatBlockFailureText("blocked"), null);
+  strictEqual(chatBlockFailureText("already_blocked"), null);
+  strictEqual(chatBlockFailureText("limit"), BLOCK_LIMIT_TEXT);
+  strictEqual(chatBlockFailureText("rate_limited"), BLOCK_RATE_TEXT);
+  strictEqual(chatBlockFailureText("not_allowed"), BLOCK_NOT_ALLOWED_TEXT);
+  strictEqual(chatBlockFailureText("not_found"), BLOCK_FAILED_TEXT, "no nickname wording for a block by id");
+  strictEqual(chatBlockFailureText("error"), BLOCK_FAILED_TEXT);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const block = view.slice(view.indexOf("const blockInChat = useCallback("), view.indexOf("const blockInChat = useCallback(") + 700);
+  strictEqual(block.indexOf("if (!window.confirm(chatBlockConfirmText(name))) return;") > 0, true);
+  strictEqual(block.indexOf("window.confirm") < block.indexOf("await writeBlockById(userId)"), true);
+  strictEqual(/\bwriteBlock\(/.test(view), false, "the table never blocks by nickname");
+  const hide = view.slice(view.indexOf("const hideInChat = useCallback("), view.indexOf("const blockInChat = useCallback("));
+  strictEqual(hide.includes("window.confirm"), false);
+  strictEqual(hide.includes("hideSender(myUserId, { userId, name });"), true);
+  strictEqual(view.includes("onHide={hideInChat}") && view.includes("onBlock={blockInChat}"), true);
+  // The Profile page keeps blocking by exact nickname.
+  const profile = readFileSync("components/brand/BlockedPlayers.tsx", "utf8");
+  strictEqual(profile.includes("writeBlock(typed)"), true);
+  strictEqual(profile.includes("writeBlockById"), false);
+  const lib = readFileSync("lib/blocks.ts", "utf8");
+  strictEqual(lib.includes('supabase.rpc("block_player_by_id", { p_target: userId })'), true);
+});
+check("Settings: a Hidden in chat panel lists this browser's hidden people, each with Unhide", () => {
+  const page = readFileSync("app/settings/page.tsx", "utf8");
+  strictEqual(page.includes('<CardRoomFrame title="Settings" after={<ChatHiddenList userId={session.user.id} />}>'), true);
+  const panel = readFileSync("components/brand/ChatHiddenList.tsx", "utf8");
+  strictEqual(panel.includes("Hidden in chat"), true);
+  strictEqual(panel.includes("onClick={() => unhideSender(userId, person.userId)}"), true);
+  strictEqual(panel.includes("subscribeHidden(userId, onChange)"), true, "follows changes from the table and other tabs");
+  strictEqual(panel.includes('.from("profiles").select("id, nickname")'), true, "current names, display only");
+  strictEqual(/blocks/.test(panel.replace(/\/\/.*$/gm, "")), false, "blocked players live on the Profile page");
+});
+check("M2 SQL: block_player_by_id is add-only and authenticated-only; the suites expect 53", () => {
+  const part1 = readFileSync("docs/sql/moderation-m2-part1.sql", "utf8");
+  const code = part1.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+  strictEqual((code.match(/create or replace function public\.([a-z_]+)/g) ?? []).join(), "create or replace function public.block_player_by_id");
+  for (const role of ["public", "anon", "service_role", "authenticated"]) {
+    strictEqual(code.includes(`revoke all on function public.block_player_by_id(uuid) from ${role};`), true, role);
+  }
+  strictEqual(code.includes("grant execute on function public.block_player_by_id(uuid) to authenticated;"), true);
+  strictEqual(code.includes("pg_catalog.hashtextextended('blocks:' || v_actor::text, 0)"), true, "block_player's lock key");
+  strictEqual(code.includes("perform public._attempts_guard(v_actor, 'block_change', 30, interval '1 hour',"), true);
+  strictEqual(/\b(alter|drop) (table|function)\b/.test(code), false, "add-only");
+  const verification = readFileSync("docs/sql/moderation-m2-verification.sql", "utf8");
+  strictEqual((verification.match(/v_checks := v_checks \+ 1;/g) ?? []).length, 17);
+  strictEqual(verification.includes("if v_checks <> 17 then"), true);
+  const grants = readFileSync("docs/sql/slice-e-grants-verification.sql", "utf8");
+  strictEqual(grants.includes("v_expected_fns := v_expected_fns || array['block_player_by_id'];"), true);
+  for (const f of ["precheck", "part1", "part1-rollback", "verification"]) {
+    const raw = readFileSync(`docs/sql/moderation-m2-${f}.sql`).toString("latin1");
+    strictEqual(/(?<!\r)\n/.test(raw), false, `${f}: a bare LF`);
   }
 });
 

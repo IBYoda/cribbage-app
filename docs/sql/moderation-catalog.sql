@@ -13,6 +13,9 @@
 -- its indexes, block_player, unblock_player, get_my_blocks,
 -- _is_blocked_from_table) as INFO instead of STOP; section 10 expects the
 -- 52 names once public.blocks exists (49 before). Nothing else changed.
+-- UPDATED FOR MODERATION M2 (moderation-m2-part1.sql): block_player_by_id
+-- is INFO (M2's own) in section 09, and section 10 expects 53 names once it
+-- exists.
 --
 -- WHY: the moderation slices (kept chat messages for 3 days, reports, a
 -- table-wide mute and a kick by the host, a personal hide, a Block List that
@@ -131,7 +134,8 @@ m1_fp(fn, lf, crlf) as (
 ),
 m1_names(name) as (
   values ('blocks'), ('blocks_pkey'), ('blocks_blocked_id_idx'),
-         ('block_player'), ('unblock_player'), ('get_my_blocks'), ('_is_blocked_from_table')
+         ('block_player'), ('unblock_player'), ('get_my_blocks'), ('_is_blocked_from_table'),
+         ('block_player_by_id')
 ),
 fp_live as (
   select f.o, f.fn, f.kind, f.lf, f.crlf, f.src, l.n, l.sig, l.m, l.info
@@ -175,6 +179,10 @@ expected_fns(name) as (
   -- Moderation M1 part 1's three RPCs, once its table exists.
   select unnest(array['block_player', 'get_my_blocks', 'unblock_player'])
   where to_regclass('public.blocks') is not null
+  union all
+  -- Moderation M2 part 1's block by account id, once it exists.
+  select 'block_player_by_id'
+  where to_regprocedure('public.block_player_by_id(uuid)') is not null
 ),
 rt_parts as (
   select pt.relid
@@ -410,7 +418,7 @@ from (
          'function ' || p.oid::regprocedure::text,
          'matches ' || (select re from mod_words),
          case when p.proname in (select m.name from m1_names m)
-              then 'INFO: moderation M1''s own (moderation-m1-part1.sql)'
+              then 'INFO: moderation M1''s or M2''s own (moderation-m1-part1.sql, moderation-m2-part1.sql)'
               else 'STOP: expected none; look at it before naming a new function' end
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
@@ -471,15 +479,17 @@ from (
              where n.nspname = 'public' and p.proname ~* (select re from mod_words))
           + (select count(*) from pg_policies pol where pol.schemaname = 'public' and pol.policyname ~* (select re from mod_words))
           + (select count(*) from storage.buckets b where b.id ~* (select re from mod_words) or b.name ~* (select re from mod_words)))::text,
-         'expected 0 before moderation M1, plus 5 after M1 part 1 (blocks and its four functions); types and triggers are listed above, not counted here'
+         'expected 0 before moderation M1, plus 5 after M1 part 1 (blocks and its four functions), plus 1 after M2 part 1 (block_player_by_id); types and triggers are listed above, not counted here'
 
   union all
   -- ==== 10. Client-executable functions ===========================================
   select 10, 0, '', 0, 'client fn', 'functions authenticated may execute in public (distinct names)',
          (select count(*) from client_fns)::text,
          case when (select count(*) from client_fns) = 49 and to_regclass('public.blocks') is null then 'as slice E left it (49)'
-              when (select count(*) from client_fns) = 52 and to_regclass('public.blocks') is not null then 'as moderation M1 part 1 left it (52)'
-              else 'FLAG: not 49 (52 after moderation M1 part 1); see the next two rows' end
+              when (select count(*) from client_fns) = 52 and to_regclass('public.blocks') is not null
+                   and to_regprocedure('public.block_player_by_id(uuid)') is null then 'as moderation M1 part 1 left it (52)'
+              when (select count(*) from client_fns) = 53 and to_regprocedure('public.block_player_by_id(uuid)') is not null then 'as moderation M2 part 1 left it (53)'
+              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2 part 1); see the next two rows' end
 
   union all
   select 10, 1, '', 0, 'client fn', 'executable by authenticated but not in slice E''s 49 (plus M1''s 3 once public.blocks exists)',

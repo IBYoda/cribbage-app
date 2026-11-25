@@ -12,6 +12,10 @@
 -- get_my_blocks). Before M1 part 1 it expects exactly what slice E left: no
 -- blocks table and the 49. Re-run it after M1 part 1 and after part 2.
 --
+-- UPDATED FOR MODERATION M2 (docs/sql/moderation-m2-part1.sql): once
+-- block_player_by_id(uuid) exists, X1 expects 53 names (the 52 plus
+-- block_player_by_id). Re-run it after M2 part 1.
+--
 -- It WRITES -- one temporary function in public (X2), two temporary accounts
 -- in auth.users, and a few storage.objects rows in the avatars bucket written
 -- as one of them (rows only: no file is uploaded, and every row is rolled
@@ -43,7 +47,8 @@
 --   X1  functions: none executable by anon, none granted to PUBLIC, and
 --       authenticated may execute exactly these 49 (by name) -- 52 once
 --       moderation M1 part 1 is in (plus block_player, unblock_player,
---       get_my_blocks; never _is_blocked_from_table): every RPC the
+--       get_my_blocks; never _is_blocked_from_table), 53 once moderation
+--       M2 part 1 is in (plus block_player_by_id): every RPC the
 --       app calls, chat_topic_allows (Realtime evaluates it as the user), the
 --       seven slice D helpers (the row policies evaluate them as the user),
 --       and show_hand (granted since phase 2; the app no longer calls it --
@@ -86,6 +91,8 @@ declare
   v_n int;
   -- Moderation M1 part 1 is in when its table exists.
   v_m1 boolean := to_regclass('public.blocks') is not null;
+  -- Moderation M2 part 1 is in when its function exists.
+  v_m2 boolean := to_regprocedure('public.block_player_by_id(uuid)') is not null;
   v_expected_fns text[] := array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
@@ -105,6 +112,12 @@ begin
     v_expected_fns := v_expected_fns || array['block_player', 'get_my_blocks', 'unblock_player'];
     if array_length(v_expected_fns, 1) <> 52 then
       raise exception 'SETUP: the expected function list has % names after moderation M1 part 1; expected 52.', array_length(v_expected_fns, 1);
+    end if;
+  end if;
+  if v_m2 then
+    v_expected_fns := v_expected_fns || array['block_player_by_id'];
+    if array_length(v_expected_fns, 1) <> 53 then
+      raise exception 'SETUP: the expected function list has % names after moderation M2 part 1; expected 53 (M2 needs M1 part 1).', array_length(v_expected_fns, 1);
     end if;
   end if;
 
@@ -201,7 +214,7 @@ begin
                                                   where e.name not in (select o.name from open_fns o)))
   into v_bad;
   if v_bad <> '' then
-    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49, or 52 after moderation M1 part 1): %.', array_length(v_expected_fns, 1), v_bad;
+    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1): %.', array_length(v_expected_fns, 1), v_bad;
   end if;
   v_checks := v_checks + 1;
 

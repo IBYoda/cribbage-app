@@ -114,6 +114,47 @@ export async function writeBlock(nickname: string): Promise<BlockOutcome> {
   }
 }
 
+// THE CHAT CARD'S BLOCK (moderation M2, docs/sql/moderation-m2-part1.sql):
+// the sender's ACCOUNT ID, passed silently (nobody types or sees it), so a
+// blank or look-alike nickname is still the right person. The same outcomes
+// as writeBlock. The Profile page keeps writeBlock (by exact nickname).
+export async function writeBlockById(userId: string): Promise<BlockOutcome> {
+  try {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase.rpc("block_player_by_id", { p_target: userId });
+    if (error) return blockErrorOutcome(error);
+    return data === "blocked" || data === "already_blocked" || data === "not_found" || data === "not_allowed" || data === "limit"
+      ? data
+      : "error";
+  } catch {
+    return "error";
+  }
+}
+
+// The line a refused chat-card Block shows at the table (null: it worked --
+// blocked, or already on the list). No nickname wording: the card's Block
+// goes by account id.
+export function chatBlockFailureText(outcome: BlockOutcome): string | null {
+  switch (outcome) {
+    case "blocked":
+    case "already_blocked":
+      return null;
+    case "limit":
+      return BLOCK_LIMIT_TEXT;
+    case "rate_limited":
+      return BLOCK_RATE_TEXT;
+    case "not_allowed":
+      return BLOCK_NOT_ALLOWED_TEXT;
+    default:
+      return BLOCK_FAILED_TEXT;
+  }
+}
+
+// The confirm before a chat-card Block (Walt's wording, exactly).
+export function chatBlockConfirmText(name: string): string {
+  return `Block ${name}? They won't be able to join or watch tables you start, and you won't see their chat.`;
+}
+
 export async function writeUnblock(userId: string): Promise<UnblockOutcome> {
   try {
     const { supabase } = await import("@/lib/supabase");

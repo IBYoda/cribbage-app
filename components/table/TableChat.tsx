@@ -224,11 +224,20 @@ export function ChatStack({
   own = null,
   onDismissOwn,
   onRemoveSpectator,
+  onHide,
+  onBlock,
 }: {
   messages: readonly ChatMessage[];
   onDismiss: (id: string) => void;
   onCloseAll: () => void;
   room?: "game" | "full";
+  // MODERATION M2: each OTHER person's card gets a visible "..." button that
+  // opens a small menu -- "Hide <name>" and "Block <name>" (room for a
+  // "Report" entry later). Never on my own card. The page decides what they
+  // do (TableView: Hide on this browser; Block asks first, then the Block
+  // List by account id).
+  onHide?: (userId: string, name: string) => void;
+  onBlock?: (userId: string, name: string) => void;
   // THE HOST ONLY (the page passes it for the host and nobody else): a
   // spectator's card's eye becomes a 44px button that asks to remove them
   // (the page's confirm, a native dialog above this layer).
@@ -248,6 +257,30 @@ export function ChatStack({
   // or closing that one, folds the stack again if it must.
   const [shownFor, setShownFor] = useState<string | null>(null);
   const expanded = shownFor !== null && messages.some((m) => m.id === shownFor);
+  // The one card whose "..." menu is open (a card that goes closes it).
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const menuOpen = menuFor !== null && messages.some((m) => m.id === menuFor) ? menuFor : null;
+
+  // The menu closes on Escape and on a tap anywhere outside it (capture
+  // phase: the stack stops taps from reaching the page, so a tap on another
+  // card still closes it).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuFor(null);
+    };
+    const onDown = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.(`[data-chat-menu="${menuOpen}"], [data-chat-menu-button="${menuOpen}"]`)) return;
+      setMenuFor(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown, true);
+    };
+  }, [menuOpen]);
   // The newest CHAT_MAX_CARDS (5); fewer of them may show (fit), the rest are
   // "+N more".
   const candidates = visibleChatCards(messages).shown;
@@ -395,6 +428,22 @@ export function ChatStack({
                   hidden={i >= shown}
                   onClose={() => onDismiss(m.id)}
                   onRemove={m.spectator && onRemoveSpectator ? () => onRemoveSpectator(m.senderId, m.name) : undefined}
+                  menu={
+                    onHide && onBlock
+                      ? {
+                          open: menuOpen === m.id,
+                          onToggle: () => setMenuFor((cur) => (cur === m.id ? null : m.id)),
+                          onHide: () => {
+                            setMenuFor(null);
+                            onHide(m.senderId, m.name);
+                          },
+                          onBlock: () => {
+                            setMenuFor(null);
+                            onBlock(m.senderId, m.name);
+                          },
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -415,6 +464,7 @@ function ChatCard({
   onClose,
   own = false,
   onRemove,
+  menu,
 }: {
   message: ChatMessage;
   hidden: boolean;
@@ -422,7 +472,10 @@ function ChatCard({
   own?: boolean;
   // The host's shortcut on a spectator's card (ChatStack's onRemoveSpectator).
   onRemove?: () => void;
+  // MODERATION M2: the "..." menu (Hide / Block). Never on my own card.
+  menu?: { open: boolean; onToggle: () => void; onHide: () => void; onBlock: () => void };
 }) {
+  const showMenu = !own && menu;
   return (
     <div
       data-chat-card=""
@@ -435,7 +488,7 @@ function ChatCard({
       }
       className={`chat-card pointer-events-auto flex items-start gap-2 rounded-xl border border-zinc-300 bg-background/95 py-1 pl-2.5 text-sm shadow-md dark:border-zinc-700 ${
         own ? "chat-card--own" : ""
-      } ${hidden ? "invisible absolute inset-x-0" : ""}`}
+      } ${hidden ? "invisible absolute inset-x-0" : "relative"}`}
     >
       <span className="mt-1 shrink-0">
         <Avatar name={m.name} url={m.avatarUrl} size="xs" tone="table" />
@@ -467,6 +520,45 @@ function ChatCard({
           ))}
         : {m.text}
       </p>
+      {/* MODERATION M2: a VISIBLE "..." (Walt: a hidden control is easy to
+          miss). 36px wide and 44px tall, as tall as the x beside it, so the
+          card's height never changes; its menu is absolutely placed under
+          the card, so the stack's measured heights don't change either. */}
+      {showMenu && (
+        <button
+          type="button"
+          onClick={showMenu.onToggle}
+          tabIndex={hidden ? -1 : undefined}
+          aria-label={`More for ${m.name}`}
+          aria-haspopup="menu"
+          aria-expanded={showMenu.open}
+          title="More"
+          data-chat-menu-button={m.id}
+          className="-my-1.5 -mr-2 flex h-11 w-9 shrink-0 items-center justify-center self-center rounded-full text-zinc-600 dark:text-zinc-400"
+        >
+          <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
+            <circle cx="3" cy="8" r="1.5" fill="currentColor" />
+            <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+            <circle cx="13" cy="8" r="1.5" fill="currentColor" />
+          </svg>
+        </button>
+      )}
+      {showMenu && showMenu.open && !hidden && (
+        <div
+          role="menu"
+          aria-label={`${m.name}: chat options`}
+          data-chat-menu={m.id}
+          className="absolute right-2 top-full z-10 mt-1 flex min-w-44 flex-col rounded-xl border border-zinc-300 bg-background py-1 text-sm shadow-lg dark:border-zinc-700"
+        >
+          <button type="button" role="menuitem" onClick={showMenu.onHide} className="chat-menu-item px-3 py-2.5 text-left">
+            Hide {m.name}
+          </button>
+          <button type="button" role="menuitem" onClick={showMenu.onBlock} className="chat-menu-item px-3 py-2.5 text-left">
+            Block {m.name}
+          </button>
+          {/* M6 adds "Report <name>" here. */}
+        </div>
+      )}
       <button
         type="button"
         aria-label={own ? "Close your message" : `Close message from ${m.name}`}
