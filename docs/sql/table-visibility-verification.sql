@@ -1,5 +1,15 @@
 -- Table visibility: VERIFICATION.
 --
+-- RETIRED (step 3, slice D, 2026-11-24): do not run against the live DB.
+-- It stops at S3 by design (tables are public now), and after it asserts
+-- what slice D removed: S4 the tables policies by their OLD names ("Tables
+-- are viewable by any logged-in user"), and R a stranger reading a PRIVATE
+-- table by its code with a direct SELECT. Private tables are now readable
+-- only by their players, current spectators, the players of their games and
+-- admins; the code lookup goes through join_table_by_code (security
+-- definer). The read rules are proven by
+-- docs/sql/private-tables-verification.sql; the lobby query (L) is its B1.
+--
 -- Run in the Supabase Dashboard -> SQL Editor AFTER
 -- docs/sql/table-visibility.sql. The whole file is ONE DO block: run it as
 -- is.

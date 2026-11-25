@@ -2158,8 +2158,14 @@ check("Watching: the heartbeat's answers (part C: stay through game over, closed
   strictEqual(nextPollDelayMs({ connected: false, disconnectedPolls: 99, random: 0.999999 }) < 90_000, true);
   strictEqual(nextPollDelayMs({ connected: true, disconnectedPolls: 0, random: 0.999999 }) < 90_000, true);
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(/async function pollOnce\(\) \{[\s\S]{0,300}spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "on the safety poll");
-  strictEqual(/const catchUp = \(\) => \{[\s\S]{0,200}spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "visible / online");
+  // Step 3 slice D: the heartbeat is AWAITED before the reads (a private
+  // table is readable by a current spectator only), on the poll and on the
+  // catch-up; the watch page hands back the beat in flight.
+  strictEqual(/async function pollOnce\(\) \{[\s\S]{0,400}await spectateRef\.current\?\.heartbeat\(\);/.test(view), true, "on the safety poll, awaited");
+  strictEqual(/const catchUp = \(\) => \{[\s\S]{0,400}const beat = spectateRef\.current\?\.heartbeat\(\);[\s\S]{0,120}void Promise\.resolve\(beat\)\.then\(\(\) => refreshTableState\(table\.id\)\);/.test(view), true, "visible / online: refresh after the beat");
+  strictEqual(view.includes("heartbeat: () => Promise<void>;"), true);
+  strictEqual(page.includes("heartbeat: () => heartbeat(),"), true);
+  strictEqual(page.includes("if (beatingRef.current) return beatInFlightRef.current ?? undefined;"), true);
 });
 check("Watching: watch_table's refusals become screens; 'no game yet' waits and asks again", () => {
   strictEqual(watchRefusal("There is no game to watch at this table yet.").kind, "waiting");
@@ -2235,6 +2241,27 @@ check("Watching: the RPC allowlist -- the spectator route and its own modules ca
   strictEqual(/const takeSeat = useCallback\(\s*async \([^\n]*=> \{\s*\/\/[^\n]*\n\s*if \(spectating\) return;/.test(view), true);
   // A spectator's setup never reaches the seat code.
   strictEqual(/if \(spectating\) \{\s*setTable\(tableRow\);\s*await refreshTableState\(tableRow\.id\);\s*return;\s*\}/.test(view), true);
+});
+check("Private tables (step 3 slice D): a non-member reads a private table through the by-id preview, never an open read", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // The by-id setup: the direct read first (public tables, members, former
+  // players, admins, current spectators), then -- for a PLAYER only -- the
+  // definer preview by id when that read finds no row.
+  strictEqual(/if \(!readRow && !spectating\) \{\s*const \{ data: previewData, error: previewError \} = await playerRpc\("join_table_by_code", \{\s*p_code: code,\s*p_table_id: heldId,\s*p_preview: true,\s*\}\);/.test(view), true, "setup: preview by id, players only");
+  strictEqual(view.includes("tableRow = tableRowFromPreview(answer.preview);"), true);
+  // The seats and the live game come from the preview, not from reads a
+  // non-member can no longer make.
+  strictEqual(view.includes("const seatedCount = previewed ? previewed.seatedCount : seated.length;"), true);
+  strictEqual(view.includes("const isMember = previewed ? previewSeated : !seatsError && seated.includes(session!.user.id);"), true);
+  strictEqual(view.includes("? { data: previewed.gameLive ? { id: \"live\" } : null, error: null }"), true);
+  // The stale-tab check: no row -> the preview by id; not_found -> the ended screen.
+  strictEqual(/checkTableEndedRef\.current = \(tableId: string\) => \{\s*if \(spectating \|\| leavingRef\.current\) return;[\s\S]{0,600}await playerRpc\("join_table_by_code", \{\s*p_code: code,\s*p_table_id: tableId,\s*p_preview: true,\s*\}\);[\s\S]{0,300}if \(previewFromRow\(previewData\)\?\.outcome !== "not_found"\) return;\s*setClosedHumanTable\(true\);\s*setError\(TABLE_ENDED_TEXT\);/.test(view), true, "stale tab: preview by id");
+  // Every preview call in the view is a preview (seats nobody) or the seat in takeSeat.
+  const calls = [...view.matchAll(/playerRpc\("join_table_by_code", \{([^}]*)\}/g)].map((m) => m[1]);
+  strictEqual(calls.length, 4, "bare-code preview, by-id preview, stale-tab preview, takeSeat");
+  strictEqual(calls.filter((c) => c.includes("p_preview: true")).length, 3);
+  // playerRpc is declared before the stale-tab effect that uses it.
+  strictEqual(view.indexOf("const playerRpc = useCallback(") < view.indexOf("const checkTableEndedRef = useRef"), true);
 });
 check("Watching: nothing in the spectator path reads its own hand; hidden cards only via get_spectator_reveals", () => {
   for (const f of ["app/watch/[code]/page.tsx", "lib/spectatorData.ts", "lib/spectators.ts", "lib/lobbyNotice.ts"]) {
