@@ -9,11 +9,15 @@
 // (the Node tests have no Supabase environment).
 
 // What follow_user / unfollow_user answered, or "error" for a failed call.
-export type FollowOutcome = "following" | "not_following" | "limit" | "not_allowed" | "error";
+// "rate_limited": step 3 slice E -- the 31st real follow or unfollow in an
+// hour, refused by the server (detail rate_limited).
+export type FollowOutcome = "following" | "not_following" | "limit" | "not_allowed" | "rate_limited" | "error";
 
 export const FOLLOW_LIMIT = 50;
+export const FOLLOW_CHANGES_PER_HOUR = 30;
 
 export const FOLLOW_LIMIT_MESSAGE = `You can follow up to ${FOLLOW_LIMIT} players. Unfollow someone first.`;
+export const FOLLOW_RATE_MESSAGE = `You can follow or unfollow ${FOLLOW_CHANGES_PER_HOUR} times an hour. Please try again a little later.`;
 export const FOLLOW_FAILED_MESSAGE = "Couldn't update that just now.";
 
 // Did the call do what the tap asked? (Following when following was asked
@@ -26,7 +30,15 @@ export function followSucceeded(wantFollowing: boolean, outcome: FollowOutcome):
 // null when the tap worked.
 export function followMessage(wantFollowing: boolean, outcome: FollowOutcome): string | null {
   if (followSucceeded(wantFollowing, outcome)) return null;
-  return outcome === "limit" ? FOLLOW_LIMIT_MESSAGE : FOLLOW_FAILED_MESSAGE;
+  if (outcome === "limit") return FOLLOW_LIMIT_MESSAGE;
+  if (outcome === "rate_limited") return FOLLOW_RATE_MESSAGE;
+  return FOLLOW_FAILED_MESSAGE;
+}
+
+// A refused follow_user / unfollow_user call as an outcome: the churn limit
+// (detail rate_limited) has its own message; anything else is a failure.
+export function followErrorOutcome(error: { details?: string | null } | null | undefined): FollowOutcome {
+  return error?.details === "rate_limited" ? "rate_limited" : "error";
 }
 
 // A copy of the set with the id added (on) or removed (off).
@@ -106,7 +118,7 @@ export async function writeFollow(userId: string, follow: boolean): Promise<Foll
   try {
     const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase.rpc(follow ? "follow_user" : "unfollow_user", { p_target: userId });
-    if (error) return "error";
+    if (error) return followErrorOutcome(error);
     return data === "following" || data === "not_following" || data === "limit" || data === "not_allowed"
       ? data
       : "error";

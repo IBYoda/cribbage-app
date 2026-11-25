@@ -9,6 +9,7 @@ import { ProfileStats } from "@/components/ProfileStats";
 import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
 import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
 import { saveNickname } from "@/lib/profileNickname";
+import { AVATAR_TYPE_MESSAGE, avatarPath } from "@/lib/avatarPath";
 import { WingsFrame } from "@/components/Wings";
 import { getGodWins } from "@/lib/godWins";
 import { displayTier, initSeenTier, isCreator, placementFor, progress, wingsSplashSub } from "@/lib/wings";
@@ -116,8 +117,14 @@ export default function ProfilePage() {
     let newAvatarUrl = avatarUrl;
 
     if (avatarFile) {
-      const ext = avatarFile.name.split(".").pop();
-      const path = `${session.user.id}/avatar.${ext}`;
+      // One fixed name per type (lib/avatarPath.ts): the only names the
+      // avatars bucket accepts since step 3 slice E.
+      const path = avatarPath(session.user.id, avatarFile);
+      if (!path) {
+        setStatus("error");
+        setMessage(AVATAR_TYPE_MESSAGE);
+        return;
+      }
 
       const { error: uploadError } = await supabase.storage
         .from("avatars")
