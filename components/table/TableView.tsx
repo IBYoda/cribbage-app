@@ -39,6 +39,7 @@ import { useAppearance } from "@/components/AppearanceProvider";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import {
   GENERIC_ERROR_TEXT,
+  REFUSED_TEXT,
   TABLE_ENDED_TEXT,
   joinOutcome,
   logUnexpectedError,
@@ -1661,6 +1662,30 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       const seatedCount = previewed ? previewed.seatedCount : seated.length;
       const isMember = previewed ? previewSeated : !seatsError && seated.includes(session!.user.id);
       const isFull = !seatsError && seatedCount >= (tableRow.max_players ?? 2);
+
+      // THE BLOCK LIST (moderation M1, docs/sql/moderation-m1-part2.sql): a
+      // table read straight from its row (a public table opened from Open
+      // Tables or a ?t= link) would otherwise offer Play-or-Watch or the
+      // nickname step before the server is asked anything. So a player who
+      // isn't seated there asks join_table_by_code's preview BY ID first (it
+      // seats nobody, ends nothing, and a by-id miss isn't counted): ONLY its
+      // plain refusal, "You can't join this table.", stops here, shown word
+      // for word. Any other answer -- or a failed call -- goes on exactly as
+      // before (the seat and the watch are still decided on the server). Not
+      // for the creator (nobody blocks themselves) or when the table was only
+      // previewed (that preview already answered).
+      if (!previewed && !seatsError && !isMember && tableRow.created_by !== session!.user.id) {
+        const { error: entryError } = await playerRpc("join_table_by_code", {
+          p_code: tableRow.code,
+          p_table_id: tableRow.id,
+          p_preview: true,
+        });
+        if (cancelled) return;
+        if (entryError && rpcRefusal(entryError).kind === "refused") {
+          setError(REFUSED_TEXT);
+          return;
+        }
+      }
 
       // WATCH INSTEAD (joinOrWatch, lib/spectators.ts): only at a human table
       // that allows spectators, for someone not seated there -- one extra

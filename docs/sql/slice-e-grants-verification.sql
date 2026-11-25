@@ -6,6 +6,12 @@
 --
 -- STATUS: written, NOT RUN yet.
 --
+-- UPDATED FOR MODERATION M1 (docs/sql/moderation-m1-part1.sql): once
+-- public.blocks exists, T1 expects it with NO privilege for any client role,
+-- and X1 expects 52 names (the 49 plus block_player, unblock_player and
+-- get_my_blocks). Before M1 part 1 it expects exactly what slice E left: no
+-- blocks table and the 49. Re-run it after M1 part 1 and after part 2.
+--
 -- It WRITES -- one temporary function in public (X2), two temporary accounts
 -- in auth.users, and a few storage.objects rows in the avatars bucket written
 -- as one of them (rows only: no file is uploaded, and every row is rolled
@@ -31,10 +37,13 @@
 --         user_appearance  INSERT, SELECT, UPDATE   / -      / -
 --         table_spectators SELECT                   / -      / -
 --         attempt_log, computer_accounts, follows, game_results,
---         leaderboard_hidden: nothing for any of the three.
+--         leaderboard_hidden, and blocks (once moderation M1 part 1 has
+--         made it): nothing for any of the three.
 --   T2  no column-level grant on any table in public.
 --   X1  functions: none executable by anon, none granted to PUBLIC, and
---       authenticated may execute exactly these 49 (by name): every RPC the
+--       authenticated may execute exactly these 49 (by name) -- 52 once
+--       moderation M1 part 1 is in (plus block_player, unblock_player,
+--       get_my_blocks; never _is_blocked_from_table): every RPC the
 --       app calls, chat_topic_allows (Realtime evaluates it as the user), the
 --       seven slice D helpers (the row policies evaluate them as the user),
 --       and show_hand (granted since phase 2; the app no longer calls it --
@@ -75,6 +84,8 @@ declare
   v_state text;
   v_msg text;
   v_n int;
+  -- Moderation M1 part 1 is in when its table exists.
+  v_m1 boolean := to_regclass('public.blocks') is not null;
   v_expected_fns text[] := array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
@@ -89,6 +100,12 @@ declare
 begin
   if array_length(v_expected_fns, 1) <> 49 then
     raise exception 'SETUP: the expected function list has % names; expected 49.', array_length(v_expected_fns, 1);
+  end if;
+  if v_m1 then
+    v_expected_fns := v_expected_fns || array['block_player', 'get_my_blocks', 'unblock_player'];
+    if array_length(v_expected_fns, 1) <> 52 then
+      raise exception 'SETUP: the expected function list has % names after moderation M1 part 1; expected 52.', array_length(v_expected_fns, 1);
+    end if;
   end if;
 
   -- ==== T: tables ===================================================================
@@ -111,6 +128,9 @@ begin
       ('follows', '', ''),
       ('game_results', '', ''),
       ('leaderboard_hidden', '', '')
+    union all
+    -- Moderation M1's Block List: no client privileges at all.
+    select 'blocks', '', '' where v_m1
   ),
   actual as (
     select c.relname::text as tbl,
@@ -181,7 +201,7 @@ begin
                                                   where e.name not in (select o.name from open_fns o)))
   into v_bad;
   if v_bad <> '' then
-    raise exception 'FAIL [X1] functions authenticated may execute differ from the 49: %.', v_bad;
+    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49, or 52 after moderation M1 part 1): %.', array_length(v_expected_fns, 1), v_bad;
   end if;
   v_checks := v_checks + 1;
 

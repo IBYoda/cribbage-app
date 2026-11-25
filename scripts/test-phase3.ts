@@ -56,6 +56,7 @@ import {
   GENERIC_ERROR_TEXT,
   QUIET_CLOSE_NOTE,
   RATE_LIMITED_TEXT,
+  REFUSED_TEXT,
   TABLE_EMPTY_ENDED_TEXT,
   TABLE_ENDED_TEXT,
   TABLE_FULL_TEXT,
@@ -382,6 +383,22 @@ import {
   toggledSet,
 } from "../lib/follows";
 import { AVATAR_TYPE_MESSAGE, avatarExtension, avatarPath } from "../lib/avatarPath";
+import {
+  ALREADY_BLOCKED_TEXT,
+  BLOCK_FAILED_TEXT,
+  BLOCK_LIMIT,
+  BLOCK_LIMIT_TEXT,
+  BLOCK_NOT_ALLOWED_TEXT,
+  BLOCK_NOT_FOUND_TEXT,
+  BLOCK_RATE_TEXT,
+  BLOCKED_TEXT,
+  UNBLOCKED_TEXT,
+  UNNAMED_PLAYER,
+  blockErrorOutcome,
+  blockMessage,
+  blockedPlayersFromRows,
+  unblockMessage,
+} from "../lib/blocks";
 import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
 import { scoreHand } from "../lib/scoring";
 import {
@@ -2262,8 +2279,8 @@ check("Private tables (step 3 slice D): a non-member reads a private table throu
   strictEqual(/checkTableEndedRef\.current = \(tableId: string\) => \{\s*if \(spectating \|\| leavingRef\.current\) return;[\s\S]{0,600}await playerRpc\("join_table_by_code", \{\s*p_code: code,\s*p_table_id: tableId,\s*p_preview: true,\s*\}\);[\s\S]{0,300}if \(previewFromRow\(previewData\)\?\.outcome !== "not_found"\) return;\s*setClosedHumanTable\(true\);\s*setError\(TABLE_ENDED_TEXT\);/.test(view), true, "stale tab: preview by id");
   // Every preview call in the view is a preview (seats nobody) or the seat in takeSeat.
   const calls = [...view.matchAll(/playerRpc\("join_table_by_code", \{([^}]*)\}/g)].map((m) => m[1]);
-  strictEqual(calls.length, 4, "bare-code preview, by-id preview, stale-tab preview, takeSeat");
-  strictEqual(calls.filter((c) => c.includes("p_preview: true")).length, 3);
+  strictEqual(calls.length, 5, "bare-code preview, by-id preview, stale-tab preview, the Block List entry check (moderation M1), takeSeat");
+  strictEqual(calls.filter((c) => c.includes("p_preview: true")).length, 4);
   // playerRpc is declared before the stale-tab effect that uses it.
   strictEqual(view.indexOf("const playerRpc = useCallback(") < view.indexOf("const checkTableEndedRef = useRef"), true);
 });
@@ -6140,6 +6157,130 @@ check("avatar file names (step 3 slice E): one fixed, lower-case name per type",
   strictEqual(/if \(!path\) \{\s*setStatus\("error"\);\s*setMessage\(AVATAR_TYPE_MESSAGE\);\s*return;/.test(page), true);
   strictEqual(page.includes('avatarFile.name.split(".").pop()'), false, "no raw extension any more");
   strictEqual(AVATAR_TYPE_MESSAGE, "Please choose a PNG, JPEG or WebP picture.");
+});
+
+// ---- The Block List (moderation M1: lib/blocks.ts, docs/sql/moderation-m1-*.sql)
+check("block list: the plain refusal has a kind of its own, word for word, from join and watch", () => {
+  strictEqual(REFUSED_TEXT, "You can't join this table.");
+  // As PostgREST hands it over: P0001, no details, no hint.
+  deepStrictEqual(rpcRefusal({ message: REFUSED_TEXT, details: null, hint: null, code: "P0001" }), { kind: "refused", text: REFUSED_TEXT });
+  deepStrictEqual(watchRefusal(REFUSED_TEXT), { kind: "refused", text: REFUSED_TEXT });
+  // A quiet rewatch that meets it: a screen with the text (no redirect).
+  deepStrictEqual(rewatchOutcome(REFUSED_TEXT), { kind: "screen", text: REFUSED_TEXT });
+  // Only the exact text; every other message is mapped as before.
+  deepStrictEqual(rpcRefusal({ message: "You can't join this table" }), { kind: "unknown", text: GENERIC_ERROR_TEXT });
+  deepStrictEqual(watchRefusal("You can't join this table"), { kind: "other", text: GENERIC_ERROR_TEXT });
+  deepStrictEqual(rpcRefusal({ message: "This table is full." }), { kind: "full", text: TABLE_FULL_TEXT });
+  deepStrictEqual(watchRefusal("This table does not allow spectators."), { kind: "not_allowed", text: NOT_ALLOWED_TEXT });
+  deepStrictEqual(watchRefusal("You were removed from watching this table."), { kind: "removed", text: REMOVED_TEXT });
+  // The server raises exactly this text, in join and in watch (SQL doubles the quote).
+  // (SQL comment lines left out: the header quotes the statement too.)
+  const part2 = readFileSync("docs/sql/moderation-m1-part2.sql", "utf8")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+  const raises = part2.match(/raise exception 'You can''t join this table\.';/g) ?? [];
+  strictEqual(raises.length, 2);
+  strictEqual("You can''t join this table.".replace("''", "'"), REFUSED_TEXT);
+  // No detail or hint on it (nothing that could tell it apart from "This table is full.").
+  strictEqual(/raise exception using[^;]*You can''t join/.test(part2), false);
+});
+check("block list: every join and watch screen shows the refusal (typed code, link, Open Tables row, preview, watch)", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // The bare-code preview, the private by-id preview and takeSeat show why.text (refused included).
+  strictEqual((view.match(/setError\(why\.text\);/g) ?? []).length >= 3, true);
+  // A public table read by id asks the preview by id BEFORE Play-or-Watch and the nickname step.
+  const entryAt = view.indexOf('if (entryError && rpcRefusal(entryError).kind === "refused") {');
+  strictEqual(entryAt > 0, true);
+  strictEqual(/if \(!previewed && !seatsError && !isMember && tableRow\.created_by !== session!\.user\.id\) \{\s*const \{ error: entryError \} = await playerRpc\("join_table_by_code", \{\s*p_code: tableRow\.code,\s*p_table_id: tableRow\.id,\s*p_preview: true,\s*\}\);\s*if \(cancelled\) return;\s*if \(entryError && rpcRefusal\(entryError\)\.kind === "refused"\) \{\s*setError\(REFUSED_TEXT\);\s*return;\s*\}\s*\}/.test(view), true);
+  strictEqual(entryAt < view.indexOf("joinOrWatch({"), true, "before Play-or-Watch");
+  strictEqual(entryAt < view.indexOf("THE NICKNAME GATE. A NEW seat needs a nickname first"), true, "before the nickname step");
+  // The watch page: a by-id refusal through watchRefusal; the confirm's preview refusal shows its text.
+  const watch = readFileSync("app/watch/[code]/page.tsx", "utf8");
+  strictEqual(watch.includes("const refusal = watchRefusal(result.refused);"), true);
+  strictEqual(watch.includes(': { kind: "refused", text: r.text, login: false }'), true);
+  strictEqual(readFileSync("lib/spectatorData.ts", "utf8").includes("return { refused: error.message };"), true);
+});
+check("block list: Profile messages say only whether it worked", () => {
+  strictEqual(BLOCK_LIMIT, 100);
+  deepStrictEqual(blockMessage("blocked"), { ok: true, text: BLOCKED_TEXT });
+  strictEqual(BLOCKED_TEXT, "Blocked.");
+  deepStrictEqual(blockMessage("already_blocked"), { ok: false, text: ALREADY_BLOCKED_TEXT });
+  deepStrictEqual(blockMessage("not_found"), { ok: false, text: BLOCK_NOT_FOUND_TEXT });
+  deepStrictEqual(blockMessage("not_allowed"), { ok: false, text: BLOCK_NOT_ALLOWED_TEXT });
+  deepStrictEqual(blockMessage("limit"), { ok: false, text: BLOCK_LIMIT_TEXT });
+  strictEqual(BLOCK_LIMIT_TEXT, "Your Block List is full (100 players). Unblock someone first.");
+  deepStrictEqual(blockMessage("rate_limited"), { ok: false, text: BLOCK_RATE_TEXT });
+  strictEqual(BLOCK_RATE_TEXT, "You can block or unblock 30 times an hour. Please try again a little later.");
+  deepStrictEqual(blockMessage("error"), { ok: false, text: BLOCK_FAILED_TEXT });
+  deepStrictEqual(unblockMessage("unblocked"), { ok: true, text: UNBLOCKED_TEXT });
+  deepStrictEqual(unblockMessage("not_blocked"), { ok: true, text: UNBLOCKED_TEXT });
+  deepStrictEqual(unblockMessage("rate_limited"), { ok: false, text: BLOCK_RATE_TEXT });
+  deepStrictEqual(unblockMessage("error"), { ok: false, text: BLOCK_FAILED_TEXT });
+  strictEqual(blockErrorOutcome({ details: "rate_limited" }), "rate_limited");
+  strictEqual(blockErrorOutcome({ details: null }), "error");
+  strictEqual(blockErrorOutcome(null), "error");
+  // The list: newest first as the server sends it; a blank name shown plainly; junk rows dropped.
+  deepStrictEqual(
+    blockedPlayersFromRows([
+      { user_id: "u2", nickname: " Elsa ", avatar_url: "x", created_at: "2026-11-25T10:00:00Z" },
+      { user_id: "u1", nickname: "", created_at: "2026-11-25T09:00:00Z" },
+      { nickname: "no id" },
+    ]),
+    [
+      { userId: "u2", nickname: "Elsa", createdAt: "2026-11-25T10:00:00Z" },
+      { userId: "u1", nickname: UNNAMED_PLAYER, createdAt: "2026-11-25T09:00:00Z" },
+    ]
+  );
+  strictEqual(blockedPlayersFromRows(null), null);
+});
+check("block list: the app reads and writes it only through the three RPCs, never the table", () => {
+  const lib = readFileSync("lib/blocks.ts", "utf8");
+  deepStrictEqual([...lib.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]), ["get_my_blocks", "block_player", "unblock_player"]);
+  strictEqual(lib.includes('{ p_nickname: nickname }') && lib.includes('{ p_target: userId }'), true);
+  strictEqual(lib.includes("if (error) return blockErrorOutcome(error);"), true);
+  const ui = readFileSync("components/brand/BlockedPlayers.tsx", "utf8");
+  strictEqual(/supabase|\.rpc\(|\.from\(/.test(ui), false, "the component goes through lib/blocks.ts");
+  strictEqual(ui.includes("<form onSubmit={handleBlock}"), true);
+  strictEqual(ui.includes('type="button"\n                  onClick={() => handleUnblock(player)}'), true);
+  // No direct read or write of the table anywhere in the app.
+  for (const dir of ["app", "components", "lib"]) {
+    const walk = (d: string): string[] =>
+      readdirSync(d).flatMap((f) => {
+        const p = `${d}/${f}`;
+        return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(f) ? [p] : [];
+      });
+    for (const f of walk(dir)) strictEqual(/from\(\s*["']blocks["']/.test(readFileSync(f, "utf8")), false, f);
+  }
+  // The Profile page: under the stats, outside the profile form.
+  const page = readFileSync("app/profile/page.tsx", "utf8");
+  strictEqual(/after=\{\s*<>\s*<ProfileStats userId=\{session\.user\.id\} \/>\s*<BlockedPlayers \/>\s*<\/>\s*\}/.test(page), true);
+  strictEqual(page.indexOf("<BlockedPlayers />") < page.indexOf("<form onSubmit={handleSubmit}"), true);
+});
+check("block list: the SQL keeps every client out of the table and the helper", () => {
+  const part1 = readFileSync("docs/sql/moderation-m1-part1.sql", "utf8");
+  for (const role of ["public", "anon", "authenticated", "service_role"]) {
+    strictEqual(part1.includes(`revoke all on table public.blocks from ${role};`), true, role);
+    strictEqual(part1.includes(`revoke all on function public._is_blocked_from_table(uuid, uuid) from ${role};`), true, role);
+  }
+  strictEqual(/grant [a-z, ]+ on table public\.blocks/i.test(part1), false, "no table grant");
+  strictEqual(/grant execute on function public\._is_blocked_from_table/i.test(part1), false, "no helper grant");
+  for (const fn of ["block_player(text)", "unblock_player(uuid)", "get_my_blocks()"]) {
+    strictEqual(part1.includes(`revoke all on function public.${fn} from public;`), true, fn);
+    strictEqual(part1.includes(`grant execute on function public.${fn} to authenticated;`), true, fn);
+  }
+  strictEqual(part1.includes("alter table public.blocks enable row level security;"), true);
+  strictEqual(/create policy[^;]*public\.blocks/i.test(part1), false, "no policies");
+  // The grants suite knows the table (no privileges) and the three RPCs.
+  const grants = readFileSync("docs/sql/slice-e-grants-verification.sql", "utf8");
+  strictEqual(grants.includes("select 'blocks', '', '' where v_m1"), true);
+  strictEqual(grants.includes("array['block_player', 'get_my_blocks', 'unblock_player']"), true);
+  // Every M1 SQL file is stored with CRLF line ends, like the rest of docs/sql.
+  for (const f of ["precheck", "part1", "part2", "part1-rollback", "part2-rollback", "verification"]) {
+    const raw = readFileSync(`docs/sql/moderation-m1-${f}.sql`);
+    strictEqual(raw.includes(Buffer.from("\r\n")), true, f);
+    strictEqual(/(?<!\r)\n/.test(raw.toString("latin1")), false, `${f}: a bare LF`);
+  }
 });
 
 // ---- Hand calculator (lib/handBreakdown.ts) --------------------------------
