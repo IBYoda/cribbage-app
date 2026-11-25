@@ -106,8 +106,10 @@
 --       same refusal -- no preview row, so no host name, avatar or seats.
 --   J4  B WATCHING TA, by code and by id (the watch page, watch by link):
 --       the same refusal; no spectator row.
---   J5  none of J1-J4 counted anything: B has NO attempt_log row (no wrong
---       code, no join, no watch).
+--   J5  none of J1-J4 counted anything: B has NO attempt_log row with an
+--       action a join or watch could log (join, watch, code_guess,
+--       create_table, create_computer_table). B's one block_change row from
+--       B8 (B blocking D, a real change) is not one of them and is left out.
 --   J6  the refusal has exactly the shape of a plain refusal: D joining the
 --       full table TF gets "This table is full." with the same SQLSTATE
 --       (P0001), detail ('') and hint ('') as J1-J4.
@@ -678,10 +680,16 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [J5] Nothing counted for B.
-  select count(*) into v_n from public.attempt_log al where al.user_id = v_b;
+  -- [J5] Nothing counted for B by J1-J4. Only the actions a join or watch
+  -- could log: B8's block_change row (B blocking D) is a real change made
+  -- earlier on purpose, not something J1-J4 left.
+  select count(*), string_agg(distinct al.action, ', ')
+  into v_n, v_txt
+  from public.attempt_log al
+  where al.user_id = v_b
+    and al.action in ('join', 'watch', 'code_guess', 'create_table', 'create_computer_table');
   if v_n <> 0 then
-    raise exception 'FAIL [J5] B has % attempt_log row(s) after J1-J4; expected 0 (a found-but-refused table counts nothing).', v_n;
+    raise exception 'FAIL [J5] B has % attempt_log row(s) after J1-J4 (actions: %); expected 0 (a found-but-refused table counts nothing).', v_n, v_txt;
   end if;
   v_checks := v_checks + 1;
 
