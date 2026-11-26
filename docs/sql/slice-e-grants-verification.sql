@@ -28,6 +28,12 @@
 -- admin_list_reports and admin_delete_report; never _report_avatar_object
 -- or purge_old_reports). Re-run it after M6 part 1.
 --
+-- UPDATED FOR MODERATION M5a (docs/sql/moderation-m5a-part1.sql): once
+-- table_topic_allows(text) exists, X1 expects 60 names (the 59 plus
+-- table_topic_allows: the table events policy runs it as the user; never
+-- _send_table_event or the three trigger functions). M5a adds no table,
+-- so T1 is unchanged. Re-run it after M5a part 1.
+--
 -- It WRITES -- one temporary function in public (X2), two temporary accounts
 -- in auth.users, and a few storage.objects rows in the avatars bucket written
 -- as one of them (rows only: no file is uploaded, and every row is rolled
@@ -113,6 +119,8 @@ declare
   v_m3 boolean := to_regclass('public.table_kicks') is not null;
   -- Moderation M6 part 1 is in when its table exists.
   v_m6 boolean := to_regclass('public.player_reports') is not null;
+  -- Moderation M5a part 1 is in when its topic rule exists.
+  v_m5a boolean := to_regprocedure('public.table_topic_allows(text)') is not null;
   v_expected_fns text[] := array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
@@ -150,6 +158,12 @@ begin
     v_expected_fns := v_expected_fns || array['admin_delete_report', 'admin_list_reports', 'report_player'];
     if array_length(v_expected_fns, 1) <> 59 then
       raise exception 'SETUP: the expected function list has % names after moderation M6 part 1; expected 59 (M6 needs M1, M2 and M3 part 1).', array_length(v_expected_fns, 1);
+    end if;
+  end if;
+  if v_m5a then
+    v_expected_fns := v_expected_fns || array['table_topic_allows'];
+    if array_length(v_expected_fns, 1) <> 60 then
+      raise exception 'SETUP: the expected function list has % names after moderation M5a part 1; expected 60 (M5a needs M1, M2, M3 and M6 part 1).', array_length(v_expected_fns, 1);
     end if;
   end if;
 
@@ -252,7 +266,7 @@ begin
                                                   where e.name not in (select o.name from open_fns o)))
   into v_bad;
   if v_bad <> '' then
-    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1; 59 after M6 part 1): %.', array_length(v_expected_fns, 1), v_bad;
+    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1; 59 after M6 part 1; 60 after M5a part 1): %.', array_length(v_expected_fns, 1), v_bad;
   end if;
   v_checks := v_checks + 1;
 

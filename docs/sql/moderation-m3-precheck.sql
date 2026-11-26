@@ -37,7 +37,8 @@
 --             before part 1 (slice E's 49, M1's 3, M2's 1), 56 after
 --             (plus kick_player, kick_topic_allows, admin_recent_kicks),
 --             59 once moderation M6 part 1 is in (plus report_player,
---             admin_list_reports, admin_delete_report).
+--             admin_list_reports, admin_delete_report), 60 once moderation
+--             M5a part 1 is in (plus table_topic_allows).
 --   names     anything already named like M3's objects ("kick" in a
 --             function, table or policy name).
 --   count     table_kicks rows and attempt_log kick rows (after part 1).
@@ -246,6 +247,8 @@ from (
          case
            when r.name in ('table chat: members receive', 'table chat: members send') then 'table-chat.sql''s policy: expected'
            when r.name = 'table kicks: people at the table receive' then 'part 1''s policy: expected after part 1'
+           when r.name = 'table events: people at the table receive' and to_regprocedure('public.table_topic_allows(text)') is not null
+             then 'moderation M5a''s policy (table: topics, receive only): expected once M5a part 1 is in'
            else 'STOP: unknown policy; policies are OR''ed, look at it first' end
   from rt_pol r
 
@@ -259,7 +262,11 @@ from (
            when (select count(*) from rt_pol) = 3
                 and (select count(*) from rt_pol r where r.name in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive')) = 3
              then 'after part 1: the two table-chat policies plus the kicks policy'
-           else 'STOP: expected the two table-chat policies (plus the kicks policy after part 1)' end
+           when (select count(*) from rt_pol) = 4
+                and (select count(*) from rt_pol r where r.name in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive', 'table events: people at the table receive')) = 4
+                and to_regprocedure('public.table_topic_allows(text)') is not null
+             then 'after part 1 and moderation M5a part 1: plus the table events policy'
+           else 'STOP: expected the two table-chat policies (plus the kicks policy after part 1, and the table events policy after M5a part 1)' end
 
   union all
   select 3, 3, 'realtime', 'realtime.send(jsonb, text, text, boolean): exists / ' || current_user || ' may execute',
@@ -291,7 +298,12 @@ from (
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
              then 'after part 1 and moderation M6 part 1: the 56 plus report_player, admin_list_reports, admin_delete_report'
-           else 'STOP: neither 53, 56 nor 59 (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 60
+                and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
+                and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
+                and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
+             then 'after part 1, M6 part 1 and M5a part 1: the 59 plus table_topic_allows'
+           else 'STOP: neither 53, 56, 59 nor 60 (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== names ====================================================================

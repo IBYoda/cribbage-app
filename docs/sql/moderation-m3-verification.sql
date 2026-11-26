@@ -61,7 +61,9 @@
 --   K4  realtime.messages: the kicks policy exactly as part 1 wrote it
 --       (SELECT, to authenticated, permissive, broadcast,
 --       kick_topic_allows(realtime.topic())); the policies are exactly the
---       two table-chat ones plus it (no insert policy for kicks); no policy
+--       two table-chat ones plus it (no insert policy for kicks) -- plus,
+--       once moderation M5a part 1 is in (table_topic_allows exists), its
+--       SELECT-only "table events: people at the table receive"; no policy
 --       or function of M3's has "chat" in its name.
 --   K5  THE NOTICE NEVER UNDOES A KICK (the shape): kick_player calls
 --       _send_kick_notice inside its own BEGIN ... EXCEPTION WHEN OTHERS
@@ -375,7 +377,10 @@ begin
   select string_agg(p.policyname::text || ' (' || p.cmd || ')', ', ' order by p.policyname) into v_txt
   from pg_policies p
   where p.schemaname = 'realtime' and p.tablename = 'messages'
-    and p.policyname not in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive');
+    and p.policyname not in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive')
+    -- Moderation M5a's receive-only policy for table: topics, once it is in.
+    and not (p.policyname = 'table events: people at the table receive' and p.cmd = 'SELECT'
+             and to_regprocedure('public.table_topic_allows(text)') is not null);
   select count(*) into v_n2
   from pg_policies p
   where p.schemaname = 'realtime' and p.tablename = 'messages'

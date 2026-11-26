@@ -188,6 +188,17 @@ expected_fns(name) as (
   select unnest(array['block_player', 'get_my_blocks', 'unblock_player'])
   where to_regclass('public.blocks') is not null
   union all
+  -- Moderation M3 part 1's three, M6 part 1's three and M5a part 1's one,
+  -- each once it exists.
+  select unnest(array['admin_recent_kicks', 'kick_player', 'kick_topic_allows'])
+  where to_regclass('public.table_kicks') is not null
+  union all
+  select unnest(array['admin_delete_report', 'admin_list_reports', 'report_player'])
+  where to_regclass('public.player_reports') is not null
+  union all
+  select 'table_topic_allows'
+  where to_regprocedure('public.table_topic_allows(text)') is not null
+  union all
   -- Moderation M2 part 1's block by account id, once it exists.
   select 'block_player_by_id'
   where to_regprocedure('public.block_player_by_id(uuid)') is not null
@@ -219,7 +230,9 @@ from (
                then 'FLAG: table-chat.sql''s policy; one table topic written through an RPC replaces or narrows it'
                when pol.policyname = 'table kicks: people at the table receive'
                then 'moderation M3''s kicks policy (kicks: topics only); the chat suites know it'
-               else 'STOP: not a table-chat or M3 kicks policy; the chat prechecks expect exactly those' end)::text as note
+               when pol.policyname = 'table events: people at the table receive'
+               then 'moderation M5a''s table events policy (table: topics only); the chat suites know it'
+               else 'STOP: not a table-chat, M3 kicks or M5a table events policy; the chat prechecks expect exactly those' end)::text as note
   from pg_policies pol
   where pol.schemaname = 'realtime' and pol.tablename = 'messages'
 
@@ -234,7 +247,13 @@ from (
                    and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
                                  and pol.policyname = 'table kicks: people at the table receive')
               then 'as the chat prechecks expect (the two plus moderation M3''s kicks policy)'
-              else 'STOP: the chat prechecks expect exactly the two table-chat policies (plus M3''s kicks policy)' end
+              when (select count(*) from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages') = 4
+                   and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
+                                 and pol.policyname = 'table kicks: people at the table receive')
+                   and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
+                                 and pol.policyname = 'table events: people at the table receive')
+              then 'as the chat prechecks expect (the two plus moderation M3''s kicks policy and M5a''s table events policy)'
+              else 'STOP: the chat prechecks expect exactly the two table-chat policies (plus M3''s kicks policy and M5a''s table events policy)' end
 
   union all
   select 1, 2, '', 0, 'realtime', 'realtime.messages: kind / leaf partitions / estimated rows / total size',
@@ -502,8 +521,15 @@ from (
          case when (select count(*) from client_fns) = 49 and to_regclass('public.blocks') is null then 'as slice E left it (49)'
               when (select count(*) from client_fns) = 52 and to_regclass('public.blocks') is not null
                    and to_regprocedure('public.block_player_by_id(uuid)') is null then 'as moderation M1 part 1 left it (52)'
-              when (select count(*) from client_fns) = 53 and to_regprocedure('public.block_player_by_id(uuid)') is not null then 'as moderation M2 part 1 left it (53)'
-              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2 part 1); see the next two rows' end
+              when (select count(*) from client_fns) = 53 and to_regprocedure('public.block_player_by_id(uuid)') is not null
+                   and to_regclass('public.table_kicks') is null then 'as moderation M2 part 1 left it (53)'
+              when (select count(*) from client_fns) = 56 and to_regclass('public.table_kicks') is not null
+                   and to_regclass('public.player_reports') is null then 'as moderation M3 part 1 left it (56)'
+              when (select count(*) from client_fns) = 59 and to_regclass('public.player_reports') is not null
+                   and to_regprocedure('public.table_topic_allows(text)') is null then 'as moderation M6 part 1 left it (59)'
+              when (select count(*) from client_fns) = 60 and to_regprocedure('public.table_topic_allows(text)') is not null
+                then 'as moderation M5a part 1 left it (60)'
+              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a); see the next two rows' end
 
   union all
   select 10, 1, '', 0, 'client fn', 'executable by authenticated but not in slice E''s 49 (plus M1''s 3 once public.blocks exists)',
