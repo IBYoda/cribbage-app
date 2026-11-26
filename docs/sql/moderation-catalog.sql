@@ -378,7 +378,11 @@ from (
   select 6, mr.o, mr.relname || ' ' || tg.tgname::text, 0, 'trigger',
          mr.relname || ': ' || tg.tgname::text || ' (enabled ' || tg.tgenabled::text || ')',
          pg_get_triggerdef(tg.oid),
-         case when mr.relname = 'table_members'
+         case when tg.tgname in ('table_members_zz_table_event', 'table_spectators_zz_table_event', 'tables_zz_table_event')
+              then 'INFO: moderation M5a''s table event trigger (moderation-m5a-part1.sql)'
+              when tg.tgname in ('games_state_version', 'games_zz_game_event')
+              then 'INFO: moderation M5b1''s game event trigger (moderation-m5b1-part1.sql; games_zz_game_event fires at commit)'
+              when mr.relname = 'table_members'
               then 'FLAG: a block/kick check on a new seat would be a trigger beside these; BEFORE triggers fire in name order'
               else '' end
   from mod_rels mr
