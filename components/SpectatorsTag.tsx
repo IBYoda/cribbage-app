@@ -51,18 +51,10 @@ export function SpectatorEyeGlyph({ size = 14 }: { size?: number }) {
 // THE HEADER'S EYE (spectator chat): only while at least one current
 // spectator is watching (the caller passes the count from
 // get_table_spectators; 0 renders nothing), with the count beside it. A
-// button: it opens the spectators list (names, avatars, and the host's
-// Remove). Drawn small beside "Table CODE", or as a pill on a Muggins
-// table's tag line; either way its tap target is 44x44 (.spectators-eye).
-export function SpectatorsEye({
-  count,
-  onOpen,
-  pill = false,
-}: {
-  count: number;
-  onOpen?: () => void;
-  pill?: boolean;
-}) {
+// button: it opens the spectators list (names and avatars, with Mute,
+// Report and the host's Kick). Drawn small beside "Table CODE" on every
+// table, a Muggins one too; its tap target is 44x44 (.spectators-eye).
+export function SpectatorsEye({ count, onOpen }: { count: number; onOpen?: () => void }) {
   if (count <= 0) return null;
   const label = `${count} watching. Show spectators`;
   return (
@@ -72,11 +64,11 @@ export function SpectatorsEye({
       aria-label={label}
       aria-haspopup="dialog"
       title={`${count} watching`}
-      className={pill ? "spectators-eye spectators-eye--pill muggins-tag" : "spectators-eye"}
+      className="spectators-eye"
       data-testid="spectators-eye"
     >
-      <SpectatorEyeGlyph size={pill ? 12 : 14} />
-      <span aria-hidden="true">{pill ? `${count} watching` : count}</span>
+      <SpectatorEyeGlyph size={14} />
+      <span aria-hidden="true">{count}</span>
     </button>
   );
 }

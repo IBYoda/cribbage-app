@@ -296,7 +296,7 @@ export const TABLE_CLOSED_TEXT = "This table has closed.";
 // ---------------------------------------------------------------------------
 // SPECTATOR CHAT AND THE HOST'S REMOVE (PRD items 39 and 40, spectator chat).
 
-// THE EYE beside the table code (and its pill on a Muggins table's tag line):
+// THE EYE beside the table code, on every table (a Muggins one too):
 // shown ONLY while at least one current spectator is watching, with the
 // count. Unknown (the list not read yet, or the table doesn't allow
 // spectators): nothing.

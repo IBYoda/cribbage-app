@@ -4328,7 +4328,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           {/* Hide counts, in the "⋯" menu, saved at once. Not while Leave
               is asking to confirm, so the header's right side never grows
               past one line. On a Muggins table it is locked and shows
-              nothing (the tag line under the header says Self-Scoring):
+              nothing (the "Self Scoring" bar at the bottom says the mode):
               nothing to hide, and nothing is saved. */}
           {appearance.ready && !leaveConfirming && (
             <CountsToggle
@@ -4380,7 +4380,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     <TableHeader
       code={code}
       handNo={isActive ? (activeGame?.hand_no ?? null) : null}
-      muggins={isMuggins}
       spectators={headerSpectatorCount}
       onSpectators={openSpectators}
       watching={spectating}
@@ -4940,7 +4939,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // deal, the waiting room, ?layout=classic -- is the table
   // below, unchanged. A self-scoring (Muggins) table: the self-scoring banner
   // in the board's place (squareBoardFor), the win bar in the plates' place
-  // (mugginsWinBar), its tag under the header; scores, flashes and count
+  // (mugginsWinBar); scores, flashes and count
   // numbers hidden as on the classic table.
   //
   // Drawing only: the same data and handlers as the table below (the plays,
@@ -5252,7 +5251,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               handNo={activeGame.hand_no ?? null}
               opponent={topRow?.header ?? null}
               right={headerRight}
-              muggins={isMuggins}
               spectators={headerSpectatorCount}
               onSpectators={openSpectators}
               watching={spectating}
@@ -5413,7 +5411,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               handNo={null}
               opponent={topRow?.header ?? null}
               right={headerRight}
-              muggins={isMuggins}
               spectators={headerSpectatorCount}
               onSpectators={openSpectators}
               watching={spectating}
@@ -5573,7 +5570,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
                 laneColor: squareScores.laneColorOf(squareOpponent.user_id),
               }}
               right={headerRight}
-              muggins={isMuggins}
               spectators={headerSpectatorCount}
               onSpectators={openSpectators}
               watching={spectating}
@@ -5752,7 +5748,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
                 laneColor: squareScores.laneColorOf(squareOpponent.user_id),
               }}
               right={headerRight}
-              muggins={isMuggins}
               spectators={headerSpectatorCount}
               onSpectators={openSpectators}
               watching={spectating}

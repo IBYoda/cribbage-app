@@ -27,8 +27,8 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 //
 // LOCKED (a Muggins table): nothing to show, so nothing to hide -- renders
 // nothing, and the player's own setting is left as it was for their other
-// tables. The tag line under the header already says the table is
-// Self-Scoring.
+// tables. The "Self Scoring" bar at the bottom of the screen already says
+// the table is Self-Scoring.
 export function CountsToggle({
   hidden,
   onSave,

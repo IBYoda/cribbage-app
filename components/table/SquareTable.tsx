@@ -1,7 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
 import { PersonName, PersonTap } from "@/components/table/PersonMenu";
-import { MugginsTag } from "@/components/MugginsTag";
 import { SpectatorsEye, WatchingRow } from "@/components/SpectatorsTag";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { surfaceIsDark, type CardBack, type TableSurface } from "@/lib/appearance";
@@ -86,7 +85,6 @@ export function SquareTableHeader({
   handNo,
   opponent,
   right,
-  muggins = false,
   spectators = 0,
   onSpectators,
   watching = false,
@@ -94,14 +92,14 @@ export function SquareTableHeader({
   code: string;
   handNo: number | null;
   // Current spectators (as the classic header, TableHeader): above 0, an eye
-  // with the count beside "Table CODE", or a pill on the Muggins tag line;
+  // with the count beside "Table CODE", on every table (Muggins too);
   // tapping it calls onSpectators. watching: a spectator's screen (the
   // "Watching" row under the header).
   spectators?: number;
   onSpectators?: () => void;
   watching?: boolean;
-  // A self-scoring (Muggins) table: its tag on a short line of its own under
-  // the header line, as the classic header has it (TableHeader).
+  // Ignored since 2026-11-26 (a Muggins table's header is the same as any
+  // other's); still accepted so older callers (the dev mocks) compile.
   muggins?: boolean;
   // laneColor: their board lane's colour, as their avatar's ring. status (4
   // players): their word in the discard and counting ("Picking…",
@@ -129,7 +127,7 @@ export function SquareTableHeader({
       <h1 className="flex min-w-0 flex-col justify-center font-semibold" data-header="title">
         <span className="whitespace-nowrap leading-4" data-header="code">
           Table {code}
-          {!muggins && <SpectatorsEye count={spectators} onOpen={onSpectators} />}
+          <SpectatorsEye count={spectators} onOpen={onSpectators} />
         </span>
         {handNo != null && (
           <span
@@ -180,21 +178,9 @@ export function SquareTableHeader({
       <div className="flex shrink-0 items-center justify-end gap-3 text-sm">{right}</div>
     </header>
   );
-  if (!muggins) {
-    return (
-      <>
-        {header}
-        {watching && <WatchingRow />}
-      </>
-    );
-  }
   return (
     <>
       {header}
-      <div className="sq-muggins-tag gap-1.5">
-        <MugginsTag />
-        <SpectatorsEye count={spectators} onOpen={onSpectators} pill />
-      </div>
       {watching && <WatchingRow />}
     </>
   );
