@@ -435,15 +435,21 @@ import {
   showNoteCounter,
 } from "../lib/reports";
 import {
+  SCORES_REPAIR_DELAY_MS,
   acceptGameEvent,
+  acceptScoresEvent,
   acceptTableEvent,
   gameEventStep,
   parseGameEvent,
+  parseScoresEvent,
+  scoresScreenBehind,
   parseTableEvent,
   tableEventRole,
   tableEventTopic,
   type GameEvent,
   type GameSeen,
+  type ScoresEvent,
+  type ScoresSeen,
   type TableEvent,
 } from "../lib/tableEvents";
 import { newestPlayTime, playEventApplies, playsReadApplies } from "../lib/tableSync";
@@ -7774,6 +7780,114 @@ check("game events: the same channel, computer tables too; only the poll's own r
   strictEqual(/useTableEvents|tableEvents|handleGameEvent/.test(readFileSync("components/table/useComputerDriver.ts", "utf8")), false);
   // A computer move is keyed (one per key), so an earlier re-read can't make it move twice.
   strictEqual(readFileSync("components/table/useComputerDriver.ts", "utf8").includes("a key is sent at most once at a time"), true);
+});
+// ---- Scores events, repair only (moderation M5b2) ----
+check("scores events: the payload, exactly; Realtime's id ignored; anything else dropped", () => {
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const U = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const ok = { event: "scores", game_id: G, award_ms: 1795717132152, user_id: U, points: 2, reason: "fifteen" };
+  deepStrictEqual(parseScoresEvent(ok), { gameId: G, awardMs: 1795717132152, userId: U, points: 2, reason: "fifteen" });
+  deepStrictEqual(parseScoresEvent({ ...ok, id: "realtime's own" }), { gameId: G, awardMs: 1795717132152, userId: U, points: 2, reason: "fifteen" });
+  // A reset: the new game, award_ms 0, the rest null.
+  deepStrictEqual(parseScoresEvent({ event: "scores", game_id: G, award_ms: 0, user_id: null, points: null, reason: null }), { gameId: G, awardMs: 0, userId: null, points: null, reason: null });
+  // A table that never had a game.
+  strictEqual(parseScoresEvent({ ...ok, game_id: null })?.gameId, null);
+  // A 0-point award (a "19").
+  strictEqual(parseScoresEvent({ ...ok, points: 0, reason: "hand: nothing" })?.points, 0);
+  for (const bad of [
+    { ...ok, event: "game" },
+    { ...ok, game_id: "not-a-uuid" },
+    { ...ok, award_ms: -1 },
+    { ...ok, award_ms: Number.NaN },
+    { ...ok, award_ms: "1795717132152" },
+    { ...ok, user_id: "x" },
+    { ...ok, points: 1.5 },
+    { ...ok, points: "2" },
+    { ...ok, reason: 5 },
+    { event: "scores", game_id: G, user_id: U, points: 2, reason: "fifteen" },
+  ]) {
+    strictEqual(parseScoresEvent(bad), null, JSON.stringify(bad));
+  }
+  strictEqual(parseScoresEvent(null), null);
+});
+check("scores events: the version rule -- the first, another game, a newer award; duplicates and older dropped", () => {
+  const A = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const B = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const ev = (gameId: string | null, awardMs: number): ScoresEvent => ({ gameId, awardMs, userId: null, points: null, reason: null });
+  deepStrictEqual(acceptScoresEvent(undefined, ev(A, 100)), { accept: true, last: { gameId: A, awardMs: 100 } });
+  deepStrictEqual(acceptScoresEvent({ gameId: A, awardMs: 100 }, ev(A, 101)).accept, true, "newer");
+  deepStrictEqual(acceptScoresEvent({ gameId: A, awardMs: 100 }, ev(A, 100)), { accept: false, last: { gameId: A, awardMs: 100 } }, "a duplicate");
+  deepStrictEqual(acceptScoresEvent({ gameId: A, awardMs: 100 }, ev(A, 99)).accept, false, "older");
+  deepStrictEqual(acceptScoresEvent({ gameId: A, awardMs: 100 }, ev(B, 0)), { accept: true, last: { gameId: B, awardMs: 0 } }, "another game: the reset");
+  // A sequence, as the hook keeps it.
+  let last: ScoresSeen | undefined;
+  const taken: string[] = [];
+  for (const e of [ev(A, 5), ev(A, 9), ev(A, 9), ev(A, 7), ev(B, 0), ev(B, 0), ev(B, 3)]) {
+    const step = acceptScoresEvent(last, e);
+    last = step.last;
+    if (step.accept) taken.push(`${e.gameId === A ? "A" : "B"}${e.awardMs}`);
+  }
+  deepStrictEqual(taken, ["A5", "A9", "B0", "B3"]);
+});
+check("scores events: is the screen behind? whole-ms rounding, a reset, another game, a screen already current", () => {
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const ev = (awardMs: number, gameId: string | null = G): ScoresEvent => ({ gameId, awardMs, userId: null, points: 2, reason: "fifteen" });
+  // The award at 12:00:10.123456 in the database: award_ms is that time rounded DOWN.
+  const at = "2026-11-26T12:00:10.123456+00:00";
+  const ms = Date.parse("2026-11-26T12:00:10.123Z");
+  strictEqual(Date.parse(at), ms, "a browser reads the same whole ms");
+  const shown = [{ score: 12, last_awarded_at: at }, { score: 9, last_awarded_at: "2026-11-26T12:00:01+00:00" }];
+  strictEqual(scoresScreenBehind({ event: ev(ms), screenGameId: G, members: shown }), false, "equal: already shown -> no read");
+  strictEqual(scoresScreenBehind({ event: ev(ms - 5000), screenGameId: G, members: shown }), false, "older than the screen -> no read");
+  strictEqual(scoresScreenBehind({ event: ev(ms + 1), screenGameId: G, members: shown }), true, "a newer award -> read");
+  strictEqual(scoresScreenBehind({ event: ev(ms), screenGameId: null, members: shown }), true, "another game than on screen -> read");
+  strictEqual(scoresScreenBehind({ event: ev(ms, "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"), screenGameId: G, members: shown }), true);
+  strictEqual(scoresScreenBehind({ event: ev(ms), screenGameId: G, members: [{ score: 0, last_awarded_at: null }] }), true, "no award on screen at all -> read");
+  // A reset (award_ms 0): behind while anyone still shows a score or an award.
+  strictEqual(scoresScreenBehind({ event: ev(0), screenGameId: G, members: shown }), true);
+  strictEqual(scoresScreenBehind({ event: ev(0), screenGameId: G, members: [{ score: 0, last_awarded_at: null }, { score: 0, last_awarded_at: null }] }), false, "already reset -> no read");
+  strictEqual(scoresScreenBehind({ event: ev(0), screenGameId: G, members: [{ score: 0, last_awarded_at: at }] }), true);
+  strictEqual(SCORES_REPAIR_DELAY_MS, 1500);
+  // AT FIRE TIME, after a game change (the timer outlives it): the screen's
+  // game is the live one, else the finished one (activeGameIdRef ??
+  // finishedGameRef).
+  const NEW = "2b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  // (a) The winning award: the game ended in the same transaction and the
+  // finished game is on screen, but its final score never arrived -> behind.
+  const winMs = ms + 4000;
+  strictEqual(scoresScreenBehind({ event: { gameId: G, awardMs: winMs, userId: null, points: 3, reason: "fifteen one" }, screenGameId: G, members: shown }), true);
+  // (b) A new game's reset while the screen still shows the old game -> behind.
+  strictEqual(scoresScreenBehind({ event: { gameId: NEW, awardMs: 0, userId: null, points: null, reason: null }, screenGameId: G, members: shown }), true);
+  strictEqual(scoresScreenBehind({ event: { gameId: NEW, awardMs: 0, userId: null, points: null, reason: null }, screenGameId: G, members: [{ score: 0, last_awarded_at: null }] }), true, "another game on screen, even with zeros shown");
+  // (c) The screen already shows the award (the old listener got there first) -> not behind.
+  const won = [{ score: 121, last_awarded_at: "2026-11-26T12:00:14.123999+00:00" }, { score: 9, last_awarded_at: "2026-11-26T12:00:01+00:00" }];
+  strictEqual(scoresScreenBehind({ event: { gameId: G, awardMs: winMs, userId: null, points: 3, reason: "fifteen one" }, screenGameId: G, members: won }), false);
+  strictEqual(scoresScreenBehind({ event: { gameId: NEW, awardMs: 0, userId: null, points: null, reason: null }, screenGameId: NEW, members: [{ score: 0, last_awarded_at: null }, { score: 0, last_awarded_at: null }] }), false, "the new game already on screen, reset");
+});
+check("scores events: repair only -- one timer, the current screen, then nothing but the poll's roster read", () => {
+  const hook = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
+  strictEqual((hook.match(/supabase\.channel\(/g) ?? []).length, 1, "the same one channel");
+  strictEqual(/channel\.on\("broadcast", \{ event: "scores" \}, \(\{ payload \}\) => \{/.test(hook), true);
+  strictEqual(/const step = acceptScoresEvent\(scoresSeenRef\.current\.last, event\);\s*scoresSeenRef\.current = \{ tableId, last: step\.last \};\s*if \(step\.accept\) onScoresEventRef\.current\(event\);/.test(hook), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("onScoresEvent: handleScoresEvent,"), true);
+  const handler = m3CodeOnly(view.slice(view.indexOf("const scoresRepairRef = useRef<"), view.indexOf("const handleTableEvent = useCallback(")));
+  // A Muggins table: a no-op. One pending timer, a newer event replacing it.
+  strictEqual(handler.includes("if (!table || isMuggins) return;"), true);
+  strictEqual(/clearScoresRepair\(\);\s*const timer = window\.setTimeout\(/.test(handler), true);
+  strictEqual(handler.includes("}, SCORES_REPAIR_DELAY_MS);"), true);
+  // When it fires: the CURRENT screen (refs), and only if behind, the roster read.
+  strictEqual(/const behind = scoresScreenBehind\(\{\s*event,\s*screenGameId: activeGameIdRef\.current \?\? finishedGameRef\.current\?\.id \?\? null,\s*members: membersRef\.current,\s*\}\);\s*if \(!behind\) return;\s*console\.info\("\[table-sync\] scores repaired", [^;]*\);\s*void loadMembers\(tableId\);/.test(handler), true);
+  strictEqual((handler.match(/loadMembers\(/g) ?? []).length, 1, "the poll's own roster read, once");
+  strictEqual(/tableSound|showGo|showZero|showWings|showGodLoss|soundCatchUpRef|setMembers|setActiveGame|setPlays|reconcileGame|catchUpPlays|fetchPlays|refreshTableState|trackAction|supabase|\.rpc\(|\.from\(/.test(handler), false,
+    "no sound, flash, splash, game or plays change, computer action or read of its own");
+  // Cleared on unmount and when the table or the game changes.
+  strictEqual(view.includes("useEffect(() => clearScoresRepair, [scoresRepairTableId, clearScoresRepair]);"), true, "cleared on a table change or unmount only");
+  strictEqual(view.includes("scoresRepairGameId"), false, "never on a game change: the win and a new game's reset are exactly the awards to repair");
+  // The old score listener and the poll are as they were.
+  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
+  strictEqual(view.includes("await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));"), true);
+  strictEqual(/useTableEvents|scoresScreenBehind|handleScoresEvent/.test(readFileSync("components/table/useComputerDriver.ts", "utf8")), false);
 });
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");

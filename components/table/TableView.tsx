@@ -41,7 +41,15 @@ import { afterReportStep, reportedBlockQuestion, reportOutcomeText, reportSentNo
 import { ReportDialog } from "@/components/table/ReportDialog";
 import { useTableKicks } from "@/components/table/useTableKicks";
 import { useTableEvents } from "@/components/table/useTableEvents";
-import { gameEventStep, tableEventRole, type GameEvent, type TableEvent } from "@/lib/tableEvents";
+import {
+  SCORES_REPAIR_DELAY_MS,
+  gameEventStep,
+  scoresScreenBehind,
+  tableEventRole,
+  type GameEvent,
+  type ScoresEvent,
+  type TableEvent,
+} from "@/lib/tableEvents";
 import { setLobbyNotice } from "@/lib/lobbyNotice";
 import { mutedSenders } from "@/lib/tableChat";
 import { JoinChoice } from "@/components/brand/JoinChoice";
@@ -3336,6 +3344,51 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     },
     [table, refreshTableState, reconcileGame, catchUpPlays]
   );
+  // SCORES EVENTS (moderation M5b2): REPAIR ONLY. The old table_members
+  // listener stays the live path for scores and for everything they drive
+  // (the "+2" flash, the pegs, the "19" splash and its sound). A scores
+  // event only arms ONE timer (SCORES_REPAIR_DELAY_MS, the newest event
+  // replacing a pending one); when it fires, the CURRENT screen (refs, not
+  // this closure) is checked with scoresScreenBehind, and only if it still
+  // doesn't show that award is the roster re-read -- the poll's own read
+  // (loadMembers, with its ticket and event guards), logged once as
+  // "[table-sync] scores repaired". It never plays a sound, flashes,
+  // splashes, moves the computer or touches the game or the plays: the
+  // flash and the pegs follow the roster read exactly as they follow the
+  // poll's. A Muggins table records no scores: a no-op there.
+  const scoresRepairRef = useRef<{ timer: number | null; event: ScoresEvent | null }>({ timer: null, event: null });
+  const clearScoresRepair = useCallback(() => {
+    if (scoresRepairRef.current.timer !== null) window.clearTimeout(scoresRepairRef.current.timer);
+    scoresRepairRef.current = { timer: null, event: null };
+  }, []);
+  const handleScoresEvent = useCallback(
+    (event: ScoresEvent) => {
+      if (!table || isMuggins) return;
+      const tableId = table.id;
+      clearScoresRepair();
+      const timer = window.setTimeout(() => {
+        scoresRepairRef.current = { timer: null, event: null };
+        const behind = scoresScreenBehind({
+          event,
+          screenGameId: activeGameIdRef.current ?? finishedGameRef.current?.id ?? null,
+          members: membersRef.current,
+        });
+        if (!behind) return;
+        console.info("[table-sync] scores repaired", { gameId: event.gameId, awardMs: event.awardMs });
+        void loadMembers(tableId);
+      }, SCORES_REPAIR_DELAY_MS);
+      scoresRepairRef.current = { timer, event };
+    },
+    [table, isMuggins, clearScoresRepair, loadMembers]
+  );
+  // A pending repair never outlives this table or the screen. It DOES
+  // outlive a game change on purpose: a winning award ends the game in the
+  // same transaction, and a new game's reset arrives with the game itself --
+  // exactly the awards a repair is for. The timer checks the CURRENT screen
+  // when it fires, so a repair that outlives a game costs at most one
+  // roster read.
+  const scoresRepairTableId = table?.id ?? null;
+  useEffect(() => clearScoresRepair, [scoresRepairTableId, clearScoresRepair]);
   const handleTableEvent = useCallback(
     (event: TableEvent) => {
       if (!table || event.tableId !== table.id.toLowerCase()) return;
@@ -3373,6 +3426,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     tableId: table?.id ?? null,
     onEvent: handleTableEvent,
     onGameEvent: handleGameEvent,
+    onScoresEvent: handleScoresEvent,
   });
   const popupOpen = usePersonPopupOpen();
   // The first queued notice for someone I don't block (yet), shown only

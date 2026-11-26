@@ -126,3 +126,73 @@ export function gameEventStep(input: {
   const sameHand = input.shownHandKey === `${input.event.gameId}:${input.event.handNo}`;
   return { kind: "reconcile", readPlays: sameHand && input.event.lastPlaySeq > input.shownMaxSeq };
 }
+
+// SCORES EVENTS (moderation M5b2, docs/sql/moderation-m5b2-part1.sql): one
+// 'scores' event per table per committed transaction that wrote a score:
+//   { event: 'scores', game_id, award_ms, user_id, points, reason }
+// (Realtime adds its own "id": ignored). game_id is the table's newest game
+// (a different one means the scores were reset); award_ms the newest award
+// time across the table, in whole ms rounded DOWN (0 after a reset);
+// user_id / points / reason that award's scorer, points and reason.
+//
+// REPAIR ONLY (Walt, 2026-11-26): the old table_members listener stays the
+// live path for scores and everything they drive (the "+2" flash, the pegs,
+// the "19" splash and its sound). A scores event only arms a short wait;
+// if the screen still doesn't show that award afterwards, the roster is
+// re-read with the poll's own read. Nothing here plays, flashes or moves.
+export type ScoresEvent = {
+  gameId: string | null;
+  awardMs: number;
+  userId: string | null;
+  points: number | null;
+  reason: string | null;
+};
+
+// A broadcast's payload as a scores event, or null when it isn't exactly one.
+export function parseScoresEvent(payload: unknown): ScoresEvent | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as { event?: unknown; game_id?: unknown; award_ms?: unknown; user_id?: unknown; points?: unknown; reason?: unknown };
+  if (p.event !== "scores") return null;
+  if (!(p.game_id === null || (typeof p.game_id === "string" && UUID.test(p.game_id)))) return null;
+  if (typeof p.award_ms !== "number" || !Number.isFinite(p.award_ms) || p.award_ms < 0) return null;
+  if (!(p.user_id === null || (typeof p.user_id === "string" && UUID.test(p.user_id)))) return null;
+  if (!(p.points === null || (typeof p.points === "number" && Number.isInteger(p.points)))) return null;
+  if (!(p.reason === null || typeof p.reason === "string")) return null;
+  return { gameId: p.game_id, awardMs: p.award_ms, userId: p.user_id, points: p.points, reason: p.reason };
+}
+
+// THE SCORES VERSION RULE: accept the first event, one for another game,
+// or one with a newer award; duplicates and older ones are dropped.
+export type ScoresSeen = { gameId: string | null; awardMs: number };
+
+export function acceptScoresEvent(last: ScoresSeen | undefined, event: ScoresEvent): { accept: boolean; last: ScoresSeen } {
+  const next = { gameId: event.gameId, awardMs: event.awardMs };
+  if (!last || event.gameId !== last.gameId) return { accept: true, last: next };
+  if (event.awardMs > last.awardMs) return { accept: true, last: next };
+  return { accept: false, last };
+}
+
+// DOES THE SCREEN ALREADY SHOW THIS AWARD? false: it does (no read). true:
+// it is behind -- the event's game is not the one on screen; or, for a
+// reset (award_ms 0), someone still shows a score or an award; or the
+// newest award on screen (Date.parse: whole ms) is older than award_ms
+// (the database time rounded DOWN, so an equal value means "shown").
+export function scoresScreenBehind(input: {
+  event: ScoresEvent;
+  screenGameId: string | null;
+  members: readonly { score: number | null; last_awarded_at: string | null }[];
+}): boolean {
+  if (input.event.gameId !== input.screenGameId) return true;
+  if (input.event.awardMs === 0) {
+    return input.members.some((m) => (m.score ?? 0) !== 0 || !!m.last_awarded_at);
+  }
+  let newest = -1;
+  for (const m of input.members) {
+    const at = m.last_awarded_at ? Date.parse(m.last_awarded_at) : NaN;
+    if (Number.isFinite(at) && at > newest) newest = at;
+  }
+  return newest < input.event.awardMs;
+}
+
+// How long a scores event waits for the old listener before checking.
+export const SCORES_REPAIR_DELAY_MS = 1500;
