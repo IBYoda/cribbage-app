@@ -20,7 +20,8 @@
 --             chat_topic_allows, _attempts_guard) and of join_table_by_code
 --             / watch_table (M1 part 2's before part 2, M3 part 2's after).
 --   part1     attempt_log_action_check (eight actions before, nine with kick
---             after); public.table_kicks (absent before; after: columns,
+--             after, ten once moderation M6 part 1 adds report_filed);
+--             public.table_kicks (absent before; after: columns,
 --             RLS on, no policies, no client privileges); the five new
 --             functions (absent before; after: part 1's bodies, security
 --             definer, search_path '', who may execute them).
@@ -34,7 +35,9 @@
 --             are skipped).
 --   grants    how many functions authenticated may execute in public: 53
 --             before part 1 (slice E's 49, M1's 3, M2's 1), 56 after
---             (plus kick_player, kick_topic_allows, admin_recent_kicks).
+--             (plus kick_player, kick_topic_allows, admin_recent_kicks),
+--             59 once moderation M6 part 1 is in (plus report_player,
+--             admin_list_reports, admin_delete_report).
 --   names     anything already named like M3's objects ("kick" in a
 --             function, table or policy name).
 --   count     table_kicks rows and attempt_log kick rows (after part 1).
@@ -96,7 +99,8 @@ check_state as (
          (length(cd.d) - length(replace(cd.d, '::text', ''))) / 6 as n_actions,
          cd.d ~ '''create_table''' and cd.d ~ '''create_computer_table''' and cd.d ~ '''join''' and cd.d ~ '''watch'''
            and cd.d ~ '''code_guess''' and cd.d ~ '''game_start''' and cd.d ~ '''follow_change''' and cd.d ~ '''block_change''' as has_eight,
-         cd.d ~ '''kick''' as has_kick
+         cd.d ~ '''kick''' as has_kick,
+         cd.d ~ '''report_filed''' as has_report
   from check_def cd
 ),
 tk as (
@@ -185,9 +189,12 @@ from (
          case
            when (select cs.has_eight and not cs.has_kick and cs.n_actions = 8 from check_state cs)
              then 'before part 1: the eight actions (slice A/E''s seven plus block_change)'
-           when (select cs.has_eight and cs.has_kick and cs.n_actions = 9 from check_state cs)
+           when (select cs.has_eight and cs.has_kick and not cs.has_report and cs.n_actions = 9 from check_state cs)
              then 'after part 1: plus kick'
-           else 'STOP: neither the eight actions nor those plus kick' end
+           when (select cs.has_eight and cs.has_kick and cs.has_report and cs.n_actions = 10 from check_state cs)
+                and to_regclass('public.player_reports') is not null
+             then 'after part 1: plus kick (and moderation M6''s report_filed)'
+           else 'STOP: neither the eight actions nor those plus kick (and report_filed, after M6)' end
 
   union all
   -- ==== part1: table_kicks =======================================================
@@ -280,7 +287,11 @@ from (
            when (select count(*) from client_fns) = 56
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
              then 'after part 1: the 53 plus kick_player, kick_topic_allows, admin_recent_kicks'
-           else 'STOP: neither 53 nor 56 (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 59
+                and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
+                and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
+             then 'after part 1 and moderation M6 part 1: the 56 plus report_player, admin_list_reports, admin_delete_report'
+           else 'STOP: neither 53, 56 nor 59 (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== names ====================================================================

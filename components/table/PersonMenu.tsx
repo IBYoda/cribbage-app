@@ -9,14 +9,19 @@ import { canOfferPersonMenu, mutedAtTable, mutedMark, mutedMarkText, personPopup
 // person at the table, in the spectator list's look (the About dialog's dark
 // green panel and gold border, large gold-outlined buttons, "Close" under
 // them). Top to bottom: their avatar and name, the buttons, Close.
-//   Everyone: "Mute" or "Unmute". The HOST: also "Kick" beside it.
+//   Everyone: "Mute" or "Unmute", then "Report" (moderation M6: closes the
+//   popup and opens TableView's report dialog). The HOST: also "Kick", last.
+// A person who has left (a chat card's "...") may have no roster entry:
+// the avatar falls back to the initial, and Report still works (the server
+// takes its own snapshot).
 // It opens from
 //   PersonTap      a seat's avatar (plates, the top and side seats, the
 //                  square layout's header and side tags): an invisible 44px
 //                  tap area over the avatar, so nothing moves or resizes;
 //   PersonName     the name beside it;
 //   openPersonPopup  the chat card's "..." (TableChat).
-// Also here: PersonMuteButton (the spectator list's inline Mute/Unmute),
+// Also here: PersonMuteButton and PersonReportButton (the spectator list's
+// inline Mute/Unmute and Report),
 // PersonMark (the quiet mark on an avatar), MutedHereLine (the composer's
 // "Muted: <name> [Unmute]" line). The rules are lib/personMenu.ts.
 //
@@ -50,6 +55,8 @@ export type PersonModeration = {
   // Mutes at once, then (unless already blocked) asks "Also block <name>?".
   mute: (userId: string, name: string) => void;
   unmute: (userId: string) => void;
+  // Report (moderation M6): opens the report dialog (lib/reports.ts).
+  report: (userId: string, name: string) => void;
   // The host's Kick (moderation M3): opens the kick confirm, then
   // kick_player -- a player or a spectator alike.
   kick: (userId: string, name: string) => void;
@@ -163,7 +170,7 @@ export function PersonPopup() {
               <span className="sr-only">{mutedMarkText(mark)}</span>
             </h2>
           </div>
-          <div className="flex w-full gap-2">
+          <div className="flex w-full flex-wrap gap-2">
             {personPopupButtons({ muted: mod.muted.has(person.userId), isHost: mod.isHost }).map((b) => (
               <button
                 key={b.action}
@@ -175,6 +182,7 @@ export function PersonPopup() {
                   closePersonPopup();
                   if (b.action === "mute") mod.mute(person.userId, person.name);
                   else if (b.action === "unmute") mod.unmute(person.userId);
+                  else if (b.action === "report") mod.report(person.userId, person.name);
                   else mod.kick(person.userId, person.name);
                 }}
               >
@@ -297,6 +305,25 @@ export function PersonMuteButton({ userId, name }: { userId: string; name: strin
       onClick={() => (muted ? mod.unmute(userId) : mod.mute(userId, name))}
     >
       {muted ? "Unmute" : "Mute"}
+    </button>
+  );
+}
+
+// THE SPECTATOR LIST'S INLINE REPORT (moderation M6): "Report" for another
+// person's row (nothing for my own row, or at a computer table). Opens the
+// report dialog above the list.
+export function PersonReportButton({ userId, name }: { userId: string; name: string }) {
+  const mod = usePersonModeration();
+  if (!mod || !canOfferPersonMenu({ userId, myUserId: mod.myUserId, enabled: mod.enabled })) return null;
+  return (
+    <button
+      type="button"
+      className="person-btn"
+      data-person-action="report"
+      aria-label={`Report ${name}`}
+      onClick={() => mod.report(userId, name)}
+    >
+      Report
     </button>
   );
 }

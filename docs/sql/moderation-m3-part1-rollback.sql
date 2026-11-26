@@ -6,13 +6,17 @@
 --
 -- WHEN: only after docs/sql/moderation-m3-part2-rollback.sql (or if part 2
 -- was never run): part 2's join_table_by_code and watch_table call
--- _is_kicked_from_table, which this file drops. The guard refuses
--- otherwise. Roll the app back first (it calls kick_player and listens on
+-- _is_kicked_from_table, which this file drops. And only after
+-- docs/sql/moderation-m6-part1-rollback.sql (or if M6 was never run): this
+-- file puts back the eight-action constraint, which would drop M6's
+-- report_filed. The guard refuses otherwise. Roll the app back first (it calls kick_player and listens on
 -- kicks: topics; an old tab would just see its Kick fail).
 --
 -- WHAT THIS FILE DOES (one transaction):
 --   0. GUARD: join_table_by_code and watch_table are M1 part 2's bodies
---      (part 2 is not in), else it raises and changes nothing.
+--      (part 2 is not in), and moderation M6 is not in (no
+--      public.player_reports, no report_filed in attempt_log_action_check),
+--      else it raises and changes nothing.
 --   1. Drops the "table kicks: people at the table receive" policy on
 --      realtime.messages (the two table-chat policies stay).
 --   2. Drops admin_recent_kicks, kick_topic_allows, kick_player,
@@ -47,6 +51,15 @@ begin
       raise exception 'STOP: % has body md5 %, not M1 part 2''s % / %. Run docs/sql/moderation-m3-part2-rollback.sql first (part 2 calls _is_kicked_from_table). Nothing was changed.', v_rec.fn, coalesce(v_txt, 'missing'), v_rec.lf, v_rec.crlf;
     end if;
   end loop;
+
+  -- Moderation M6 must be rolled back first (this file's constraint has no
+  -- report_filed).
+  select pg_get_constraintdef(con.oid) into v_txt
+  from pg_constraint con
+  where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check';
+  if to_regclass('public.player_reports') is not null or coalesce(v_txt, '') ~ '''report_filed''' then
+    raise exception 'STOP: moderation M6 is in (public.player_reports, or report_filed in attempt_log_action_check). Run docs/sql/moderation-m6-part1-rollback.sql first. Nothing was changed.';
+  end if;
 end;
 $$;
 

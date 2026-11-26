@@ -27,7 +27,9 @@
 --       slice A ones plus game_start and follow_change) -- or, once
 --       moderation M1 part 1 is in (public.blocks exists), exactly those
 --       eight with block_change -- or, once moderation M3 part 1 is in
---       (public.table_kicks exists), exactly those nine with kick.
+--       (public.table_kicks exists), exactly those nine with kick -- or,
+--       once moderation M6 part 1 is in (public.player_reports exists),
+--       exactly those ten with report_filed.
 --   K4  the cleanup deletes rows older than 7 days and keeps the rest: of
 --       the temporary account's rows at 8 days, 7 days and a minute, 6 days
 --       and 23 hours, and now, the last two stay; afterwards no row older
@@ -84,12 +86,14 @@ begin
   -- [K3] The seven actions -- eight with block_change once moderation M1
   -- part 1 is in (its table exists; slice-e-grants-verification.sql decides
   -- the same way) -- nine with kick once moderation M3 part 1 is in
-  -- (public.table_kicks exists). The expected count goes into a variable
+  -- (public.table_kicks exists) -- ten with report_filed once moderation M6
+  -- part 1 is in (public.player_reports exists). The expected count goes into a variable
   -- first (a CASE inside an IF condition is a syntax trap in PL/pgSQL).
   select pg_get_constraintdef(con.oid) into v_txt
   from pg_constraint con
   where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check';
-  v_want := (case when to_regclass('public.table_kicks') is not null then 9
+  v_want := (case when to_regclass('public.player_reports') is not null then 10
+                  when to_regclass('public.table_kicks') is not null then 9
                   when to_regclass('public.blocks') is not null then 8
                   else 7 end);
   if v_txt is null
@@ -97,9 +101,12 @@ begin
      or v_txt !~ '''create_table''' or v_txt !~ '''create_computer_table''' or v_txt !~ '''join'''
      or v_txt !~ '''watch''' or v_txt !~ '''code_guess''' or v_txt !~ '''game_start''' or v_txt !~ '''follow_change'''
      or (v_want >= 8 and v_txt !~ '''block_change''')
-     or (v_want = 9 and v_txt !~ '''kick''') then
+     or (v_want >= 9 and v_txt !~ '''kick''')
+     or (v_want = 10 and v_txt !~ '''report_filed''') then
     raise exception 'FAIL [K3] attempt_log_action_check is "%"; expected exactly %.', coalesce(v_txt, 'missing'),
-      (case when v_want = 9
+      (case when v_want = 10
+            then 'the ten actions (the seven slice A/E ones plus block_change, kick and report_filed: moderation M6 part 1 is in)'
+            when v_want = 9
             then 'the nine actions (the seven slice A/E ones plus block_change and kick: moderation M3 part 1 is in)'
             when v_want = 8
             then 'the eight actions (the seven slice A/E ones plus block_change: moderation M1 part 1 is in)'

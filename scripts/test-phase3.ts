@@ -409,7 +409,31 @@ import {
   mutedMarkText,
   personPopupButtons,
   shouldAskToBlock,
+  spectatorRowButtons,
 } from "../lib/personMenu";
+import {
+  REPORT_CHOOSE_TEXT,
+  REPORT_DELETE_QUESTION,
+  REPORT_NOTE_MAX,
+  REPORT_NOTE_PLACEHOLDER,
+  REPORT_QUESTION,
+  REPORT_REASONS,
+  REPORTS_AUTO_DELETE_TEXT,
+  REPORTS_EMPTY_TEXT,
+  adminReportsFromRows,
+  afterReportStep,
+  countLine,
+  nicknameThenNow,
+  noteOneLine,
+  reportFailureText,
+  reportNote,
+  reportOutcomeText,
+  reportReasonWords,
+  reportSentNotice,
+  reportTitle,
+  reportedBlockQuestion,
+  showNoteCounter,
+} from "../lib/reports";
 import {
   CHAT_MUTE_KEEP_MS,
   CHAT_MUTE_LIMIT,
@@ -6500,14 +6524,15 @@ check("chat card: a visible ... on other people's cards only, opening the person
   strictEqual(/lib\/blocks|lib\/chatMute|supabase/.test(ui), false);
 });
 // ---- The person popup at the table (moderation M2b, redesigned in M2c) ----
-check("person popup: Mute or Unmute for everyone, Kick for the host only; no Hide, Block or Unblock; the quiet mark", () => {
-  deepStrictEqual(personPopupButtons({ muted: false, isHost: false }), [{ action: "mute", label: "Mute" }]);
-  deepStrictEqual(personPopupButtons({ muted: true, isHost: false }), [{ action: "unmute", label: "Unmute" }]);
+check("person popup: Mute or Unmute and Report for everyone, Kick for the host only; no Hide, Block or Unblock; the quiet mark", () => {
+  deepStrictEqual(personPopupButtons({ muted: false, isHost: false }), [{ action: "mute", label: "Mute" }, { action: "report", label: "Report" }]);
+  deepStrictEqual(personPopupButtons({ muted: true, isHost: false }), [{ action: "unmute", label: "Unmute" }, { action: "report", label: "Report" }]);
   deepStrictEqual(personPopupButtons({ muted: false, isHost: true }), [
     { action: "mute", label: "Mute" },
+    { action: "report", label: "Report" },
     { action: "kick", label: "Kick" },
   ]);
-  deepStrictEqual(personPopupButtons({ muted: true, isHost: true }).map((b) => b.label), ["Unmute", "Kick"]);
+  deepStrictEqual(personPopupButtons({ muted: true, isHost: true }).map((b) => b.label), ["Unmute", "Report", "Kick"]);
   strictEqual(mutedMark({ muted: false, blocked: false }), null);
   strictEqual(mutedMark({ muted: true, blocked: false }), "muted");
   strictEqual(mutedMark({ muted: true, blocked: true }), "blocked", "blocked wins");
@@ -6533,7 +6558,7 @@ check("person popup: Mute or Unmute for everyone, Kick for the host only; no Hid
   strictEqual(popup.includes('className="about-dialog person-popup"'), true, "the spectator list's panel");
   strictEqual(popup.includes('className="join-choice__cancel"'), true, "Close is the list's text link");
   // Picking a button closes the popup first, then acts.
-  strictEqual(/closePersonPopup\(\);\s*if \(b\.action === "mute"\) mod\.mute\(person\.userId, person\.name\);\s*else if \(b\.action === "unmute"\) mod\.unmute\(person\.userId\);\s*else mod\.kick\(person\.userId, person\.name\);/.test(popup), true);
+  strictEqual(/closePersonPopup\(\);\s*if \(b\.action === "mute"\) mod\.mute\(person\.userId, person\.name\);\s*else if \(b\.action === "unmute"\) mod\.unmute\(person\.userId\);\s*else if \(b\.action === "report"\) mod\.report\(person\.userId, person\.name\);\s*else mod\.kick\(person\.userId, person\.name\);/.test(popup), true);
   // Escape, Close and a tap outside close it; a native modal dialog (the top layer).
   strictEqual(popup.includes("d.showModal();"), true);
   strictEqual(/onCancel=\{\(e\) => \{[\s\S]{0,60}e\.preventDefault\(\);\s*closePersonPopup\(\);/.test(popup), true);
@@ -6569,7 +6594,7 @@ check("person popup: never for my own seat, row or card, at a computer table, or
   strictEqual(view.indexOf("const hostId =") < view.indexOf("const popupIsHost"), true);
   const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
   // Every opener draws its children unchanged (or nothing) when it can't offer the popup.
-  strictEqual((menu.match(/if \(!mod \|\| !canOfferPersonMenu\(\{ userId, myUserId: mod\.myUserId, enabled: mod\.enabled \}\)\)/g) ?? []).length, 3, "the avatar, the name, the list's Mute");
+  strictEqual((menu.match(/if \(!mod \|\| !canOfferPersonMenu\(\{ userId, myUserId: mod\.myUserId, enabled: mod\.enabled \}\)\)/g) ?? []).length, 4, "the avatar, the name, the list's Mute and Report");
   strictEqual(menu.includes("return <>{children}</>;"), true);
   strictEqual(menu.includes("if (!moderation || !canOfferPersonMenu({ userId, myUserId: moderation.myUserId, enabled: moderation.enabled })) return;"), true, "openPersonPopup refuses too");
 });
@@ -6746,7 +6771,7 @@ check("kick: the placeholder is gone; every Kick asks the one confirm, then only
   strictEqual(/kind: "confirm"|onConfirmRemove|Kicking\.\.\.|SPECTATOR_REMOVE_CONFIRM/.test(list), false);
   strictEqual(list.includes('export type SpectatorsListMode = { kind: "list" };'), true);
   // AskDialog: an empty body draws no paragraph.
-  strictEqual(readFileSync("components/brand/AskDialog.tsx", "utf8").includes("{body && <p id={bodyId}>{body}</p>}"), true);
+  strictEqual(readFileSync("components/brand/AskDialog.tsx", "utf8").includes('{body && <p id={bodyId} className="whitespace-pre-line">{body}</p>}'), true);
 });
 check("kick notice: one private channel, asked of everyone else once, queued, never for the host, the kicked or the blocking", () => {
   const hook = readFileSync("components/table/useTableKicks.ts", "utf8");
@@ -6762,7 +6787,7 @@ check("kick notice: one private channel, asked of everyone else once, queued, ne
   strictEqual(handle.includes("blocked: blockedIds.includes(notice.kickedId),"), true);
   strictEqual(handle.includes("alreadyShown: shownKicksRef.current.has(notice.kickedId),"), true);
   strictEqual(handle.includes("openedAt: openedAtRef.current,"), true);
-  strictEqual(view.includes("const kickNoticeShown = kickNotice && !blockAsk && !kickAsk && !popupOpen ? kickNotice : null;"), true, "queued behind other questions and the popup");
+  strictEqual(view.includes("const kickNoticeShown = kickNotice && !blockAsk && !kickAsk && !popupOpen && !reportAsk && !reportSent ? kickNotice : null;"), true, "queued behind other questions, the popup and a report (M6)");
   strictEqual(view.includes("onYes={() => closeKickNotice(true)}") && view.includes("onNo={() => closeKickNotice(false)}"), true);
   strictEqual(/if \(block\) void blockFromQuestion\(first\.userId\);/.test(view), true, "Yes blocks through the same path");
   strictEqual(readFileSync("components/table/PersonMenu.tsx", "utf8").includes("export function usePersonPopupOpen(): boolean {"), true);
@@ -6839,7 +6864,8 @@ check("M3 SQL: kick_player's notice can't undo a kick; the files' md5s match the
   strictEqual(v.includes("v_expect := 17 + (case when v_live then 2 else 0 end) + (case when v_p2 then 7 else 0 end);"), true);
   strictEqual((v.match(/v_checks := v_checks \+ 1;/g) ?? []).length, 26);
   strictEqual(v.includes("raise exception 'm3 verification: the notice fails on purpose';"), true, "C12 makes the send fail");
-  strictEqual(readFileSync("docs/sql/slice-e-attempt-log-cleanup-verification.sql", "utf8").includes("v_want := (case when to_regclass('public.table_kicks') is not null then 9"), true);
+  // (Moderation M6 put a ten-action branch in front of M3's nine.)
+  strictEqual(readFileSync("docs/sql/slice-e-attempt-log-cleanup-verification.sql", "utf8").includes("v_want := (case when to_regclass('public.player_reports') is not null then 10\n                  when to_regclass('public.table_kicks') is not null then 9"), true);
   strictEqual(readFileSync("docs/sql/slice-e-grants-verification.sql", "utf8").includes("v_expected_fns := v_expected_fns || array['admin_recent_kicks', 'kick_player', 'kick_topic_allows'];"), true);
   for (const f of ["spectator-chat-verification", "table-chat-verification", "spectator-chat-precheck", "moderation-catalog"]) {
     strictEqual(readFileSync(`docs/sql/${f}.sql`, "utf8").includes("table kicks: people at the table receive"), true, f);
@@ -7324,6 +7350,179 @@ check("chat: my own message is never announced to the screen reader", () => {
   strictEqual(announcer.includes("own"), false);
 });
 
+// ---- Reports (moderation M6, docs/sql/moderation-m6-part1.sql) ----
+check("reports: the popup's buttons are Mute/Unmute, Report, then the host's Kick; Report opens the dialog", () => {
+  deepStrictEqual(personPopupButtons({ muted: false, isHost: false }).map((b) => b.label), ["Mute", "Report"]);
+  deepStrictEqual(personPopupButtons({ muted: true, isHost: false }).map((b) => b.label), ["Unmute", "Report"]);
+  deepStrictEqual(personPopupButtons({ muted: false, isHost: true }).map((b) => b.action), ["mute", "report", "kick"]);
+  deepStrictEqual(personPopupButtons({ muted: true, isHost: true }).map((b) => b.label), ["Unmute", "Report", "Kick"]);
+  // Shown only where the popup is: another real person at a human table.
+  strictEqual(canOfferPersonMenu({ userId: "a", myUserId: "a", enabled: true }), false, "never my own");
+  strictEqual(canOfferPersonMenu({ userId: "a", myUserId: "b", enabled: false }), false, "never at a computer table");
+  strictEqual(canOfferPersonMenu({ userId: "a", myUserId: "b", enabled: true }), true);
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  const popup = menu.slice(menu.indexOf("export function PersonPopup"), menu.indexOf("export function MutedBadge"));
+  strictEqual(/closePersonPopup\(\);\s*if \(b\.action === "mute"\)[^\n]*\n\s*else if \(b\.action === "unmute"\)[^\n]*\n\s*else if \(b\.action === "report"\) mod\.report\(person\.userId, person\.name\);\s*else mod\.kick\(person\.userId, person\.name\);/.test(popup), true, "close first, then Report");
+  strictEqual(popup.includes('className="flex w-full flex-wrap gap-2"'), true, "three buttons wrap on a narrow phone instead of overlapping");
+  // A chat sender who has left has no roster entry: the avatar falls back
+  // to the initial (null url) and Report needs only the id.
+  strictEqual(popup.includes("mod?.people.find((p) => p.user_id === person.userId)?.avatar_url ?? null"), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("report: askReport,"), true);
+  strictEqual(/const askReport = useCallback\(\(userId: string, name: string\) => \{\s*setReportAsk\(\{ userId, name \}\);\s*\}, \[\]\);/.test(view), true, "Report only opens the dialog");
+  // Computer tables: the store is off there, so no Report at all.
+  strictEqual(view.includes("enabled: !!myUserId && !!table && !table.computer_level,"), true);
+});
+check("reports: the eye list's row buttons are Mute/Unmute, Report, then the host's Kick, wrapping on a narrow phone", () => {
+  deepStrictEqual(spectatorRowButtons({ muted: false, isHost: false }), ["mute", "report"]);
+  deepStrictEqual(spectatorRowButtons({ muted: true, isHost: true }), ["unmute", "report", "kick"]);
+  const list = readFileSync("components/table/SpectatorsList.tsx", "utf8");
+  const row = list.slice(list.indexOf("{spectators.map((s) => ("), list.indexOf("</ul>"));
+  const at = ["{nameOf(s)}</span>", "<PersonMuteButton", "<PersonReportButton userId={s.userId} name={nameOf(s)} />", "{canKick && ("].map((s) => row.indexOf(s));
+  strictEqual(at.every((i, k) => i > 0 && (k === 0 || i > at[k - 1])), true, "name, Mute, Report, Kick");
+  strictEqual(row.includes('className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1"'), true);
+  strictEqual(row.includes('className="min-w-20 flex-1 truncate font-semibold"'), true, "the name keeps 5rem; the buttons wrap below");
+  strictEqual(row.includes('<span className="ml-auto flex shrink-0 gap-1">'), true);
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  const btn = menu.slice(menu.indexOf("export function PersonReportButton"), menu.indexOf("export function PersonMark"));
+  strictEqual(btn.includes("if (!mod || !canOfferPersonMenu({ userId, myUserId: mod.myUserId, enabled: mod.enabled })) return null;"), true, "never my own row, never a computer table");
+  strictEqual(btn.includes('className="person-btn"'), true, "the same 44px button as Mute and Kick");
+  strictEqual(btn.includes("onClick={() => mod.report(userId, name)}"), true);
+  strictEqual(/supabase|\.rpc\(/.test(m3CodeOnly(btn)), false);
+});
+check("reports: the dialog's words, the outcome lines, and the block question after a report", () => {
+  deepStrictEqual(REPORT_REASONS.map((r) => `${r.reason}:${r.label}`), ["nickname:Offensive nickname", "picture:Offensive picture", "behavior:Behavior at this table"]);
+  strictEqual(reportTitle("Bo"), "Report Bo");
+  strictEqual(REPORT_QUESTION, "What's the problem?");
+  strictEqual(REPORT_NOTE_PLACEHOLDER, "Add details (optional, 200 characters)");
+  strictEqual(REPORT_CHOOSE_TEXT, "Choose what's wrong.");
+  strictEqual(REPORT_NOTE_MAX, 200);
+  strictEqual(showNoteCounter(149), false);
+  strictEqual(showNoteCounter(150), true);
+  // The outcomes.
+  strictEqual(reportOutcomeText("reported", "Bo"), null);
+  strictEqual(reportOutcomeText("already_reported", "Bo"), "You already reported Bo today.");
+  strictEqual(reportOutcomeText("limit", "Bo"), "You've sent a lot of reports. Try again a little later.");
+  strictEqual(reportOutcomeText("not_found", "Bo"), "That player isn't there anymore.");
+  strictEqual(reportOutcomeText("not_allowed", "Bo"), "You can't report this player.");
+  strictEqual(reportFailureText({ message: "Unknown report reason." }), "Unknown report reason.");
+  strictEqual(reportFailureText({ message: "You must be logged in to report a player." }), "You must be logged in to report a player.");
+  strictEqual(reportFailureText({ message: 'relation "player_reports" does not exist' }), "Couldn't send your report. Try again.", "never raw database text");
+  strictEqual(reportFailureText(null), "Couldn't send your report. Try again.");
+  // The note as sent.
+  strictEqual(reportNote("   "), null);
+  strictEqual(reportNote("  hi  "), "hi");
+  strictEqual(reportNote("x".repeat(250))?.length, 200);
+  // After "reported": the block question unless already blocked.
+  strictEqual(afterReportStep({ blocked: false }), "ask_block");
+  strictEqual(afterReportStep({ blocked: true }), "sent_notice");
+  const q = reportedBlockQuestion("Bo");
+  const b = blockQuestion("Bo");
+  strictEqual(q.title, "Report sent");
+  strictEqual(q.body.startsWith("We'll take a look.\n\n"), true, "first line");
+  strictEqual(q.body.includes(b.title) && q.body.endsWith(b.body), true, "the same question and Block List explanation");
+  strictEqual(q.yesLabel, "Yes, block");
+  strictEqual(q.noLabel, "No, thanks");
+  deepStrictEqual(reportSentNotice(), { title: "Report sent", body: "We'll take a look.", yesLabel: "", noLabel: "OK" });
+  // AskDialog: an empty yes label draws only the OK button; blank lines are paragraphs.
+  const dialog = readFileSync("components/brand/AskDialog.tsx", "utf8");
+  strictEqual(/\{yesLabel && \(\s*<button type="button" onClick=\{onYes\} className="peg-btn peg-btn--brass">/.test(dialog), true);
+  strictEqual(dialog.includes('{body && <p id={bodyId} className="whitespace-pre-line">{body}</p>}'), true);
+});
+check("reports: the dialog -- choose first, Sending... once, 200 characters, Cancel sends nothing, never calls the server", () => {
+  const ui = readFileSync("components/table/ReportDialog.tsx", "utf8");
+  const order = ["<h2", "{reportTitle(name)}", "{REPORT_QUESTION}", "REPORT_REASONS.map", "<textarea", "{message && (", 'type="submit" className="peg-btn peg-btn--brass"', 'className="join-choice__cancel"'].map((s) => ui.indexOf(s));
+  strictEqual(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1])), true, "heading, question, choices, note, line, Send, Cancel");
+  strictEqual(ui.includes("maxLength={REPORT_NOTE_MAX}"), true);
+  strictEqual(ui.includes("placeholder={REPORT_NOTE_PLACEHOLDER}"), true);
+  strictEqual(ui.includes('type="radio"'), true);
+  strictEqual(/if \(sendingRef\.current\) return;\s*if \(!reason\) \{\s*setMessage\(REPORT_CHOOSE_TEXT\);\s*return;\s*\}/.test(ui), true, "no reason: the message, the dialog stays");
+  strictEqual(/\sdisabled[=\s>]/.test(ui), false, "Send is never disabled or hidden (aria-disabled only while sending)");
+  strictEqual(ui.includes("{sending ? REPORT_SENDING_LABEL : REPORT_SEND_LABEL}"), true);
+  strictEqual(ui.includes("if (line) setMessage(line);"), true, "a refusal stays in the dialog with the form");
+  strictEqual(ui.includes("d.showModal();"), true);
+  strictEqual(/onCancel=\{\(e\) => \{[\s\S]{0,60}e\.preventDefault\(\);\s*onClose\(\);/.test(ui), true, "Escape is Cancel");
+  strictEqual(ui.includes("if (e.target === ref.current) onClose();"), true);
+  strictEqual(ui.includes('className="about-dialog report-dialog"'), true);
+  strictEqual(ui.includes("createPortal("), true);
+  strictEqual(/supabase|\.rpc\(|writeReport|dangerouslySetInnerHTML/.test(m3CodeOnly(ui)), false);
+});
+check("reports: report_player only through lib/reports.ts with the table's id; nobody touches player_reports; nothing broadcast", () => {
+  const lib = readFileSync("lib/reports.ts", "utf8");
+  strictEqual(/supabase\.rpc\("report_player", \{\s*p_target: input\.targetId,\s*p_reason: input\.reason,\s*p_note: reportNote\(input\.note\),\s*p_table_id: input\.tableId,\s*\}\)/.test(lib), true);
+  strictEqual(lib.includes('supabase.rpc("admin_list_reports", { p_limit: limit })'), true);
+  strictEqual(lib.includes('supabase.rpc("admin_delete_report", { p_id: id })'), true);
+  strictEqual(/\.from\(|\.channel\(|\.send\(|realtime/.test(m3CodeOnly(lib)), false, "RPCs only; no table, no channel");
+  const walk = (d: string): string[] =>
+    readdirSync(d).flatMap((f) => {
+      const p = `${d}/${f}`;
+      return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(f) ? [p] : [];
+    });
+  for (const dir of ["app", "components", "lib"]) {
+    for (const f of walk(dir)) {
+      const src = m3CodeOnly(readFileSync(f, "utf8"));
+      strictEqual(/player_reports/.test(src), false, `${f}: nobody touches player_reports`);
+      if (f !== "lib/reports.ts") strictEqual(/report_player|admin_list_reports|admin_delete_report|purge_old_reports/.test(src), false, `${f}: only lib/reports.ts calls the report RPCs`);
+    }
+  }
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const send = view.slice(view.indexOf("const sendReport = useCallback("), view.indexOf("const closeReport = useCallback("));
+  strictEqual(send.includes("const result = await writeReport({ targetId: ask.userId, reason, note, tableId: tableIdForReport });"), true);
+  strictEqual(view.includes("const tableIdForReport = table?.id ?? null;"), true);
+  strictEqual(/if \(!result\.ok\) return result\.text;\s*const line = reportOutcomeText\(result\.outcome, ask\.name\);\s*if \(line\) return line;\s*setReportAsk\(null\);/.test(send), true, "only reported closes the dialog");
+  strictEqual(send.includes('if (afterReportStep({ blocked: blockedIds.includes(ask.userId) }) === "ask_block") {'), true);
+  strictEqual(send.includes("setBlockAsk({ userId: ask.userId, name: ask.name, afterReport: true });"), true);
+  strictEqual(send.includes("setReportSent(true);"), true);
+  strictEqual(/muteSender|dropChatSender|writeBlock|kick|\.send\(|channel/i.test(send), false, "nothing automatic: no mute, block, kick or broadcast");
+  // Yes, block after a report is the same block-by-id path as after a Mute or a Kick.
+  strictEqual(view.includes("const blockAskText = blockAsk ? (blockAsk.afterReport ? reportedBlockQuestion(blockAsk.name) : blockQuestion(blockAsk.name)) : null;"), true);
+  strictEqual((view.match(/\bwriteBlockById\(/g) ?? []).length, 1);
+  strictEqual(view.includes("<ReportDialog target={reportAsk} onSend={sendReport} onClose={closeReport} />"), true);
+  strictEqual(/yesLabel=""\s*noLabel=\{reportSentText\?\.noLabel \?\? ""\}/.test(view), true, "Report sent with OK only");
+  // The kick notice waits while the report dialog or its answer is open.
+  strictEqual(view.includes("!popupOpen && !reportAsk && !reportSent ? kickNotice : null"), true);
+  // The header's "..." menu is untouched: no report there.
+  strictEqual(/Report/.test(readFileSync("components/table/CountsToggle.tsx", "utf8").replace(/\/\/[^\n]*/g, "")), false);
+});
+check("reports: the admin list -- plain-text note, counts, picture flag, Delete asks first, the 90-day line", () => {
+  const rows = adminReportsFromRows([
+    {
+      id: "r1", created_at: "2026-11-25T10:00:00Z", reason: "picture", note: "line one\n\n  line two", table_code: "0412",
+      reporter_nickname: "Ann", reporter_nickname_now: "Ann", reported_nickname: "Bo", reported_nickname_now: "Bobby",
+      reported_avatar_url: "https://x/a.png", picture_changed: true, reporter_report_count: 1, reported_report_count: 3,
+    },
+    { id: 5 },
+  ]);
+  strictEqual(rows.length, 1);
+  strictEqual(rows[0].pictureChanged, true);
+  strictEqual(reportReasonWords("nickname"), "Offensive nickname");
+  strictEqual(reportReasonWords("picture"), "Offensive picture");
+  strictEqual(reportReasonWords("behavior"), "Behavior");
+  deepStrictEqual(nicknameThenNow("Bo", "Bobby"), { name: "Bo", now: "Bobby" });
+  deepStrictEqual(nicknameThenNow("Ann", "Ann"), { name: "Ann", now: null });
+  deepStrictEqual(nicknameThenNow("Cy", null), { name: "Cy", now: null }, "a deleted account");
+  strictEqual(noteOneLine("line one\n\n  line two"), "line one line two");
+  strictEqual(countLine(1, "filed"), "1 report filed by this person");
+  strictEqual(countLine(3, "against"), "3 reports against this person");
+  strictEqual(REPORTS_AUTO_DELETE_TEXT, "Reports are deleted automatically after 90 days.");
+  strictEqual(REPORTS_EMPTY_TEXT, "No reports.");
+  deepStrictEqual(REPORT_DELETE_QUESTION, { title: "Delete this report?", body: "", yesLabel: "Delete", noLabel: "Cancel" });
+  const ui = readFileSync("components/brand/AdminReports.tsx", "utf8");
+  strictEqual(/dangerouslySetInnerHTML|innerHTML/.test(ui), false, "never HTML");
+  strictEqual(ui.includes("&ldquo;{note}&rdquo;"), true, "the note as a text node");
+  strictEqual(ui.includes("const note = noteOneLine(r.note);"), true);
+  strictEqual(ui.includes("readReports(100)"), true);
+  strictEqual(ui.includes("{REPORTS_AUTO_DELETE_TEXT}"), true);
+  strictEqual(ui.includes("picture changed since report"), true);
+  strictEqual(/onDelete=\{\(\) => setDeleteAsk\(r\.id\)\}/.test(ui), true, "Delete asks first");
+  strictEqual(/const result = await deleteReport\(id\);[\s\S]{0,160}setReports\(\(list\) => \(list \? list\.filter\(\(r\) => r\.id !== id\) : list\)\);/.test(ui), true);
+  strictEqual(/supabase|\.rpc\(/.test(m3CodeOnly(ui)), false);
+  for (const f of ["lib/reports.ts", "components/table/ReportDialog.tsx", "components/brand/AdminReports.tsx"]) {
+    strictEqual(readFileSync(f, "utf8").includes("dangerouslySetInnerHTML"), false, f);
+  }
+  const page = readFileSync("app/admin/page.tsx", "utf8");
+  strictEqual(page.indexOf("<AdminRecentKicks />") > 0 && page.indexOf("<AdminReports />") > page.indexOf("<AdminRecentKicks />"), true, "after Recent kicks");
+});
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");
   strictEqual(normalizeEol("a\nb"), "a\nb");

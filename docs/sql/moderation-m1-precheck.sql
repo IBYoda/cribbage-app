@@ -39,7 +39,8 @@
 --            present".
 --   part1    attempt_log_action_check (the seven slice A/E actions before,
 --            plus block_change after; plus kick too once moderation M3
---            part 1 is in); public.blocks (absent before; after:
+--            part 1 is in; plus report_filed too once moderation M6 part 1
+--            is in); public.blocks (absent before; after:
 --            its columns, primary key, self check, both foreign keys ON
 --            DELETE CASCADE, the blocked_id index, RLS on, no policies, no
 --            privileges for PUBLIC, anon, authenticated or service_role);
@@ -50,7 +51,8 @@
 --   names    any OTHER relation, function, trigger, policy or type in public
 --            whose name contains "block" (expected none).
 --   grants   the client-executable functions (49 before part 1, 52 after;
---            53 after moderation M2 part 1, 56 after M3 part 1);
+--            53 after moderation M2 part 1, 56 after M3 part 1, 59 after
+--            M6 part 1);
 --            postgres's global default ACL for new functions (INFO).
 --   count    blocks rows, blockers, the longest list; attempt_log
 --            block_change rows; profiles that cannot be blocked by nickname
@@ -116,7 +118,8 @@ check_state as (
          cd.d ~ '''create_table''' and cd.d ~ '''create_computer_table''' and cd.d ~ '''join''' and cd.d ~ '''watch'''
            and cd.d ~ '''code_guess''' and cd.d ~ '''game_start''' and cd.d ~ '''follow_change''' as has_seven,
          cd.d ~ '''block_change''' as has_block,
-         cd.d ~ '''kick''' as has_kick
+         cd.d ~ '''kick''' as has_kick,
+         cd.d ~ '''report_filed''' as has_report
   from check_def cd
 ),
 blk as (
@@ -227,10 +230,13 @@ from (
              then 'before part 1: the seven slice A/E actions'
            when (select cs.has_seven and cs.has_block and not cs.has_kick and cs.n_actions = 8 from check_state cs)
              then 'after part 1: plus block_change'
-           when (select cs.has_seven and cs.has_block and cs.has_kick and cs.n_actions = 9 from check_state cs)
+           when (select cs.has_seven and cs.has_block and cs.has_kick and not cs.has_report and cs.n_actions = 9 from check_state cs)
                 and to_regclass('public.table_kicks') is not null
              then 'after part 1: plus block_change (and moderation M3''s kick)'
-           else 'STOP: neither the seven slice A/E actions nor those plus block_change (and kick, after M3)' end
+           when (select cs.has_seven and cs.has_block and cs.has_kick and cs.has_report and cs.n_actions = 10 from check_state cs)
+                and to_regclass('public.table_kicks') is not null and to_regclass('public.player_reports') is not null
+             then 'after part 1: plus block_change (and moderation M3''s kick and M6''s report_filed)'
+           else 'STOP: neither the seven slice A/E actions nor those plus block_change (and kick, after M3; and report_filed, after M6)' end
 
   union all
   -- ==== part1: public.blocks =====================================================
@@ -390,16 +396,30 @@ from (
                 and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
              then 'after moderation M3 part 1: the 53 plus kick_player, kick_topic_allows, admin_recent_kicks'
-           else 'STOP: neither 49, 52, 53 nor 56; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 59
+                and to_regprocedure('public.block_player_by_id(uuid)') is not null
+                and to_regclass('public.table_kicks') is not null
+                and to_regclass('public.player_reports') is not null
+                and not exists (select 1 from client_fns cf
+                                where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
+                                  and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks',
+                                                      'report_player', 'admin_list_reports', 'admin_delete_report'))
+                and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
+                and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
+                and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
+             then 'after moderation M6 part 1: the 56 plus report_player, admin_list_reports, admin_delete_report'
+           else 'STOP: neither 49, 52, 53, 56 nor 59; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
-  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id and M3''s three aside)',
+  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id, M3''s three and M6''s three aside)',
          coalesce((select string_agg(cf.name, ', ' order by cf.name) from client_fns cf
                    where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
-                     and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks')), '(none)'),
+                     and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks',
+                                         'report_player', 'admin_list_reports', 'admin_delete_report')), '(none)'),
          case when exists (select 1 from client_fns cf
                            where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
-                             and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks'))
+                             and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks',
+                                                 'report_player', 'admin_list_reports', 'admin_delete_report'))
               then 'STOP: paste back' else '' end
 
   union all

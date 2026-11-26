@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { AdminTableRow, type AdminTable } from "@/components/brand/AdminTableRow";
 import { AdminRecentKicks } from "@/components/brand/AdminRecentKicks";
+import { AdminReports } from "@/components/brand/AdminReports";
 import { adminTableLabel, seatedNames } from "@/lib/tableListing";
 
 // A game is "live" while it is either cutting for deal or being played. Both
@@ -223,6 +224,7 @@ export default function AdminPage() {
 
       {/* Moderation M3: who kicked whom, newest first. */}
       <AdminRecentKicks />
+      <AdminReports />
     </CardRoomFrame>
   );
 }
