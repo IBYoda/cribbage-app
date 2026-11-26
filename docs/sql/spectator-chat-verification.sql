@@ -70,7 +70,9 @@
 --       chat_topic_allows(topic, false / true), broadcast only), and no
 --       UNKNOWN policy is on realtime.messages (moderation M3's
 --       "table kicks: people at the table receive" is known once
---       kick_topic_allows exists; the verdict names it).
+--       kick_topic_allows exists, and moderation M5a's "table events:
+--       people at the table receive" once table_topic_allows exists; the
+--       verdict names them).
 --   C5  no other function in public has "chat" in its name.
 --   C6  get_table_spectators: returns TABLE(user_id uuid, joined_at
 --       timestamptz), security definer, stable, search_path ''.
@@ -211,21 +213,27 @@ begin
   end if;
   -- UNKNOWN policies: anything but the two table-chat ones -- and, once
   -- moderation M3 part 1 is in (kick_topic_allows exists), its one SELECT
-  -- policy for kicks: topics, which can't match a chat topic. Policies are
-  -- OR'ed, so an unknown one fails here.
+  -- policy for kicks: topics, and once moderation M5a part 1 is in
+  -- (table_topic_allows exists), its one SELECT policy for table: topics;
+  -- neither can match a chat topic. Policies are OR'ed, so an unknown one
+  -- fails here.
   select count(*) into v_others
   from pg_policies p
   where p.schemaname = 'realtime' and p.tablename = 'messages'
     and p.policyname not in ('table chat: members receive', 'table chat: members send')
     and not (p.policyname = 'table kicks: people at the table receive'
              and p.cmd = 'SELECT'
-             and to_regprocedure('public.kick_topic_allows(text)') is not null);
+             and to_regprocedure('public.kick_topic_allows(text)') is not null)
+    and not (p.policyname = 'table events: people at the table receive'
+             and p.cmd = 'SELECT'
+             and to_regprocedure('public.table_topic_allows(text)') is not null);
   if v_others <> 0 then
     raise exception 'FAIL [%] % unknown polic(ies) on realtime.messages: %.', 'C4', v_others,
       (select string_agg(p.policyname::text, ', ' order by p.policyname)
        from pg_policies p
        where p.schemaname = 'realtime' and p.tablename = 'messages'
-         and p.policyname not in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive'));
+         and p.policyname not in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive',
+                                  'table events: people at the table receive'));
   end if;
   v_checks := v_checks + 1;
 
@@ -641,6 +649,9 @@ begin
     v_checks, v_skips, v_others::text
     || (case when exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'
                          and p.policyname = 'table kicks: people at the table receive')
-          then ' (plus moderation M3''s kicks policy)' else '' end);
+          then ' (plus moderation M3''s kicks policy)' else '' end)
+    || (case when exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'
+                         and p.policyname = 'table events: people at the table receive')
+          then ' (plus moderation M5a''s table events policy)' else '' end);
 end;
 $$;
