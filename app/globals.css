@@ -2546,21 +2546,33 @@ section.felt-panel {
   opacity: 1;
 }
 /* THE SPECTATORS LIST (components/table/SpectatorsList.tsx): the About
-   dialog's look; the host's Remove is a 44px target with 12px corners. */
+   dialog's look. Its row buttons (Mute/Unmute, the host's Kick) and the
+   person popup's are .person-btn: a 44px target, gold outline, 12px
+   corners. */
 .spectators-dialog {
   width: min(24rem, calc(100vw - 2rem));
 }
-.spectators-remove {
+.person-btn {
   min-height: 44px;
+  flex-shrink: 0;
   padding-inline: 0.875rem;
   border: 2px solid var(--brass);
   border-radius: 12px;
   font-size: 0.875rem;
   font-weight: 700;
 }
-.spectators-remove:focus-visible {
+.person-btn:focus-visible {
   outline: 3px solid var(--cream);
   outline-offset: 2px;
+}
+/* THE PERSON POPUP (components/table/PersonMenu.tsx): the spectators list's
+   panel, its buttons larger. */
+.person-popup {
+  width: min(22rem, calc(100vw - 2rem));
+}
+.person-btn--large {
+  min-height: 52px;
+  font-size: 1.0625rem;
 }
 /* "Watching": a spectator's thin row under the header -- 20px, text only. */
 .watching-row {
@@ -2941,4 +2953,58 @@ body:has(.sq-dealing) .chat-stack {
   top: 50%;
   height: 44px;
   transform: translateY(-50%);
+}
+
+/* THE PERSON MENU (moderation M2b/M2c, components/table/PersonMenu.tsx). A seat's
+   avatar keeps its own size: .person-tap is an inline-flex box exactly
+   around it. The tap area is an invisible 44px button centred on the avatar
+   (absolute: it moves and resizes nothing; inside a strip with overflow
+   hidden it is simply clipped to the strip). The quiet mark sits on the
+   avatar's lower right, pointer-events none. */
+.person-tap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.person-tap__hit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  cursor: pointer;
+  z-index: 1;
+}
+.person-tap__hit:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: -10px;
+}
+.person-name-tap {
+  cursor: pointer;
+}
+.person-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  z-index: 2;
+  display: flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid rgb(255 255 255 / 0.85);
+  color: #fff;
+  pointer-events: none;
+}
+.person-badge--muted {
+  background: #52525b;
+}
+.person-badge--blocked {
+  background: #991b1b;
 }

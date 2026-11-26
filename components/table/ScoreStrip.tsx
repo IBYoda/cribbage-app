@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { DealerChip } from "@/components/table/OpponentBand";
 import { AVATAR_DIAMETERS, Avatar } from "@/components/Avatar";
+import { PersonName, PersonTap } from "@/components/table/PersonMenu";
 import { isCountReason } from "@/components/table/countingView";
 import { placementFor, plateSpot, wingsOverhang, type WingsTier } from "@/lib/wings";
 
@@ -70,11 +71,20 @@ export function ScoreStrip({ plates }: { plates: ScorePlate[] }) {
               <span className="flex min-w-0 items-center gap-1 text-[11px] font-medium leading-tight">
                 {/* My name first (buildPlates puts me first on my plate), with
                     "(you)" right after it, then a Teams partner's. */}
-                <span className="truncate" title={plate.members.map((m) => m.name).join(" & ")}>
+                {/* A one-person plate's name opens their person menu too
+                    (M2b); a Teams plate's two names share one line, so there
+                    each avatar is the way in. */}
+                <PersonName
+                  userId={plate.members.length === 1 ? plate.members[0].userId : ""}
+                  name={plate.members[0]?.name ?? ""}
+                  surface="plate"
+                  className="truncate"
+                  title={plate.members.map((m) => m.name).join(" & ")}
+                >
                   {plate.members[0]?.name}
                   {plate.isMine && <span className="text-zinc-500"> (you)</span>}
                   {plate.members.slice(1).map((m) => ` & ${m.name}`).join("")}
-                </span>
+                </PersonName>
                 {plate.hasDealer && <DealerChip />}
               </span>
               <span className="plate-stack__score self-end font-bold tabular-nums">
@@ -100,19 +110,22 @@ function PlateAvatars({ plate, plateCount }: { plate: ScorePlate; plateCount: nu
   const edges = pair && anyWinged ? { marginLeft: room(plate.members[0]), marginRight: room(plate.members.at(-1)) } : undefined;
   return (
     <div className="flex shrink-0 -space-x-2" style={edges}>
+      {/* Each other person's avatar opens the person menu (moderation M2b);
+          mine never does (PersonTap draws my avatar as it was). */}
       {plate.members.map((m) => (
-        <Avatar
-          key={m.userId}
-          name={m.name}
-          url={m.avatarUrl}
-          size="sm"
-          tone="table"
-          ringColor={plate.laneColor}
-          tier={m.wings}
-          wings={placement}
-          flush={pair}
-          lift={pair && anyWinged}
-        />
+        <PersonTap key={m.userId} userId={m.userId} name={m.name} surface="plate">
+          <Avatar
+            name={m.name}
+            url={m.avatarUrl}
+            size="sm"
+            tone="table"
+            ringColor={plate.laneColor}
+            tier={m.wings}
+            wings={placement}
+            flush={pair}
+            lift={pair && anyWinged}
+          />
+        </PersonTap>
       ))}
     </div>
   );

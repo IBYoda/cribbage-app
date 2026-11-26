@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
+import { PersonName, PersonTap } from "@/components/table/PersonMenu";
 import { placementFor, type WingsTier } from "@/lib/wings";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
 import { SeatPlayedCards } from "@/components/table/SeatPlayedCards";
@@ -185,18 +186,21 @@ function SideSeatColumn({ seat }: { seat: RingSeat }) {
 function SeatTag({ seat }: { seat: RingSeat }) {
   return (
     <div className={`sq-ring__tag sq-ring__tag--${seat.position}`} data-sq={`tag-${seat.position}`}>
-      <Avatar
-        name={seat.name}
-        url={seat.avatarUrl}
-        size="xs"
-        tone="table"
-        ringColor={seat.laneColor}
-        tier={seat.wings}
-        wings={placementFor("side-tag")}
-      />
-      <span className="min-w-0 truncate text-sm font-medium" title={seat.name}>
+      {/* A tap on the avatar or the name opens the person menu (M2b). */}
+      <PersonTap userId={seat.userId} name={seat.name} surface="tag">
+        <Avatar
+          name={seat.name}
+          url={seat.avatarUrl}
+          size="xs"
+          tone="table"
+          ringColor={seat.laneColor}
+          tier={seat.wings}
+          wings={placementFor("side-tag")}
+        />
+      </PersonTap>
+      <PersonName userId={seat.userId} name={seat.name} surface="tag" className="min-w-0 truncate text-sm font-medium" title={seat.name}>
         {seat.name}
-      </span>
+      </PersonName>
       {seat.status}
     </div>
   );

@@ -117,12 +117,12 @@ export function addChatMessage(list: readonly ChatMessage[], message: ChatMessag
   return [message, ...list].slice(0, CHAT_MEMORY);
 }
 
-// MUTED SENDERS (moderation M2): the people whose messages never show on
-// this screen -- the ones I hid in chat (lib/chatHide.ts, this browser) and
-// the ones on my Block List (lib/blocks.ts, the server). A muted sender's
+// MUTED SENDERS (moderation M2/M2c): the people whose messages never show on
+// this screen -- the ones I muted at this table (lib/chatMute.ts, this
+// browser) and the ones on my Block List (lib/blocks.ts, the server). A muted sender's
 // messages are dropped as they arrive, and any already showing go at once.
-export function mutedSenders(hidden: Iterable<string>, blocked: Iterable<string>): Set<string> {
-  return new Set([...hidden, ...blocked]);
+export function mutedSenders(mutedHere: Iterable<string>, blocked: Iterable<string>): Set<string> {
+  return new Set([...mutedHere, ...blocked]);
 }
 
 // The list without any muted sender's messages (the same list when none).

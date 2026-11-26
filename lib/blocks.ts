@@ -114,7 +114,8 @@ export async function writeBlock(nickname: string): Promise<BlockOutcome> {
   }
 }
 
-// THE CHAT CARD'S BLOCK (moderation M2, docs/sql/moderation-m2-part1.sql):
+// THE TABLE'S BLOCK (moderation M2, docs/sql/moderation-m2-part1.sql; since
+// M2c only from "Also block <name>?" after a Mute):
 // the sender's ACCOUNT ID, passed silently (nobody types or sees it), so a
 // blank or look-alike nickname is still the right person. The same outcomes
 // as writeBlock. The Profile page keeps writeBlock (by exact nickname).
@@ -131,9 +132,10 @@ export async function writeBlockById(userId: string): Promise<BlockOutcome> {
   }
 }
 
-// The line a refused chat-card Block shows at the table (null: it worked --
-// blocked, or already on the list). No nickname wording: the card's Block
-// goes by account id.
+// The line a refused table Block ("Also block <name>?" after a Mute,
+// moderation M2c) shows in the table's error line (null: it worked --
+// blocked, or already on the list). No nickname wording: it goes by account
+// id.
 export function chatBlockFailureText(outcome: BlockOutcome): string | null {
   switch (outcome) {
     case "blocked":
@@ -148,11 +150,6 @@ export function chatBlockFailureText(outcome: BlockOutcome): string | null {
     default:
       return BLOCK_FAILED_TEXT;
   }
-}
-
-// The confirm before a chat-card Block (Walt's wording, exactly).
-export function chatBlockConfirmText(name: string): string {
-  return `Block ${name}? They won't be able to join or watch tables you start, and you won't see their chat.`;
 }
 
 export async function writeUnblock(userId: string): Promise<UnblockOutcome> {

@@ -6,7 +6,6 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
-import { ChatHiddenList } from "@/components/brand/ChatHiddenList";
 
 // SETTINGS ("Settings" on the main menu, beside Profile): the player's look
 // and sound -- table surface, card back, Hide counts, animations, sound,
@@ -46,9 +45,7 @@ export default function SettingsPage() {
   }
 
   return (
-    // Under the look and sound: the people hidden in chat on this browser
-    // (moderation M2), with Unhide.
-    <CardRoomFrame title="Settings" after={<ChatHiddenList userId={session.user.id} />}>
+    <CardRoomFrame title="Settings">
       <AppearanceSettings />
     </CardRoomFrame>
   );
