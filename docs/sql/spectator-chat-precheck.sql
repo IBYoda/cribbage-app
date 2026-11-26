@@ -33,9 +33,12 @@
 --               (a re-run is safe).
 --   policies    every policy on realtime.messages (name, command, roles,
 --               using, with check). Expected exactly the two table-chat
---               policies, each calling chat_topic_allows. Policies are OR'ed,
---               so any other policy could let someone hear chat whatever
---               chat_topic_allows says: STOP and look.
+--               policies, each calling chat_topic_allows -- plus, once
+--               moderation M3 part 1 is in, "table kicks: people at the
+--               table receive" (SELECT, kick_topic_allows: kicks: topics
+--               only). Policies are OR'ed, so any other policy could let
+--               someone hear chat whatever chat_topic_allows says: STOP and
+--               look.
 --   spectators  every policy on public.table_spectators (expected ONE:
 --               "Table members and the spectator read spectator rows", for
 --               SELECT), its RLS (on), and its columns (removed_at and
@@ -105,7 +108,13 @@ from (
   select 2, 0, 'policies', 'count on realtime.messages',
          (select count(*)::text from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'),
          case when (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages') = 2
-              then 'expected 2' else 'STOP: expected exactly the two table-chat policies' end
+              then 'expected 2'
+              when (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages') = 3
+                   and exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'
+                                 and p.policyname = 'table kicks: people at the table receive' and p.cmd = 'SELECT')
+                   and to_regprocedure('public.kick_topic_allows(text)') is not null
+              then 'expected 3: the two table-chat policies plus moderation M3''s kicks policy'
+              else 'STOP: expected exactly the two table-chat policies (plus moderation M3''s kicks policy once M3 part 1 is in)' end
 
   union all
   select 2, row_number() over (order by p.policyname)::int, 'policies', p.policyname,

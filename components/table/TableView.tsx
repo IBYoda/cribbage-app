@@ -27,14 +27,18 @@ import {
   soundSeatId,
   spectatorEyeCount,
   spectatorViewerId,
+  REMOVED_TEXT,
   watchHref,
   withoutSpectator,
 } from "@/lib/spectators";
 import { chatBlockFailureText, readMyBlocks, writeBlockById } from "@/lib/blocks";
 import { muteSender, mutedIdsText, subscribeMuted, touchMuted, unmuteSender } from "@/lib/chatMute";
-import { MutedHereLine, PersonPopup, publishPersonModeration, type PersonModeration } from "@/components/table/PersonMenu";
+import { MutedHereLine, PersonPopup, publishPersonModeration, usePersonPopupOpen, type PersonModeration } from "@/components/table/PersonMenu";
 import { AskDialog } from "@/components/brand/AskDialog";
-import { PLAYER_KICK_UNAVAILABLE, blockQuestion, shouldAskToBlock } from "@/lib/personMenu";
+import { blockQuestion, shouldAskToBlock } from "@/lib/personMenu";
+import { isKickRefusal, kickConfirm, kickedNotice, kickNoticeAction, writeKick, type KickNotice } from "@/lib/kicks";
+import { useTableKicks } from "@/components/table/useTableKicks";
+import { setLobbyNotice } from "@/lib/lobbyNotice";
 import { mutedSenders } from "@/lib/tableChat";
 import { JoinChoice } from "@/components/brand/JoinChoice";
 import { readSpectatorReveals, readTableSpectators, type TableSpectator } from "@/lib/spectatorData";
@@ -545,7 +549,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const headerSpectatorCount = allowsSpectators ? spectatorEyeCount(spectatorList) : 0;
   // The spectators list (the eye's dialog) and the host's Remove.
   const [spectatorsDialog, setSpectatorsDialog] = useState<SpectatorsListMode | null>(null);
-  const [removeBusy, setRemoveBusy] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   // HIDE COUNT NUMBERS: the ONE value everything below reads to hide the
   // hand and crib count numbers on this screen (the recap, count flashes, a
@@ -889,10 +892,29 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // nobody, and a by-id miss is not counted as a wrong code): not_found
   // means the table has ended (or its code moved on) -- the generic ended
   // screen, since the reason can't be read. Anything else: nothing to do.
+  //
+  // KICKED (moderation M3): my seat went while the table is still OPEN (or,
+  // at a private table, unreadable): join's preview by id answers the plain
+  // refusal "You can't join this table." only to someone kicked from it (a
+  // seated person is never refused, and a kick deletes the seat) -- so the
+  // screen says "The host removed you from this table." and goes home.
+  const kickedExitRef = useRef(false);
+  const leaveAsKicked = useCallback(() => {
+    if (kickedExitRef.current || leavingRef.current) return;
+    kickedExitRef.current = true;
+    setLobbyNotice(REMOVED_TEXT);
+    router.replace("/");
+  }, [router]);
   const checkTableEndedRef = useRef<(tableId: string) => void>(() => {});
   useEffect(() => {
     checkTableEndedRef.current = (tableId: string) => {
       if (spectating || leavingRef.current) return;
+      const previewById = () =>
+        playerRpc("join_table_by_code", {
+          p_code: code,
+          p_table_id: tableId,
+          p_preview: true,
+        });
       void supabase
         .from("tables")
         .select("status, ended_reason, computer_level")
@@ -900,24 +922,30 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         .maybeSingle()
         .then(async ({ data, error: readError }) => {
           if (!data && !readError) {
-            const { data: previewData, error: previewError } = await playerRpc("join_table_by_code", {
-              p_code: code,
-              p_table_id: tableId,
-              p_preview: true,
-            });
-            if (previewError || leavingRef.current) return;
+            const { data: previewData, error: previewError } = await previewById();
+            if (leavingRef.current) return;
+            if (isKickRefusal(previewError)) {
+              leaveAsKicked();
+              return;
+            }
+            if (previewError) return;
             if (previewFromRow(previewData)?.outcome !== "not_found") return;
             setClosedHumanTable(true);
             setError(TABLE_ENDED_TEXT);
             return;
           }
-          if (!data || data.status === "open" || leavingRef.current) return;
+          if (!data || leavingRef.current) return;
+          if (data.status === "open") {
+            const { error: previewError } = await previewById();
+            if (!leavingRef.current && isKickRefusal(previewError)) leaveAsKicked();
+            return;
+          }
           setClosedComputerTable(Boolean(data.computer_level));
           setClosedHumanTable(!data.computer_level);
           setError(tableEndedMessage(data.ended_reason, data.computer_level));
         });
     };
-  }, [spectating, code, playerRpc]);
+  }, [spectating, code, playerRpc, leaveAsKicked]);
   // Marks one of my RPCs as in flight for its duration (the poll waits).
   const trackAction = useCallback(async <T,>(call: PromiseLike<T>): Promise<T> => {
     actionsInFlightRef.current++;
@@ -3050,43 +3078,128 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     },
     [myUserId, chatTableId]
   );
-  // "Yes, block": the Block List by the person's account id (lib/blocks.ts
-  // writeBlockById), then the list is read again. A refusal (the cap, the
-  // rate limit...) shows in the table's error line. "No, thanks", Escape and
-  // a tap outside just close it: the Mute stays either way.
-  const confirmBlockAsk = useCallback(async () => {
-    const ask = blockAsk;
-    setBlockAsk(null);
-    if (!ask) return;
-    const outcome = await writeBlockById(ask.userId);
-    const failure = chatBlockFailureText(outcome);
-    if (failure) {
-      setChatBlockNote(failure);
-      return;
-    }
-    setBlockedIds((ids) => (ids.includes(ask.userId) ? ids : [...ids, ask.userId]));
-    void reloadBlocks();
-  }, [blockAsk, reloadBlocks]);
-  const declineBlockAsk = useCallback(() => setBlockAsk(null), []);
-  // THE HOST'S KICK from the person popup (moderation M2c). The host only
-  // (never a spectator). A SPECTATOR: the existing Kick (the old Remove) --
-  // its confirm in the spectator list, then remove_spectator
-  // (handleRemoveSpectator), then "Also block?". A PLAYER: not built until
-  // M3 -- the table's error line says so and nothing changes.
-  const popupIsHost = !spectating && !!myUserId && hostId === myUserId;
-  const kickFromPopup = useCallback(
-    (userId: string, name: string) => {
-      if (!popupIsHost) return;
-      const watching = !!spectatorList?.some((s) => s.userId === userId) && !members.some((m) => m.user_id === userId);
-      if (watching) {
-        setRemoveError(null);
-        setSpectatorsDialog({ kind: "confirm", userId, name });
+  // "Yes, block" -- from "Also block <name>?" or the kick notice: the Block
+  // List by the person's account id (lib/blocks.ts writeBlockById), then the
+  // list is read again. A refusal (the cap, the rate limit...) shows in the
+  // table's error line. "No, thanks", Escape and a tap outside just close
+  // the question: a Mute stays either way.
+  const blockFromQuestion = useCallback(
+    async (userId: string) => {
+      const outcome = await writeBlockById(userId);
+      const failure = chatBlockFailureText(outcome);
+      if (failure) {
+        setChatBlockNote(failure);
         return;
       }
-      setChatBlockNote(PLAYER_KICK_UNAVAILABLE);
+      setBlockedIds((ids) => (ids.includes(userId) ? ids : [...ids, userId]));
+      void reloadBlocks();
     },
-    [popupIsHost, spectatorList, members]
+    [reloadBlocks]
   );
+  const confirmBlockAsk = useCallback(() => {
+    const ask = blockAsk;
+    setBlockAsk(null);
+    if (ask) void blockFromQuestion(ask.userId);
+  }, [blockAsk, blockFromQuestion]);
+  const declineBlockAsk = useCallback(() => setBlockAsk(null), []);
+
+  // THE HOST'S KICK (moderation M3). The host only (never a spectator).
+  // Every Kick -- the person popup's, the spectator list's, a spectator's
+  // chat-card eye -- asks the SAME confirm first: "Kick <name>?", plus "This
+  // ends the current game for everyone." when they are a player in a live
+  // game. Then kick_player (lib/kicks.ts writeKick, the only call). A kick
+  // that worked: the person leaves this screen's lists at once (the seat
+  // goes by its realtime delete and the safety poll), and the host is asked
+  // "Also block <name>?" (unless already blocked). A failed one shows the
+  // server's line -- in the spectator list while it is open, otherwise in
+  // the table's error line -- and no question.
+  const popupIsHost = !spectating && !!myUserId && hostId === myUserId;
+  const [kickAsk, setKickAsk] = useState<{ userId: string; name: string; playerInLiveGame: boolean } | null>(null);
+  const askKick = useCallback(
+    (userId: string, name: string) => {
+      if (!popupIsHost) return;
+      const isPlayer = members.some((m) => m.user_id === userId);
+      const gameLive = !!activeGame && LIVE_GAME_STATUSES.includes(activeGame.status);
+      setRemoveError(null);
+      setKickAsk({ userId, name, playerInLiveGame: isPlayer && gameLive });
+    },
+    [popupIsHost, members, activeGame]
+  );
+  const kickBusyRef = useRef(false);
+  const spectatorsOpen = spectatorsDialog !== null;
+  const confirmKick = useCallback(async () => {
+    const ask = kickAsk;
+    setKickAsk(null);
+    if (!ask || !table || !popupIsHost || kickBusyRef.current) return;
+    kickBusyRef.current = true;
+    const result = await writeKick(table.id, ask.userId);
+    kickBusyRef.current = false;
+    if (!result.ok) {
+      if (spectatorsOpen) setRemoveError(result.text);
+      else setChatBlockNote(result.text);
+      return;
+    }
+    setSpectatorList((list) => withoutSpectator(list, ask.userId));
+    void loadSpectators(table.id);
+    if (result.outcome === "kicked" && shouldAskToBlock({ blocked: blockedIds.includes(ask.userId) })) {
+      setBlockAsk({ userId: ask.userId, name: ask.name });
+    }
+  }, [kickAsk, table, popupIsHost, spectatorsOpen, loadSpectators, blockedIds]);
+  const declineKick = useCallback(() => setKickAsk(null), []);
+  const kickAskText = kickAsk ? kickConfirm(kickAsk.name, { playerInLiveGame: kickAsk.playerInLiveGame }) : null;
+
+  // THE KICK NOTICE (moderation M3, components/table/useTableKicks.ts):
+  // while I'm at an open human table (seated or watching -- chat's rule), a
+  // kick there reaches me at once. If it is ME: "The host removed you from
+  // this table." and home (a player through the check above; a spectator
+  // through the watch page's heartbeat, which now answers 'removed'). Anyone
+  // else (lib/kicks.ts kickNoticeAction): not the host, not if I already
+  // block them, each kick once -- "<name> was kicked from the table. Would
+  // you like to add them to your Block list?", queued while another
+  // question or the person popup is open. Never replayed on a reload
+  // (broadcasts aren't stored).
+  const openedAtRef = useRef(0);
+  useEffect(() => {
+    openedAtRef.current = Date.now();
+  }, []);
+  const shownKicksRef = useRef(new Set<string>());
+  const [kickNotices, setKickNotices] = useState<{ userId: string; name: string }[]>([]);
+  const handleKickNotice = useCallback(
+    (notice: KickNotice) => {
+      const action = kickNoticeAction({
+        notice,
+        myUserId,
+        iAmHost: popupIsHost,
+        blocked: blockedIds.includes(notice.kickedId),
+        alreadyShown: shownKicksRef.current.has(notice.kickedId),
+        openedAt: openedAtRef.current,
+      });
+      if (action === "self") {
+        if (spectating) void spectateRef.current?.heartbeat();
+        else if (table) checkTableEndedRef.current(table.id);
+        return;
+      }
+      if (action !== "ask") return;
+      shownKicksRef.current.add(notice.kickedId);
+      setKickNotices((queue) => [...queue, { userId: notice.kickedId, name: notice.nickname }]);
+    },
+    [myUserId, popupIsHost, blockedIds, spectating, table]
+  );
+  useTableKicks({ enabled: chatOn, tableId: table?.id ?? null, onKick: handleKickNotice });
+  const popupOpen = usePersonPopupOpen();
+  // The first queued notice for someone I don't block (yet), shown only
+  // while no other question and no person popup is open.
+  const kickNotice = kickNotices.find((n) => !blockedIds.includes(n.userId)) ?? null;
+  const kickNoticeShown = kickNotice && !blockAsk && !kickAsk && !popupOpen ? kickNotice : null;
+  const kickNoticeText = kickNoticeShown ? kickedNotice(kickNoticeShown.name) : null;
+  const closeKickNotice = useCallback((block: boolean) => {
+    setKickNotices((queue) => {
+      const first = queue.find((n) => !blockedIds.includes(n.userId));
+      if (!first) return queue;
+      if (block) void blockFromQuestion(first.userId);
+      return queue.filter((n) => n !== first);
+    });
+  }, [blockedIds, blockFromQuestion]);
   const blockAskText = blockAsk ? blockQuestion(blockAsk.name) : null;
 
   // THE PERSON MENU's store (components/table/PersonMenu.tsx): who I muted
@@ -3105,9 +3218,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       people: chatRoster,
       mute: muteInChat,
       unmute: unmuteInChat,
-      kick: kickFromPopup,
+      kick: askKick,
     }),
-    [myUserId, table, popupIsHost, mutedSet, blockedSet, chatRoster, muteInChat, unmuteInChat, kickFromPopup]
+    [myUserId, table, popupIsHost, mutedSet, blockedSet, chatRoster, muteInChat, unmuteInChat, askKick]
   );
   useEffect(() => {
     publishPersonModeration(personModeration);
@@ -3343,37 +3456,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // THE HOST: hostId, worked out above (with the person popup's store).
   const isHost = !spectating && hostId === viewerId; // an action flag
   // THE HOST'S KICK of a spectator (spectator chat's Remove, renamed in
-  // moderation M2c): the host only, never a spectator (remove_spectator
-  // checks table_host on the server too).
+  // moderation M2c; kick_player since M3): the host only, never a spectator
+  // (kick_player checks table_host on the server too).
   const hostMayRemove = canRemoveSpectator({ isHost, spectating, targetIsSpectator: true });
   const openSpectators = () => {
     setRemoveError(null);
     setSpectatorsDialog({ kind: "list" });
   };
-  // Kick, confirmed: remove_spectator through playerRpc (refused for a
-  // spectator before anything is sent). On success the spectator leaves the
-  // list on this screen AT ONCE -- and with it the chat roster, so their
-  // messages stop here now -- and the list is read again; everyone else's
-  // screen drops them at its next read (the safety poll). Their own screen
-  // goes home on its next heartbeat ("The host removed you from this
-  // table."). Then (moderation M2c) "Also block <name>?", unless they are
-  // already blocked; a Kick that failed shows its error and no question.
-  async function handleRemoveSpectator(userId: string, name: string) {
-    if (spectating) return; // never a spectator
-    if (!table || !hostMayRemove || removeBusy) return;
-    setRemoveBusy(true);
-    setRemoveError(null);
-    const { error: rpcError } = await playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId });
-    setRemoveBusy(false);
-    if (rpcError) {
-      setRemoveError(rpcError.message);
-      return;
-    }
-    setSpectatorList((list) => withoutSpectator(list, userId));
-    setSpectatorsDialog(null);
-    void loadSpectators(table.id);
-    if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });
-  }
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
   // The waiting room: no game and no result on screen -- or, after a won
@@ -3955,19 +4044,15 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // nothing. "Watching" is a thin row under the header (watching, below).
   const headerRight = (
         <>
-          {/* WHO IS WATCHING: the eye's list, and the host's Remove (a native
-              dialog: above the chat cards, the counts menu and the composer). */}
+          {/* WHO IS WATCHING: the eye's list, and the host's Kick (a native
+              dialog: above the chat cards, the counts menu and the composer).
+              Kick asks the one kick confirm (below). */}
           <SpectatorsList
             mode={spectatorsDialog}
             spectators={spectatorList ?? []}
-            canRemove={hostMayRemove}
-            busy={removeBusy}
+            canKick={hostMayRemove}
             error={removeError}
-            onAskRemove={(userId, name) => {
-              setRemoveError(null);
-              setSpectatorsDialog({ kind: "confirm", userId, name });
-            }}
-            onConfirmRemove={handleRemoveSpectator}
+            onAskKick={askKick}
             onClose={() => {
               setSpectatorsDialog(null);
               setRemoveError(null);
@@ -3977,9 +4062,22 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               from a seat or a chat card's "...", above the cards, the
               composer and the list. */}
           <PersonPopup />
-          {/* "Also block <name>?" after a Mute or a spectator's Kick
-              (moderation M2c): a native dialog opened after the list's and
-              the popup's, so it is above them too. */}
+          {/* THE KICK CONFIRM (moderation M3): "Kick <name>?" (and the
+              game line for a player in a live game), Kick / Cancel. A native
+              dialog opened after the list's and the popup's, so it is above
+              them too; closing it is Cancel. */}
+          <AskDialog
+            open={kickAskText !== null}
+            title={kickAskText?.title ?? ""}
+            body={kickAskText?.body ?? ""}
+            yesLabel={kickAskText?.yesLabel ?? ""}
+            noLabel={kickAskText?.noLabel ?? ""}
+            onYes={() => void confirmKick()}
+            onNo={declineKick}
+          />
+          {/* "Also block <name>?" after a Mute or a successful Kick
+              (moderation M2c/M3): a native dialog opened after the list's
+              and the popup's, so it is above them too. */}
           <AskDialog
             open={blockAskText !== null}
             title={blockAskText?.title ?? ""}
@@ -3988,6 +4086,18 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             noLabel={blockAskText?.noLabel ?? ""}
             onYes={() => void confirmBlockAsk()}
             onNo={declineBlockAsk}
+          />
+          {/* THE KICK NOTICE (moderation M3): "<name> was kicked from the
+              table. Would you like to add them to your Block list?", Yes,
+              block / No, thanks; closing it is No. One at a time. */}
+          <AskDialog
+            open={kickNoticeText !== null}
+            title={kickNoticeText?.title ?? ""}
+            body={kickNoticeText?.body ?? ""}
+            yesLabel={kickNoticeText?.yesLabel ?? ""}
+            noLabel={kickNoticeText?.noLabel ?? ""}
+            onYes={() => closeKickNotice(true)}
+            onNo={() => closeKickNotice(false)}
           />
           {/* CHAT, beside the speaker, the same size. Only while chat is
               available (an open, human table I'm seated at, my channel
@@ -4089,14 +4199,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         own={chat.own}
         onDismissOwn={chat.dismissOwn}
         room={chatRoom}
-        onRemoveSpectator={
-          hostMayRemove
-            ? (userId, name) => {
-                setRemoveError(null);
-                setSpectatorsDialog({ kind: "confirm", userId, name });
-              }
-            : undefined
-        }
+        onRemoveSpectator={hostMayRemove ? askKick : undefined}
       />
       {gameEndedNotice && (
         <div data-table-notice="" className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">

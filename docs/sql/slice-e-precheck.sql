@@ -22,7 +22,8 @@
 --            2) or part 2's 8b4528a51247b63a47b36bd703f81492 (after); and
 --            _follow_user_as / unfollow_user, today's or part 2's.
 --   part1    attempt_log_action_check (5 actions before, 7 after; 8 with
---            block_change once moderation M1 part 1 is in);
+--            block_change once moderation M1 part 1 is in; 9 with kick once
+--            moderation M3 part 1 is in);
 --            profiles.nickname_changed_at; cleanup_attempt_log() (definer,
 --            search_path '', no client EXECUTE); pg_cron and every job --
 --            attempt-log-cleanup absent before, '17 * * * *' active after.
@@ -163,6 +164,12 @@ from (
                        where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check') q)
                 and to_regclass('public.blocks') is not null
              then 'after part 1: plus game_start and follow_change (and moderation M1''s block_change)'
+           when (select d ~ '''game_start''' and d ~ '''follow_change''' and d ~ '''block_change''' and d ~ '''kick'''
+                        and (length(d) - length(replace(d, '::text', ''))) / 6 = 9
+                 from (select pg_get_constraintdef(con.oid) as d from pg_constraint con
+                       where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check') q)
+                and to_regclass('public.blocks') is not null and to_regclass('public.table_kicks') is not null
+             then 'after part 1: plus game_start and follow_change (and moderation M1''s block_change and M3''s kick)'
            else 'STOP: neither the five slice A actions nor those plus game_start and follow_change' end
 
   union all

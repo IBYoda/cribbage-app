@@ -6,6 +6,7 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import { AdminTableRow, type AdminTable } from "@/components/brand/AdminTableRow";
+import { AdminRecentKicks } from "@/components/brand/AdminRecentKicks";
 import { adminTableLabel, seatedNames } from "@/lib/tableListing";
 
 // A game is "live" while it is either cutting for deal or being played. Both
@@ -219,6 +220,9 @@ export default function AdminPage() {
           ))}
         </ul>
       )}
+
+      {/* Moderation M3: who kicked whom, newest first. */}
+      <AdminRecentKicks />
     </CardRoomFrame>
   );
 }

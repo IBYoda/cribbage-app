@@ -209,7 +209,9 @@ from (
          ('USING ' || coalesce(pol.qual, '(none)') || ' | WITH CHECK ' || coalesce(pol.with_check, '(none)'))::text as value,
          (case when pol.policyname in ('table chat: members receive', 'table chat: members send')
                then 'FLAG: table-chat.sql''s policy; one table topic written through an RPC replaces or narrows it'
-               else 'STOP: not a table-chat policy; the chat prechecks expect exactly the two' end)::text as note
+               when pol.policyname = 'table kicks: people at the table receive'
+               then 'moderation M3''s kicks policy (kicks: topics only); the chat suites know it'
+               else 'STOP: not a table-chat or M3 kicks policy; the chat prechecks expect exactly those' end)::text as note
   from pg_policies pol
   where pol.schemaname = 'realtime' and pol.tablename = 'messages'
 
@@ -220,7 +222,11 @@ from (
                                  from pg_class c where c.oid = to_regclass('realtime.messages')), '(no realtime.messages)'),
          case when (select count(*) from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages') = 2
               then 'as the chat prechecks expect (exactly 2)'
-              else 'STOP: the chat prechecks expect exactly the two table-chat policies' end
+              when (select count(*) from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages') = 3
+                   and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
+                                 and pol.policyname = 'table kicks: people at the table receive')
+              then 'as the chat prechecks expect (the two plus moderation M3''s kicks policy)'
+              else 'STOP: the chat prechecks expect exactly the two table-chat policies (plus M3''s kicks policy)' end
 
   union all
   select 1, 2, '', 0, 'realtime', 'realtime.messages: kind / leaf partitions / estimated rows / total size',

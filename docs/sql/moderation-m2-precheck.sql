@@ -113,7 +113,12 @@ known_fns(name) as (
 ),
 flags as (
   select
-    (select count(*) from fp_state s where s.m in (s.lf, s.crlf)) as fp_ok,
+    -- join_table_by_code / watch_table may also be moderation M3 part 2's
+    -- bodies (M1's plus the kick refusal).
+    (select count(*) from fp_state s
+     where s.m in (s.lf, s.crlf)
+        or (s.o = 5 and s.m in ('297fa4f04a02e226691ebf3b5b135f83', 'fbf046f1582863cc5697b06f670481b2'))
+        or (s.o = 6 and s.m in ('bdebb2e1a8213baa2a04666bcad59adb', 'ea5c3bd739b2f7243b985c7ea1fd9f2a'))) as fp_ok,
     (select count(*) from m1_state s where s.m = s.lf) as m1_ok,
     to_regclass('public.blocks') is not null as has_blocks,
     exists (select 1 from pg_constraint con
@@ -142,6 +147,8 @@ from (
          coalesce(s.m, '(missing)'),
          case when s.m = s.lf then 'as expected (LF); M2 does not change it'
               when s.m = s.crlf then 'as expected (CRLF); M2 does not change it'
+              when (s.o = 5 and s.m in ('297fa4f04a02e226691ebf3b5b135f83', 'fbf046f1582863cc5697b06f670481b2')) or (s.o = 6 and s.m in ('bdebb2e1a8213baa2a04666bcad59adb', 'ea5c3bd739b2f7243b985c7ea1fd9f2a'))
+                then 'as expected: moderation M3 part 2''s body (M1''s plus the kick refusal); M2 does not change it'
               else 'STOP: expected ' || s.crlf || ' (CRLF) or ' || s.lf || ' (LF). Capture it first: select pg_get_functiondef(''' || s.sig || '''::regprocedure);' end
   from fp_state s
 

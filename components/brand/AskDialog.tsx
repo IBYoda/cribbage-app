@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
 // A YES/NO QUESTION (moderation M2c): one native <dialog> opened with
@@ -14,6 +14,8 @@ import { createPortal } from "react-dom";
 // (z 66), the composer (z 70) and the spectator list's own dialog (a later
 // showModal stacks on top of an earlier one, and only the top one takes
 // taps). Drawn in a portal to <body>, so no ancestor can hide it.
+//
+// An empty body draws no paragraph (e.g. "Kick <name>?" with no live game).
 //
 // Controlled: the parent says when it is open. Only the yes button calls
 // onYes. The no button, Escape, a tap on the backdrop, and a close the
@@ -38,6 +40,9 @@ export function AskDialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const noRef = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const titleId = `${id}-title`;
+  const bodyId = `${id}-body`;
   // The latest `open`, for the close event: a close the parent asked for is
   // not a no.
   const openRef = useRef(open);
@@ -59,8 +64,8 @@ export function AskDialog({
     <dialog
       ref={ref}
       className="about-dialog"
-      aria-labelledby="ask-dialog-title"
-      aria-describedby="ask-dialog-body"
+      aria-labelledby={titleId}
+      aria-describedby={body ? bodyId : undefined}
       data-ask-dialog=""
       onCancel={(e) => {
         // Escape: no.
@@ -77,10 +82,10 @@ export function AskDialog({
     >
       {open && (
         <div className="flex flex-col gap-3">
-          <h2 id="ask-dialog-title" className="font-display text-2xl font-bold italic">
+          <h2 id={titleId} className="font-display text-2xl font-bold italic">
             {title}
           </h2>
-          <p id="ask-dialog-body">{body}</p>
+          {body && <p id={bodyId}>{body}</p>}
           <div className="mt-2 flex flex-col gap-2">
             <button type="button" onClick={onYes} className="peg-btn peg-btn--brass">
               {yesLabel}

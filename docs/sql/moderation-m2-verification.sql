@@ -37,7 +37,8 @@
 --       service_role); the only function by that name.
 --   K2  unchanged, byte for byte (md5): block_player, unblock_player,
 --       get_my_blocks, _is_blocked_from_table (moderation-m1-part1.sql),
---       join_table_by_code and watch_table (moderation-m1-part2.sql),
+--       join_table_by_code and watch_table (moderation-m1-part2.sql, or
+--       moderation M3 part 2's: M1's plus the kick refusal),
 --       leave_table, end_timed_out_sessions, assign_table_seat, table_host
 --       (fingerprinted), _attempts_guard, spectator_heartbeat,
 --       remove_spectator, chat_topic_allows.
@@ -186,7 +187,12 @@ begin
     ) as t(fn, lf, crlf)
   loop
     select md5(p.prosrc) into v_txt from pg_proc p where p.oid = to_regprocedure(v_rec.fn);
-    if v_txt is null or v_txt not in (v_rec.lf, v_rec.crlf) then
+    -- join_table_by_code / watch_table may also be moderation M3 part 2's
+    -- bodies (M1's plus the kick refusal).
+    if v_txt is null
+       or (v_txt not in (v_rec.lf, v_rec.crlf)
+           and not (v_rec.fn = 'public.join_table_by_code(text, boolean, uuid)' and v_txt in ('297fa4f04a02e226691ebf3b5b135f83', 'fbf046f1582863cc5697b06f670481b2'))
+           and not (v_rec.fn = 'public.watch_table(text, uuid)' and v_txt in ('bdebb2e1a8213baa2a04666bcad59adb', 'ea5c3bd739b2f7243b985c7ea1fd9f2a'))) then
       v_bad := v_bad || v_rec.fn || ' md5 ' || coalesce(v_txt, 'missing') || ' (want ' || v_rec.crlf || ' / ' || v_rec.lf || '); ';
     end if;
   end loop;

@@ -50,8 +50,8 @@ export type PersonModeration = {
   // Mutes at once, then (unless already blocked) asks "Also block <name>?".
   mute: (userId: string, name: string) => void;
   unmute: (userId: string) => void;
-  // The host's Kick: a spectator gets the existing remove path; a player
-  // (until M3) only the "not available yet" line.
+  // The host's Kick (moderation M3): opens the kick confirm, then
+  // kick_player -- a player or a spectator alike.
   kick: (userId: string, name: string) => void;
 };
 
@@ -80,6 +80,12 @@ export function usePersonModeration(): PersonModeration | null {
 
 function useOpenState(): OpenState {
   return useSyncExternalStore(subscribe, () => openState, () => null);
+}
+
+// Whether the popup is open now (TableView holds the kick notice back
+// while it is).
+export function usePersonPopupOpen(): boolean {
+  return useOpenState() !== null;
 }
 
 // Opens the popup for one person (only someone the table offers it for).
