@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Avatar } from "@/components/Avatar";
+import { PersonName, PersonTap } from "@/components/table/PersonMenu";
 import { MugginsTag } from "@/components/MugginsTag";
 import { SpectatorsEye, WatchingRow } from "@/components/SpectatorsTag";
 import { FaceDownCard, FlipCard, PlayingCard } from "@/components/PlayingCard";
@@ -105,7 +106,17 @@ export function SquareTableHeader({
   // laneColor: their board lane's colour, as their avatar's ring. status (4
   // players): their word in the discard and counting ("Picking…",
   // "Discarded", "Counting"), shown when they haven't said Go.
-  opponent: { name: string; avatarUrl: string | null; saidGo: boolean; laneColor?: string; status?: ReactNode; wings?: WingsTier | null } | null;
+  // userId (moderation M2b): a tap on their avatar or name opens the person
+  // menu; without it the header draws exactly as before.
+  opponent: {
+    userId?: string;
+    name: string;
+    avatarUrl: string | null;
+    saidGo: boolean;
+    laneColor?: string;
+    status?: ReactNode;
+    wings?: WingsTier | null;
+  } | null;
   right: ReactNode;
 }) {
   const header = (
@@ -133,22 +144,31 @@ export function SquareTableHeader({
         {opponent && (
           <>
             <span className="shrink-0" data-sq="opp-avatar">
-              <Avatar
-                name={opponent.name}
-                url={opponent.avatarUrl}
-                size="sm"
-                tone="table"
-                ringColor={opponent.laneColor}
-                tier={opponent.wings}
-                wings={placementFor("header-seat")}
-              />
+              <PersonTap userId={opponent.userId ?? ""} name={opponent.name} surface="header">
+                <Avatar
+                  name={opponent.name}
+                  url={opponent.avatarUrl}
+                  size="sm"
+                  tone="table"
+                  ringColor={opponent.laneColor}
+                  tier={opponent.wings}
+                  wings={placementFor("header-seat")}
+                />
+              </PersonTap>
             </span>
             {/* Up to 9rem, then less as the header runs out of room; the
                 full name in the tooltip (and in the text itself, which the
                 ellipsis only hides from view). */}
-            <span className="min-w-0 max-w-[9rem] truncate text-sm font-medium" data-sq="opp-name" title={opponent.name}>
+            <PersonName
+              userId={opponent.userId ?? ""}
+              name={opponent.name}
+              surface="header"
+              className="min-w-0 max-w-[9rem] truncate text-sm font-medium"
+              title={opponent.name}
+              sq="opp-name"
+            >
               {opponent.name}
-            </span>
+            </PersonName>
             {opponent.saidGo ? (
               <span className="shrink-0 text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>
             ) : (

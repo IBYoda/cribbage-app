@@ -50,12 +50,13 @@ import {
 // nothing is read from the message but `text`, which is cleaned
 // (cleanChatText) and throttled per sender; anything else is dropped.
 //
-// MUTED SENDERS (moderation M2): `muted` -- the people I hid in chat plus
+// MUTED SENDERS (moderation M2/M2c): `muted` -- the people I muted at this
+// table plus
 // the people on my Block List (lib/tableChat.ts mutedSenders). Their
 // messages are dropped as they arrive, before anything is stored (so the
 // stack never shows them and the screen reader never reads them); any that
 // arrived before the set changed are filtered out of what the hook returns,
-// and dropSender (the card's Hide / Block) forgets them for good. Their
+// and dropSender (a Mute) forgets them for good. Their
 // channels stay joined: muting changes nothing anyone else sees.
 //
 // MY OWN MESSAGE: once a send is ACKed "ok", `own` holds it for OWN_CARD_MS
@@ -294,8 +295,8 @@ export function useTableChat({
   }, []);
   const closeAll = useCallback(() => setMessages([]), []);
   const dismissOwn = useCallback(() => setOwn(null), []);
-  // Hide / Block from a card (moderation M2): that sender's messages go from
-  // memory at once, so an Unhide later doesn't bring old ones back.
+  // A Mute (moderation M2c): that sender's messages go from memory at once,
+  // so an Unmute later doesn't bring old ones back.
   const dropSender = useCallback((senderId: string) => {
     setMessages((list) => withoutSenders(list, new Set([senderId])));
   }, []);

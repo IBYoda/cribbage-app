@@ -2,6 +2,7 @@ import { FaceDownCard, PlayingCard } from "@/components/PlayingCard";
 import { SMALL_CARD } from "@/components/table/sizes";
 import { Avatar } from "@/components/Avatar";
 import { placementFor, type WingsTier } from "@/lib/wings";
+import { PersonName, PersonTap } from "@/components/table/PersonMenu";
 
 export type OpponentSeat = {
   userId: string;
@@ -60,11 +61,17 @@ export function OpponentBand({ seats, waitingShown = false }: { seats: OpponentS
                 ))}
           </div>
           {/* Avatar and name tag, with "Go" beneath the name -- all inside
-              the strip's 32px, so they cost no height. */}
-          <Avatar name={seat.name} url={seat.avatarUrl} size="sm" tone="table" tier={seat.wings} wings={placementFor("classic-seat")} />
+              the strip's 32px, so they cost no height. A tap on either opens
+              the person menu (moderation M2b: PersonTap / PersonName, which
+              change nothing in the layout). */}
+          <PersonTap userId={seat.userId} name={seat.name} surface="seat">
+            <Avatar name={seat.name} url={seat.avatarUrl} size="sm" tone="table" tier={seat.wings} wings={placementFor("classic-seat")} />
+          </PersonTap>
           <div className="flex min-w-0 flex-col pt-0.5 leading-none">
             <p className="flex items-center gap-1 truncate text-xs font-medium">
-              <span className="truncate">{seat.name}</span>
+              <PersonName userId={seat.userId} name={seat.name} surface="seat" className="truncate">
+                {seat.name}
+              </PersonName>
               {seat.isDealer && <DealerChip />}
             </p>
             {seat.saidGo && (
@@ -86,8 +93,12 @@ export function SideSeat({ seat, side }: { seat: OpponentSeat; side: "left" | "r
   const cards: (string | null)[] = seat.shownCards ?? Array.from({ length: seat.cardCount }, () => null);
   return (
     <div className={`side-seat side-seat--${side}`} aria-label={`${seat.name}'s seat`}>
-      <Avatar name={seat.name} url={seat.avatarUrl} size="xs" tone="table" tier={seat.wings} wings={placementFor("classic-side")} />
-      <p className="side-seat__name">{seat.name}</p>
+      <PersonTap userId={seat.userId} name={seat.name} surface="side">
+        <Avatar name={seat.name} url={seat.avatarUrl} size="xs" tone="table" tier={seat.wings} wings={placementFor("classic-side")} />
+      </PersonTap>
+      <PersonName userId={seat.userId} name={seat.name} surface="side" as="p" className="side-seat__name">
+        {seat.name}
+      </PersonName>
       {seat.isDealer && <DealerChip />}
       {seat.saidGo && (
         <span className="text-xs font-semibold text-amber-600 dark:text-amber-500 surface:text-amber-200">Go</span>

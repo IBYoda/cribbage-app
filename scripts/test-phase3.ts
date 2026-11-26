@@ -397,21 +397,33 @@ import {
   blockErrorOutcome,
   blockMessage,
   blockedPlayersFromRows,
-  chatBlockConfirmText,
   chatBlockFailureText,
   unblockMessage,
 } from "../lib/blocks";
 import {
-  CHAT_HIDDEN_LIMIT,
-  chatHiddenKey,
-  hideSender,
-  parseHidden,
-  rawHidden,
-  readHidden,
-  unhideSender,
-  withHidden,
-  withoutHidden,
-} from "../lib/chatHide";
+  blockQuestion,
+  canOfferPersonMenu,
+  mutedAtTable,
+  mutedMark,
+  mutedMarkText,
+  PLAYER_KICK_UNAVAILABLE,
+  personPopupButtons,
+  shouldAskToBlock,
+} from "../lib/personMenu";
+import {
+  CHAT_MUTE_KEEP_MS,
+  CHAT_MUTE_LIMIT,
+  chatMutedKey,
+  muteSender,
+  mutedIdsText,
+  parseMuted,
+  readMutedIds,
+  staleMuteKeys,
+  touchMuted,
+  unmuteSender,
+  withMuted,
+  withoutMuted,
+} from "../lib/chatMute";
 import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
 import { scoreHand } from "../lib/scoring";
 import {
@@ -1987,7 +1999,7 @@ check("Spectator chat: a spectator who leaves the list is dropped; the host's cl
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(/if \(rpcError\) \{\s*setRemoveError\(rpcError\.message\);\s*return;\s*\}\s*setSpectatorList\(\(list\) => withoutSpectator\(list, userId\)\);/.test(view), true);
 });
-check("Spectator chat: Remove is the host's only -- the list's rows and the chat card's eye", () => {
+check("Spectator chat: Kick (the old Remove) is the host's only -- the list's rows and the chat card's eye", () => {
   strictEqual(canRemoveSpectator({ isHost: true, spectating: false, targetIsSpectator: true }), true);
   strictEqual(canRemoveSpectator({ isHost: false, spectating: false, targetIsSpectator: true }), false, "a player who isn't the host");
   strictEqual(canRemoveSpectator({ isHost: true, spectating: true, targetIsSpectator: true }), false, "never a spectator");
@@ -1998,7 +2010,7 @@ check("Spectator chat: Remove is the host's only -- the list's rows and the chat
   strictEqual(/onRemoveSpectator=\{\s*hostMayRemove\s*\?/.test(view), true);
   // Through playerRpc (refused for a spectator before anything is sent), guarded twice.
   strictEqual(view.includes('playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId })'), true);
-  strictEqual(/async function handleRemoveSpectator\(userId: string\) \{\s*if \(spectating\) return;[^\n]*\n\s*if \(!table \|\| !hostMayRemove \|\| removeBusy\) return;/.test(view), true);
+  strictEqual(/async function handleRemoveSpectator\(userId: string, name: string\) \{\s*if \(spectating\) return;[^\n]*\n\s*if \(!table \|\| !hostMayRemove \|\| removeBusy\) return;/.test(view), true);
   // The card: the eye is a button only when the host's handler is passed; a 44px layer; the confirm is a native dialog.
   const ui = readFileSync("components/table/TableChat.tsx", "utf8");
   strictEqual(ui.includes("onRemove={m.spectator && onRemoveSpectator ? () => onRemoveSpectator(m.senderId, m.name) : undefined}"), true);
@@ -2007,7 +2019,7 @@ check("Spectator chat: Remove is the host's only -- the list's rows and the chat
   strictEqual(list.includes("d.showModal()"), true, "the top layer: above the chat portal (55), counts (62), composer (70)");
   strictEqual(list.includes("{canRemove && ("), true);
   strictEqual(list.includes("{SPECTATOR_REMOVE_CONFIRM}"), true);
-  strictEqual(/\.spectators-remove \{[^}]*min-height: 44px;[^}]*border-radius: 12px;/.test(readFileSync("app/globals.css", "utf8")), true);
+  strictEqual(/\.person-btn \{[^}]*min-height: 44px;[^}]*border-radius: 12px;/.test(readFileSync("app/globals.css", "utf8")), true);
   // The removed spectator goes home with the message (the heartbeat), the only forced exit home.
   deepStrictEqual(heartbeatStep("removed"), { kind: "home", text: REMOVED_TEXT });
   strictEqual(REMOVED_TEXT, "The host removed you from this table.");
@@ -6299,21 +6311,33 @@ check("block list: the SQL keeps every client out of the table and the helper", 
   }
 });
 
-// ---- Hide and block in chat (moderation M2) -------------------------------
+// ---- Mute and block in chat (moderation M2, redesigned in M2c) ------------
 // A tiny in-memory localStorage for the storage helpers (restored after).
 function withFakeStorage(store: Map<string, string> | "broken", fn: () => void) {
   const before = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const fail = (): never => {
+    throw new Error("blocked");
+  };
   const fake =
     store === "broken"
       ? {
-          getItem: () => {
-            throw new Error("blocked");
-          },
-          setItem: () => {
-            throw new Error("blocked");
+          getItem: fail,
+          setItem: fail,
+          removeItem: fail,
+          key: fail,
+          get length(): number {
+            return fail();
           },
         }
-      : { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+      : {
+          getItem: (k: string) => store.get(k) ?? null,
+          setItem: (k: string, v: string) => void store.set(k, v),
+          removeItem: (k: string) => void store.delete(k),
+          key: (i: number) => [...store.keys()][i] ?? null,
+          get length() {
+            return store.size;
+          },
+        };
   Object.defineProperty(globalThis, "localStorage", { value: fake, configurable: true, writable: true });
   try {
     fn();
@@ -6322,54 +6346,100 @@ function withFakeStorage(store: Map<string, string> | "broken", fn: () => void) 
     else delete (globalThis as { localStorage?: unknown }).localStorage;
   }
 }
-check("chat hide: a per-player key, and a stored value always reads as a clean list", () => {
-  strictEqual(chatHiddenKey("u1"), "nobs:chat-hidden:v1:u1");
-  for (const raw of [null, undefined, "", "x", "{}", "null", "[1,2]"]) deepStrictEqual(parseHidden(raw), [], String(raw));
-  deepStrictEqual(
-    parseHidden(JSON.stringify([
-      { userId: "a", name: "Ann", hiddenAt: 1 },
-      { userId: "b", name: "Bo", hiddenAt: 5 },
-      { userId: "a", name: "Ann again", hiddenAt: 9 },
-      { name: "no id" },
-      { userId: "c", hiddenAt: "soon" },
-    ])),
-    [
-      { userId: "b", name: "Bo", hiddenAt: 5 },
-      { userId: "a", name: "Ann", hiddenAt: 1 },
-      { userId: "c", name: "", hiddenAt: 0 },
-    ]
-  );
-  const list = withHidden(withHidden([], { userId: "a", name: "Ann", hiddenAt: 1 }), { userId: "a", name: "Ann", hiddenAt: 2 });
-  deepStrictEqual(list, [{ userId: "a", name: "Ann", hiddenAt: 2 }], "hiding twice keeps one entry");
-  deepStrictEqual(withoutHidden(list, "a"), []);
-  let many: ReturnType<typeof parseHidden> = [];
-  for (let i = 0; i < CHAT_HIDDEN_LIMIT + 5; i++) many = withHidden(many, { userId: `u${i}`, name: "", hiddenAt: i });
-  strictEqual(many.length, CHAT_HIDDEN_LIMIT);
-  strictEqual(many[0].userId, `u${CHAT_HIDDEN_LIMIT + 4}`, "newest kept");
+check("chat mute: a per-player, per-table key; a stored value always reads as a clean entry", () => {
+  strictEqual(chatMutedKey("u1", "t1"), "nobs:chat-muted:v1:u1:t1");
+  for (const raw of [null, undefined, "", "x", "[]", "null", '{"ids":[1,2]}']) deepStrictEqual(parseMuted(raw).ids, [], String(raw));
+  deepStrictEqual(parseMuted(JSON.stringify({ seenAt: 7, ids: ["a", "b", "a", "", 3] })), { seenAt: 7, ids: ["a", "b"] });
+  strictEqual(parseMuted(JSON.stringify({ ids: ["a"] })).seenAt, 0, "no seenAt: pruned soon");
+  const one = withMuted(withMuted({ seenAt: 0, ids: [] }, "a", 1), "a", 2);
+  deepStrictEqual(one, { seenAt: 2, ids: ["a"] }, "muting twice keeps one");
+  deepStrictEqual(withoutMuted(one, "a", 3), { seenAt: 3, ids: [] });
+  let many = { seenAt: 0, ids: [] as string[] };
+  for (let i = 0; i < CHAT_MUTE_LIMIT + 5; i++) many = withMuted(many, `u${i}`, i);
+  strictEqual(many.ids.length, CHAT_MUTE_LIMIT);
 });
-check("chat hide: stored per signed-in player on this browser; broken storage is just an empty list", () => {
+check("chat mute: lasts the table on this browser, never carries to another table; broken storage is nobody muted", () => {
   const store = new Map<string, string>();
   withFakeStorage(store, () => {
-    hideSender("me", { userId: "a", name: "Ann" }, 1);
-    hideSender("me", { userId: "b", name: "Bo" }, 2);
-    hideSender("me", { userId: "a", name: "Ann" }, 3);
-    hideSender("me", { userId: "me", name: "Myself" }, 4); // never yourself
-    hideSender("other", { userId: "a", name: "Ann" }, 5);
-    deepStrictEqual(readHidden("me").map((p) => p.userId), ["a", "b"]);
-    deepStrictEqual(readHidden("other").map((p) => p.userId), ["a"]);
-    unhideSender("me", "a");
-    deepStrictEqual(readHidden("me").map((p) => p.userId), ["b"]);
-    strictEqual(rawHidden("me"), store.get("nobs:chat-hidden:v1:me"));
-    strictEqual(rawHidden("nobody"), "");
+    muteSender("me", "t1", "a", 1);
+    muteSender("me", "t1", "b", 2);
+    muteSender("me", "t1", "a", 3);
+    muteSender("me", "t1", "me", 4); // never yourself
+    muteSender("other", "t1", "c", 5); // another account on this browser
+    deepStrictEqual(readMutedIds("me", "t1"), ["a", "b"]);
+    deepStrictEqual(readMutedIds("me", "t2"), [], "another table starts clean");
+    deepStrictEqual(readMutedIds("other", "t1"), ["c"]);
+    strictEqual(mutedIdsText("me", "t1"), "a,b");
+    unmuteSender("me", "t1", "a", 6);
+    deepStrictEqual(readMutedIds("me", "t1"), ["b"]);
+    unmuteSender("me", "t1", "b", 7);
+    strictEqual(store.has("nobs:chat-muted:v1:me:t1"), false, "an empty list leaves no key");
+    strictEqual(mutedIdsText("nobody", "t1"), "");
   });
   withFakeStorage("broken", () => {
-    deepStrictEqual(readHidden("me"), []);
-    strictEqual(rawHidden("me"), "");
-    hideSender("me", { userId: "a", name: "Ann" }); // no throw
-    unhideSender("me", "a");
+    deepStrictEqual(readMutedIds("me", "t1"), []);
+    strictEqual(mutedIdsText("me", "t1"), "");
+    muteSender("me", "t1", "a"); // no throw
+    unmuteSender("me", "t1", "a");
+    touchMuted("me", "t1");
   });
 });
-check("chat: muted senders (hidden + blocked) are filtered; nothing muted leaves the list as it is", () => {
+check("chat mute: tables not seen in 24 hours are pruned, the seen table is kept, the old hide list is deleted", () => {
+  strictEqual(CHAT_MUTE_KEEP_MS, 24 * 60 * 60 * 1000);
+  const now = 10 * CHAT_MUTE_KEEP_MS;
+  const entry = (seenAt: number) => JSON.stringify({ seenAt, ids: ["a"] });
+  deepStrictEqual(
+    staleMuteKeys(
+      [
+        { key: "nobs:chat-muted:v1:me:fresh", raw: entry(now - CHAT_MUTE_KEEP_MS) },
+        { key: "nobs:chat-muted:v1:me:old", raw: entry(now - CHAT_MUTE_KEEP_MS - 1) },
+        { key: "nobs:chat-muted:v1:me:empty", raw: JSON.stringify({ seenAt: now, ids: [] }) },
+        { key: "nobs:chat-muted:v1:me:junk", raw: "x" },
+        { key: "nobs:chat-hidden:v1:me", raw: "[]" },
+        { key: "nobs:appearance", raw: "x" },
+      ],
+      now
+    ),
+    ["nobs:chat-muted:v1:me:old", "nobs:chat-muted:v1:me:empty", "nobs:chat-muted:v1:me:junk", "nobs:chat-hidden:v1:me"]
+  );
+  const store = new Map<string, string>([
+    ["nobs:chat-muted:v1:me:t1", entry(1)],
+    ["nobs:chat-muted:v1:me:t2", entry(1)],
+    ["nobs:chat-muted:v1:other:t3", entry(now - 1000)],
+    ["nobs:chat-hidden:v1:me", JSON.stringify([{ userId: "a", name: "Ann", hiddenAt: 1 }])],
+    ["nobs:something-else", "keep"],
+  ]);
+  withFakeStorage(store, () => touchMuted("me", "t1", now));
+  deepStrictEqual([...store.keys()].sort(), ["nobs:chat-muted:v1:me:t1", "nobs:chat-muted:v1:other:t3", "nobs:something-else"]);
+  strictEqual(JSON.parse(store.get("nobs:chat-muted:v1:me:t1") ?? "{}").seenAt, now, "opening the table refreshes it");
+  withFakeStorage(store, () => touchMuted("me", "t9", now));
+  strictEqual(store.has("nobs:chat-muted:v1:me:t9"), false, "opening a table never creates an entry");
+  // The page touches (and so prunes) whenever a table opens.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("if (myUserId && chatTableId) touchMuted(myUserId, chatTableId);"), true);
+});
+check("old hide list: the Settings panel, its component, lib/chatHide.ts and every reader of its key are gone", () => {
+  strictEqual(existsSync("components/brand/ChatHiddenList.tsx"), false);
+  strictEqual(existsSync("lib/chatHide.ts"), false);
+  const page = readFileSync("app/settings/page.tsx", "utf8");
+  strictEqual(/ChatHiddenList|Hidden in chat|after=/.test(page), false);
+  strictEqual(page.includes('<CardRoomFrame title="Settings">'), true);
+  const walk = (d: string): string[] =>
+    readdirSync(d).flatMap((f) => {
+      const p = `${d}/${f}`;
+      return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(f) ? [p] : [];
+    });
+  for (const dir of ["app", "components", "lib"]) {
+    for (const f of walk(dir)) {
+      const src = readFileSync(f, "utf8");
+      if (f !== "lib/chatMute.ts") strictEqual(src.includes("chat-hidden"), false, f);
+      strictEqual(/lib\/chatHide|hideSender|unhideSender|ChatHiddenList|HiddenHereLine|hiddenAtTable/.test(src), false, f);
+    }
+  }
+  // The only mention left: lib/chatMute.ts, which deletes the old key.
+  strictEqual(readFileSync("lib/chatMute.ts", "utf8").includes('export const OLD_CHAT_HIDDEN_PREFIX = "nobs:chat-hidden:v1:";'), true);
+});
+check("chat: muted senders (muted here + blocked) are filtered; nothing muted leaves the list as it is", () => {
   const msg = (id: string, senderId: string) => ({ id, senderId, name: senderId, avatarUrl: null, text: "hi", at: 0 });
   const list = [msg("1", "a"), msg("2", "b"), msg("3", "a")];
   const muted = mutedSenders(["a"], ["c"]);
@@ -6378,80 +6448,297 @@ check("chat: muted senders (hidden + blocked) are filtered; nothing muted leaves
   strictEqual(withoutSenders(list, new Set()), list);
   strictEqual(withoutSenders(list, new Set(["z"])), list);
   // The hook: dropped on arrival before anything is stored, filtered from
-  // what shows, and forgotten for good by a card's Hide / Block.
+  // what shows, and forgotten for good by a Mute.
   const hook = readFileSync("components/table/useTableChat.ts", "utf8");
   const drop = hook.indexOf("if (mutedRef.current.has(senderId)) return;");
   strictEqual(drop > 0 && drop < hook.indexOf("addChatMessage(list, {"), true);
   strictEqual(hook.includes("const shown = useMemo(() => withoutSenders(messages, muted), [messages, muted]);"), true);
   strictEqual(hook.includes("return { messages: shown,"), true);
   strictEqual(hook.includes("const dropSender = useCallback("), true);
-  // The page passes the muted set, from the hide list and the Block List.
+  // The page passes the muted set, from this table's mute list and the Block List.
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(view.includes("const chatMuted = useMemo(() => mutedSenders(hiddenIds, blockedIds), [hiddenIds, blockedIds]);"), true);
+  strictEqual(view.includes("const chatMuted = useMemo(() => mutedSenders(mutedIds, blockedIds), [mutedIds, blockedIds]);"), true);
   strictEqual(view.includes("    muted: chatMuted,\n  });"), true);
+  strictEqual(view.includes('() => (myUserId && chatTableId ? mutedIdsText(myUserId, chatTableId) : ""),'), true);
   // The Block List is re-read on open (chat on), after a Block, and on tab focus.
   strictEqual(/useEffect\(\(\) => \{\s*if \(!chatOn\) return;[\s\S]{0,300}readMyBlocks\(\)[\s\S]{0,400}addEventListener\("focus", onVisible\);\s*document\.addEventListener\("visibilitychange", onVisible\);/.test(view), true);
 });
-check("chat card menu: a visible ... on other people's cards only, with Hide and Block, laid over the stack", () => {
+check("chat card: a visible ... on other people's cards only, opening the person popup (no dropdown)", () => {
   const ui = readFileSync("components/table/TableChat.tsx", "utf8");
   const card = ui.slice(ui.indexOf("function ChatCard("), ui.indexOf("export function ChatAnnouncer"));
-  strictEqual(card.includes("const showMenu = !own && menu;"), true, "never on my own card");
+  strictEqual(card.includes("const showMore = own ? undefined : onMore;"), true, "never on my own card");
+  strictEqual(card.includes("onClick={showMore}"), true);
   strictEqual(card.includes("aria-label={`More for ${m.name}`}"), true);
-  strictEqual(card.includes('aria-haspopup="menu"'), true);
+  strictEqual(card.includes('aria-haspopup="dialog"'), true);
   strictEqual(card.includes("h-11 w-9"), true, "as tall as the x: the card's height doesn't change");
-  strictEqual(card.includes("Hide {m.name}"), true);
-  strictEqual(card.includes("Block {m.name}"), true);
-  strictEqual(/role="menu"[\s\S]{0,120}className="absolute /.test(card), true, "the menu is absolute: no height added");
+  strictEqual(/role="menu"|PersonMenuItems|data-chat-menu=/.test(card), false, "no dropdown on the card");
   strictEqual(/Report/.test(card.replace(/\{\/\*[\s\S]*?\*\/\}/g, "")), false, "no Report yet");
-  // My own card gets no menu; the others get it only when the page gives both actions.
   const stack = ui.slice(ui.indexOf("export function ChatStack"), ui.indexOf("function ChatCard("));
   const ownBlock = stack.slice(stack.indexOf("{own && ("), stack.indexOf("{candidates.map("));
-  strictEqual(ownBlock.includes("menu="), false);
-  strictEqual(stack.includes("onHide && onBlock"), true);
-  // Escape, a tap outside (capture phase), and picking an action close it.
-  strictEqual(stack.includes('if (e.key === "Escape") setMenuFor(null);'), true);
-  strictEqual(stack.includes('document.addEventListener("pointerdown", onDown, true);'), true);
-  strictEqual((stack.match(/setMenuFor\(null\);\s*on(Hide|Block)\(m\.senderId, m\.name\);/g) ?? []).length, 2);
-  // The host's eye/Remove and the close button are untouched.
+  strictEqual(ownBlock.includes("onMore="), false);
+  strictEqual(stack.includes("canOfferPersonMenu({ userId: m.senderId, myUserId: moderation.myUserId, enabled: moderation.enabled })"), true);
+  strictEqual(stack.includes("? () => openPersonPopup(m.senderId, m.name)"), true);
+  strictEqual(/menuFor|setMenuFor/.test(ui), false, "the dropdown's state is gone");
+  // The host's eye on a spectator's card: now Kick (the same confirm as the list).
   strictEqual(card.includes('data-chat-eye="remove"'), true);
-  strictEqual(card.includes("aria-label={own ? \"Close your message\" : `Close message from ${m.name}`}"), true);
-  // The component only draws: it calls nothing on the server itself.
-  strictEqual(/lib\/blocks|lib\/chatHide|supabase/.test(ui), false);
+  strictEqual(card.includes("aria-label={`Kick ${m.name}`}") && card.includes('title="Kick"'), true);
+  strictEqual(/Remove \$\{m\.name\}|Remove from watching/.test(card), false);
+  strictEqual(card.includes('aria-label={own ? "Close your message" : `Close message from ${m.name}`}'), true);
+  strictEqual(/lib\/blocks|lib\/chatMute|supabase/.test(ui), false);
 });
-check("chat Block: Walt's confirm first, then the Block List by account id only; Hide never asks", () => {
-  strictEqual(chatBlockConfirmText("Elsa"), "Block Elsa? They won't be able to join or watch tables you start, and you won't see their chat.");
+// ---- The person popup at the table (moderation M2b, redesigned in M2c) ----
+check("person popup: Mute or Unmute for everyone, Kick for the host only; no Hide, Block or Unblock; the quiet mark", () => {
+  deepStrictEqual(personPopupButtons({ muted: false, isHost: false }), [{ action: "mute", label: "Mute" }]);
+  deepStrictEqual(personPopupButtons({ muted: true, isHost: false }), [{ action: "unmute", label: "Unmute" }]);
+  deepStrictEqual(personPopupButtons({ muted: false, isHost: true }), [
+    { action: "mute", label: "Mute" },
+    { action: "kick", label: "Kick" },
+  ]);
+  deepStrictEqual(personPopupButtons({ muted: true, isHost: true }).map((b) => b.label), ["Unmute", "Kick"]);
+  strictEqual(PLAYER_KICK_UNAVAILABLE, "Kicking players isn't available yet.");
+  strictEqual(mutedMark({ muted: false, blocked: false }), null);
+  strictEqual(mutedMark({ muted: true, blocked: false }), "muted");
+  strictEqual(mutedMark({ muted: true, blocked: true }), "blocked", "blocked wins");
+  strictEqual(mutedMark({ muted: false, blocked: true }), "blocked", "a blocked person stays muted");
+  strictEqual(mutedMarkText("muted"), " (muted in chat)");
+  strictEqual(mutedMarkText("blocked"), " (blocked)");
+  strictEqual(mutedMarkText(null), "");
+  // No Hide / Block / Unblock button anywhere at the table (code only).
+  const code = (f: string) =>
+    readFileSync(f, "utf8")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  for (const f of ["lib/personMenu.ts", "components/table/PersonMenu.tsx", "components/table/TableChat.tsx", "components/table/SpectatorsList.tsx"]) {
+    strictEqual(/`(Hide|Unhide|Block|Unblock) \$\{|"(hide|unhide|block|unblock)"|Hidden:|>\s*(Block|Unblock|Remove)\s*</.test(code(f)), false, f);
+  }
+  // The popup: avatar and name, then the buttons, then Close -- in that order.
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  const popup = menu.slice(menu.indexOf("export function PersonPopup"), menu.indexOf("export function MutedBadge"));
+  const order = ['<Avatar name={person.name} url={avatarUrl} size="lg" />', '<h2 id="person-popup-name"', "personPopupButtons({ muted: mod.muted.has(person.userId), isHost: mod.isHost })", ">\n            Close\n"].map((s) => popup.indexOf(s));
+  strictEqual(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1])), true, "avatar, name, buttons, Close");
+  strictEqual(popup.includes('className="person-btn person-btn--large flex-1"'), true, "large gold-outlined buttons, side by side");
+  strictEqual(popup.includes('className="about-dialog person-popup"'), true, "the spectator list's panel");
+  strictEqual(popup.includes('className="join-choice__cancel"'), true, "Close is the list's text link");
+  // Picking a button closes the popup first, then acts.
+  strictEqual(/closePersonPopup\(\);\s*if \(b\.action === "mute"\) mod\.mute\(person\.userId, person\.name\);\s*else if \(b\.action === "unmute"\) mod\.unmute\(person\.userId\);\s*else mod\.kick\(person\.userId, person\.name\);/.test(popup), true);
+  // Escape, Close and a tap outside close it; a native modal dialog (the top layer).
+  strictEqual(popup.includes("d.showModal();"), true);
+  strictEqual(/onCancel=\{\(e\) => \{[\s\S]{0,60}e\.preventDefault\(\);\s*closePersonPopup\(\);/.test(popup), true);
+  strictEqual(popup.includes("if (e.target === ref.current) closePersonPopup();"), true);
+  strictEqual(popup.includes("onClick={closePersonPopup}"), true);
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/\.person-btn \{[^}]*min-height: 44px;[^}]*border: 2px solid var\(--brass\);[^}]*border-radius: 12px;/.test(css), true);
+  strictEqual(css.includes(".person-badge--muted {") && css.includes(".person-badge--blocked {"), true);
+  strictEqual(/\.person-badge--hidden|\.spectators-remove/.test(css), false);
+});
+check("person popup: the dropdown is gone -- no placement helpers, no menu items, no inline row menu", () => {
+  const lib = readFileSync("lib/personMenu.ts", "utf8");
+  strictEqual(/personMenuPlace|PERSON_MENU_WIDTH|personMenuItems|menuHeight/.test(lib), false);
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  strictEqual(/PersonMenuButton|PersonMenuItems|OpenMenu|toggleMenu|zIndex: 66|role="menu"|document\.addEventListener/.test(menu), false);
+  for (const f of ["components/table/TableChat.tsx", "components/table/SpectatorsList.tsx", "components/table/TableView.tsx"]) {
+    strictEqual(/PersonMenuButton|PersonMenuItems|personMenuPlace/.test(readFileSync(f, "utf8")), false, f);
+  }
+});
+check("person popup: never for my own seat, row or card, at a computer table, or without a person", () => {
+  strictEqual(canOfferPersonMenu({ userId: "a", myUserId: "me", enabled: true }), true);
+  strictEqual(canOfferPersonMenu({ userId: "me", myUserId: "me", enabled: true }), false, "my own plate / row / card");
+  strictEqual(canOfferPersonMenu({ userId: "a", myUserId: "me", enabled: false }), false, "a computer table (and so a computer opponent)");
+  strictEqual(canOfferPersonMenu({ userId: "", myUserId: "me", enabled: true }), false, "a Teams plate's shared name line");
+  strictEqual(canOfferPersonMenu({ userId: "a", myUserId: null, enabled: true }), false, "signed out");
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("enabled: !!myUserId && !!table && !table.computer_level,"), true);
+  strictEqual(view.includes("publishPersonModeration(personModeration);"), true);
+  strictEqual(view.includes("useEffect(() => () => publishPersonModeration(null), []);"), true);
+  // Kick: the host only, never a spectator, never anyone else.
+  strictEqual(view.includes("const popupIsHost = !spectating && !!myUserId && hostId === myUserId;"), true);
+  strictEqual(view.includes("isHost: popupIsHost,"), true);
+  strictEqual(view.indexOf("const hostId =") < view.indexOf("const popupIsHost"), true);
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  // Every opener draws its children unchanged (or nothing) when it can't offer the popup.
+  strictEqual((menu.match(/if \(!mod \|\| !canOfferPersonMenu\(\{ userId, myUserId: mod\.myUserId, enabled: mod\.enabled \}\)\)/g) ?? []).length, 3, "the avatar, the name, the list's Mute");
+  strictEqual(menu.includes("return <>{children}</>;"), true);
+  strictEqual(menu.includes("if (!moderation || !canOfferPersonMenu({ userId, myUserId: moderation.myUserId, enabled: moderation.enabled })) return;"), true, "openPersonPopup refuses too");
+});
+check("person popup: every seat's avatar and name opens it -- plates, top and side seats, square header and tags", () => {
+  const band = readFileSync("components/table/OpponentBand.tsx", "utf8");
+  strictEqual(band.includes('<PersonTap userId={seat.userId} name={seat.name} surface="seat">'), true);
+  strictEqual(band.includes('<PersonName userId={seat.userId} name={seat.name} surface="seat" className="truncate">'), true);
+  strictEqual(band.includes('<PersonTap userId={seat.userId} name={seat.name} surface="side">'), true);
+  strictEqual(band.includes('as="p" className="side-seat__name"'), true, "the side seat's name stays a block <p>");
+  const plates = readFileSync("components/table/ScoreStrip.tsx", "utf8");
+  strictEqual(plates.includes('<PersonTap key={m.userId} userId={m.userId} name={m.name} surface="plate">'), true);
+  strictEqual(plates.includes('userId={plate.members.length === 1 ? plate.members[0].userId : ""}'), true);
+  const ring = readFileSync("components/table/SquareRing.tsx", "utf8");
+  strictEqual(ring.includes('<PersonTap userId={seat.userId} name={seat.name} surface="tag">'), true);
+  strictEqual(ring.includes('<PersonName userId={seat.userId} name={seat.name} surface="tag"'), true);
+  const square = readFileSync("components/table/SquareTable.tsx", "utf8");
+  strictEqual(square.includes('<PersonTap userId={opponent.userId ?? ""} name={opponent.name} surface="header">'), true);
+  strictEqual(square.includes('sq="opp-name"'), true, "the name keeps its data-sq");
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual((view.match(/userId: squareOpponent\.user_id,\n\s*name: oppName,/g) ?? []).length, 2);
+  strictEqual(view.includes("header: {\n            userId: top.userId,"), true);
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/\.person-tap \{\s*position: relative;\s*display: inline-flex;\s*flex-shrink: 0;\s*\}/.test(css), true);
+  strictEqual(/\.person-tap__hit \{\s*position: absolute;[\s\S]{0,80}width: 44px;\s*height: 44px;/.test(css), true);
+  strictEqual(/\.person-badge \{\s*position: absolute;[\s\S]*?pointer-events: none;/.test(css), true);
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  strictEqual((menu.match(/onClick=\{\(\) => openPersonPopup\(userId, name\)\}/g) ?? []).length, 2, "the avatar and the name");
+  strictEqual(menu.includes('aria-haspopup="dialog"'), true);
+  // The one popup is drawn by TableView, beside the spectator list.
+  strictEqual((view.match(/<PersonPopup \/>/g) ?? []).length, 1);
+  strictEqual(view.indexOf("<SpectatorsList") < view.indexOf("<PersonPopup />") && view.indexOf("<PersonPopup />") < view.indexOf("<AskDialog"), true);
+});
+check("eye list: each other person's row has [Mute/Unmute]; the host's also [Kick], replacing Remove", () => {
+  const list = readFileSync("components/table/SpectatorsList.tsx", "utf8");
+  const row = list.slice(list.indexOf("{spectators.map((s) => ("), list.indexOf("</ul>"));
+  strictEqual(row.includes("<PersonMuteButton userId={s.userId} name={nameOf(s)} />"), true);
+  strictEqual(row.indexOf("<PersonMuteButton") > row.indexOf("{nameOf(s)}</span>"), true, "after the name");
+  strictEqual(row.indexOf("<PersonMuteButton") < row.indexOf("{canRemove && ("), true, "Mute, then the host's Kick");
+  strictEqual(/\{canRemove && \(\s*<button[\s\S]*?onClick=\{\(\) => onAskRemove\(s\.userId, nameOf\(s\)\)\}[\s\S]*?className="person-btn"[\s\S]*?aria-label=\{`Kick \$\{nameOf\(s\)\}`\}\s*>\s*Kick\s*<\/button>/.test(row), true);
+  strictEqual(/>\s*Remove\s*<|`Remove |"Remove"/.test(row), false, "no Remove button left");
+  strictEqual(row.includes("<PersonMark userId={s.userId}>"), true);
+  // The confirm: Kick wording, the same remove path.
+  strictEqual(list.includes("Kick {mode.name}?"), true);
+  strictEqual(list.includes('{busy ? "Kicking..." : "Kick"}'), true);
+  strictEqual(list.includes("onClick={() => onConfirmRemove(mode.userId, mode.name)}"), true);
+  strictEqual(/Remove \{mode\.name\}|Removing\.\.\./.test(list), false);
+  // The inline Mute: only for another person at a human table; Mute or Unmute by what I did.
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  const mute = menu.slice(menu.indexOf("export function PersonMuteButton"), menu.indexOf("export function PersonMark"));
+  strictEqual(mute.includes("if (!mod || !canOfferPersonMenu({ userId, myUserId: mod.myUserId, enabled: mod.enabled })) return null;"), true);
+  strictEqual(mute.includes("onClick={() => (muted ? mod.unmute(userId) : mod.mute(userId, name))}"), true);
+  strictEqual(mute.includes('{muted ? "Unmute" : "Mute"}'), true);
+  strictEqual(/kick|Kick/.test(mute), false, "the list's Kick is the host's own button, never here");
+  // A non-host sees no Kick: the button needs canRemove, which is the host's only.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("canRemove={hostMayRemove}"), true);
+});
+check("person popup: the composer lists only the people at THIS table I muted, each with Unmute", () => {
+  const roster = [
+    { user_id: "me", nickname: "Me" },
+    { user_id: "a", nickname: "Tester 1" },
+    { user_id: "b", nickname: "  " },
+    { user_id: "c", nickname: "Carl" },
+    { user_id: "a", nickname: "Tester 1" },
+  ];
+  deepStrictEqual(mutedAtTable(roster, new Set(["a", "b", "me", "elsewhere"]), "me"), [
+    { userId: "a", name: "Tester 1" },
+    { userId: "b", name: "Unnamed player" },
+  ]);
+  deepStrictEqual(mutedAtTable(roster, new Set(["elsewhere"]), "me"), []);
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  const line = menu.slice(menu.indexOf("export function MutedHereLine"));
+  strictEqual(line.includes("if (here.length === 0) return null;"), true, "nothing when nobody here is muted");
+  strictEqual(line.includes('<span className="text-zinc-600 dark:text-zinc-400">Muted:</span>'), true);
+  strictEqual(line.includes("onClick={() => mod.unmute(p.userId)}"), true);
+  strictEqual(line.includes("aria-label={`Unmute ${p.name}`}"), true);
+  strictEqual(/>\s*Unmute\s*</.test(line), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("below={<MutedHereLine roster={chatRoster} />}"), true);
+  const chat = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(/<\/div>\s*\{below\}\s*<\/form>,/.test(chat), true);
+  // Unmute: the stored list changes, so the muted set (and so NEW messages) follow at once.
+  strictEqual(view.includes("if (myUserId && chatTableId) unmuteSender(myUserId, chatTableId, userId);"), true);
+  strictEqual(view.includes('const mutedIds = useMemo(() => (mutedRaw ? mutedRaw.split(",") : []), [mutedRaw]);'), true);
+});
+check("host Kick: a spectator gets only the existing remove path, then the block question; a player gets the placeholder", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const kick = view.slice(view.indexOf("const kickFromPopup = useCallback("), view.indexOf("const blockAskText ="));
+  strictEqual(kick.includes("if (!popupIsHost) return;"), true, "never for a non-host");
+  // A spectator: the list's own Kick confirm (the old Remove's), nothing sent yet.
+  strictEqual(/if \(watching\) \{\s*setRemoveError\(null\);\s*setSpectatorsDialog\(\{ kind: "confirm", userId, name \}\);\s*return;\s*\}/.test(kick), true);
+  // A player: the table's error line, and nothing changes.
+  strictEqual(kick.includes("setChatBlockNote(PLAYER_KICK_UNAVAILABLE);"), true);
+  strictEqual(/playerRpc|\.rpc\(|setMembers|leave_table|muteSender|setBlockAsk/.test(kick), false, "a player's Kick changes nothing");
+  // The confirmed Kick: remove_spectator only, then (worked) the block question unless blocked; failed: the error, no question.
+  const remove = view.slice(view.indexOf("async function handleRemoveSpectator(userId: string, name: string) {"));
+  const body = remove.slice(0, remove.indexOf("\n  }\n") + 4);
+  strictEqual(body.includes('const { error: rpcError } = await playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId });'), true);
+  strictEqual((body.match(/playerRpc\(|\.rpc\(/g) ?? []).length, 1, "nothing but remove_spectator");
+  strictEqual(/if \(rpcError\) \{\s*setRemoveError\(rpcError\.message\);\s*return;\s*\}/.test(body), true);
+  strictEqual(body.indexOf("return;") < body.indexOf("setBlockAsk"), true, "a failed Kick never asks");
+  strictEqual(body.includes("if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });"), true);
+  strictEqual(view.includes("onConfirmRemove={handleRemoveSpectator}"), true);
+  // The kicked spectator's own message is unchanged.
+  strictEqual(REMOVED_TEXT, "The host removed you from this table.");
+  // The player-Kick line shares the block errors' line.
+  strictEqual(/const errorToast =[\s\S]*?chatBlockNote \|\|/.test(view), true);
+});
+check("block question: Walt's words after a Mute, skipped when already blocked, closing is No, only writeBlockById", () => {
+  deepStrictEqual(blockQuestion("Elsa"), {
+    title: "Also block Elsa?",
+    body: 'Blocked players can\'t join or watch tables you start, and you won\'t see their chat anywhere. You can review or remove anyone later on your Profile page under "Blocked players."',
+    yesLabel: "Yes, block",
+    noLabel: "No, thanks",
+  });
+  strictEqual(shouldAskToBlock({ blocked: false }), true);
+  strictEqual(shouldAskToBlock({ blocked: true }), false, "already blocked: no question");
+  strictEqual(readFileSync("components/brand/BlockedPlayers.tsx", "utf8").includes("Blocked players"), true, "the Profile heading the body names");
   strictEqual(chatBlockFailureText("blocked"), null);
   strictEqual(chatBlockFailureText("already_blocked"), null);
   strictEqual(chatBlockFailureText("limit"), BLOCK_LIMIT_TEXT);
   strictEqual(chatBlockFailureText("rate_limited"), BLOCK_RATE_TEXT);
   strictEqual(chatBlockFailureText("not_allowed"), BLOCK_NOT_ALLOWED_TEXT);
-  strictEqual(chatBlockFailureText("not_found"), BLOCK_FAILED_TEXT, "no nickname wording for a block by id");
+  strictEqual(chatBlockFailureText("not_found"), BLOCK_FAILED_TEXT);
   strictEqual(chatBlockFailureText("error"), BLOCK_FAILED_TEXT);
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  const block = view.slice(view.indexOf("const blockInChat = useCallback("), view.indexOf("const blockInChat = useCallback(") + 700);
-  strictEqual(block.indexOf("if (!window.confirm(chatBlockConfirmText(name))) return;") > 0, true);
-  strictEqual(block.indexOf("window.confirm") < block.indexOf("await writeBlockById(userId)"), true);
-  strictEqual(/\bwriteBlock\(/.test(view), false, "the table never blocks by nickname");
-  const hide = view.slice(view.indexOf("const hideInChat = useCallback("), view.indexOf("const blockInChat = useCallback("));
-  strictEqual(hide.includes("window.confirm"), false);
-  strictEqual(hide.includes("hideSender(myUserId, { userId, name });"), true);
-  strictEqual(view.includes("onHide={hideInChat}") && view.includes("onBlock={blockInChat}"), true);
-  // The Profile page keeps blocking by exact nickname.
+  // Mute applies first (stored, then their messages dropped), then the question -- unless blocked.
+  const mute = view.slice(view.indexOf("const muteInChat = useCallback("), view.indexOf("const unmuteInChat = useCallback("));
+  const order = [
+    "muteSender(myUserId, chatTableId, userId);",
+    "dropChatSender(userId);",
+    "if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });",
+  ].map((s) => mute.indexOf(s));
+  strictEqual(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1])), true, "mute, drop, then ask");
+  const unmute = view.slice(view.indexOf("const unmuteInChat = useCallback("), view.indexOf("const confirmBlockAsk = useCallback("));
+  strictEqual(unmute.includes("setBlockAsk"), false, "never after Unmute");
+  // Yes: only writeBlockById (through lib/blocks.ts), a refusal in the error line, then the list re-read.
+  const yes = view.slice(view.indexOf("const confirmBlockAsk = useCallback("), view.indexOf("const declineBlockAsk = useCallback("));
+  strictEqual(yes.includes("const outcome = await writeBlockById(ask.userId);"), true);
+  strictEqual(yes.includes("setChatBlockNote(failure);"), true);
+  strictEqual(yes.includes("void reloadBlocks();"), true);
+  strictEqual(yes.includes("unmuteSender"), false, "the Mute stays");
+  strictEqual(view.includes("const declineBlockAsk = useCallback(() => setBlockAsk(null), []);"), true, "No: just closes, the Mute stays");
+  strictEqual((view.match(/\bwriteBlockById\(/g) ?? []).length, 1);
+  strictEqual(/\bwriteBlock\(|writeUnblock|unblockMessage|window\.confirm\(chat|chatBlockConfirmText/.test(view), false, "no other block path at the table");
+  strictEqual(/\.rpc\(\s*["'](block_player|block_player_by_id|unblock_player|get_my_blocks)/.test(view), false);
+  strictEqual(view.includes("onYes={() => void confirmBlockAsk()}") && view.includes("onNo={declineBlockAsk}"), true);
+  strictEqual(view.indexOf("<AskDialog") > view.indexOf("<SpectatorsList"), true);
+  // The dialog: reusable, native, modal (above the eye list's dialog), closing is No.
+  const dialog = readFileSync("components/brand/AskDialog.tsx", "utf8");
+  strictEqual(dialog.includes("if (open && !d.open) {\n      d.showModal();"), true);
+  strictEqual(/onCancel=\{\(e\) => \{[\s\S]{0,60}e\.preventDefault\(\);\s*onNo\(\);/.test(dialog), true, "Escape is No");
+  strictEqual(dialog.includes("if (e.target === ref.current) onNo();"), true, "a tap outside is No");
+  strictEqual(dialog.includes("if (openRef.current) onNo();"), true);
+  strictEqual(dialog.includes("onClick={onYes}"), true);
+  strictEqual((dialog.replace(/\/\/[^\n]*/g, "").match(/onYes/g) ?? []).length, 3, "only the yes button says yes");
+  strictEqual(dialog.includes("createPortal("), true);
+  strictEqual(/window\.confirm|supabase|lib\/blocks/.test(dialog.replace(/\/\/[^\n]*/g, "")), false);
+  // Nothing else at the table calls the server for blocks.
+  for (const f of [
+    "components/table/PersonMenu.tsx",
+    "components/table/TableChat.tsx",
+    "components/table/SpectatorsList.tsx",
+    "components/table/OpponentBand.tsx",
+    "components/table/ScoreStrip.tsx",
+    "components/table/SquareRing.tsx",
+    "components/table/SquareTable.tsx",
+    "components/brand/AskDialog.tsx",
+    "lib/personMenu.ts",
+    "lib/chatMute.ts",
+  ]) {
+    const src = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    strictEqual(/supabase|\.rpc\(|lib\/blocks|writeBlock|writeUnblock|block_player|unblock_player/.test(src), false, f);
+  }
+  // The Profile page keeps Block by exact nickname, and Unblock.
   const profile = readFileSync("components/brand/BlockedPlayers.tsx", "utf8");
   strictEqual(profile.includes("writeBlock(typed)"), true);
   strictEqual(profile.includes("writeBlockById"), false);
   const lib = readFileSync("lib/blocks.ts", "utf8");
   strictEqual(lib.includes('supabase.rpc("block_player_by_id", { p_target: userId })'), true);
-});
-check("Settings: a Hidden in chat panel lists this browser's hidden people, each with Unhide", () => {
-  const page = readFileSync("app/settings/page.tsx", "utf8");
-  strictEqual(page.includes('<CardRoomFrame title="Settings" after={<ChatHiddenList userId={session.user.id} />}>'), true);
-  const panel = readFileSync("components/brand/ChatHiddenList.tsx", "utf8");
-  strictEqual(panel.includes("Hidden in chat"), true);
-  strictEqual(panel.includes("onClick={() => unhideSender(userId, person.userId)}"), true);
-  strictEqual(panel.includes("subscribeHidden(userId, onChange)"), true, "follows changes from the table and other tabs");
-  strictEqual(panel.includes('.from("profiles").select("id, nickname")'), true, "current names, display only");
-  strictEqual(/blocks/.test(panel.replace(/\/\/.*$/gm, "")), false, "blocked players live on the Profile page");
+  strictEqual(lib.includes("chatBlockConfirmText"), false);
 });
 check("M2 SQL: block_player_by_id is add-only and authenticated-only; the suites expect 53", () => {
   const part1 = readFileSync("docs/sql/moderation-m2-part1.sql", "utf8");

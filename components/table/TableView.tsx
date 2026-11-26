@@ -30,8 +30,11 @@ import {
   watchHref,
   withoutSpectator,
 } from "@/lib/spectators";
-import { chatBlockConfirmText, chatBlockFailureText, readMyBlocks, writeBlockById } from "@/lib/blocks";
-import { hideSender, parseHidden, rawHidden, subscribeHidden } from "@/lib/chatHide";
+import { chatBlockFailureText, readMyBlocks, writeBlockById } from "@/lib/blocks";
+import { muteSender, mutedIdsText, subscribeMuted, touchMuted, unmuteSender } from "@/lib/chatMute";
+import { MutedHereLine, PersonPopup, publishPersonModeration, type PersonModeration } from "@/components/table/PersonMenu";
+import { AskDialog } from "@/components/brand/AskDialog";
+import { PLAYER_KICK_UNAVAILABLE, blockQuestion, shouldAskToBlock } from "@/lib/personMenu";
 import { mutedSenders } from "@/lib/tableChat";
 import { JoinChoice } from "@/components/brand/JoinChoice";
 import { readSpectatorReveals, readTableSpectators, type TableSpectator } from "@/lib/spectatorData";
@@ -2955,21 +2958,36 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // spectator leaves everyone's chat as soon as they leave the list.
   const chatRoster = useMemo(() => mergeChatRoster(members, allowsSpectators ? spectatorList : null), [members, spectatorList, allowsSpectators]);
 
-  // HIDE AND BLOCK IN CHAT (moderation M2). The MUTED set -- people I hid in
-  // chat on this browser (lib/chatHide.ts) plus people on my Block List
-  // (lib/blocks.ts, read with get_my_blocks) -- never shows on my screen
-  // (useTableChat drops them). The hidden list follows changes from this tab
-  // and others (Settings' Unhide included). The Block List is read when chat
-  // turns on, right after a Block from a card, and whenever this tab comes
-  // back into view (a change on the Profile page elsewhere). A failed read
-  // keeps what it had. Block never writes the hide list: Unblock on the
-  // Profile page brings their chat back.
-  const hiddenRaw = useSyncExternalStore(
-    useCallback((onChange: () => void) => (myUserId ? subscribeHidden(myUserId, onChange) : () => {}), [myUserId]),
-    () => (myUserId ? rawHidden(myUserId) : ""),
+  // THE HOST, worked out exactly as the server's table_host(): the creator
+  // while seated, otherwise the player in the lowest seat.
+  const seatedBySeat = [...members].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
+  const hostId =
+    table && members.some((m) => m.user_id === table.created_by)
+      ? table.created_by
+      : (seatedBySeat[0]?.user_id ?? null);
+
+  // MUTE AND BLOCK IN CHAT (moderation M2, redesigned in M2c). The MUTED
+  // set -- people I muted at THIS table on this browser (lib/chatMute.ts)
+  // plus people on my Block List (lib/blocks.ts, read with get_my_blocks) --
+  // never shows on my screen (useTableChat drops them). The mute list follows
+  // changes from this tab and others. The Block List is read when chat turns
+  // on, right after a Block, and whenever this tab comes back into view (a
+  // change on the Profile page elsewhere). A failed read keeps what it had.
+  const chatTableId = table?.id ?? null;
+  const mutedRaw = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) => (myUserId && chatTableId ? subscribeMuted(myUserId, chatTableId, onChange) : () => {}),
+      [myUserId, chatTableId]
+    ),
+    () => (myUserId && chatTableId ? mutedIdsText(myUserId, chatTableId) : ""),
     () => ""
   );
-  const hiddenIds = useMemo(() => parseHidden(hiddenRaw).map((p) => p.userId), [hiddenRaw]);
+  const mutedIds = useMemo(() => (mutedRaw ? mutedRaw.split(",") : []), [mutedRaw]);
+  // This table is seen now (its mute entry kept), and stale tables' entries
+  // and the old cross-table hide list are pruned.
+  useEffect(() => {
+    if (myUserId && chatTableId) touchMuted(myUserId, chatTableId);
+  }, [myUserId, chatTableId]);
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
   const [chatBlockNote, setChatBlockNote] = useState<string | null>(null);
   const reloadBlocks = useCallback(async () => {
@@ -3001,7 +3019,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     const t = window.setTimeout(() => setChatBlockNote(null), 4000);
     return () => window.clearTimeout(t);
   }, [chatBlockNote]);
-  const chatMuted = useMemo(() => mutedSenders(hiddenIds, blockedIds), [hiddenIds, blockedIds]);
+  const chatMuted = useMemo(() => mutedSenders(mutedIds, blockedIds), [mutedIds, blockedIds]);
   const chat = useTableChat({
     enabled: chatOn,
     tableId: table?.id ?? null,
@@ -3009,31 +3027,92 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     roster: chatRoster,
     muted: chatMuted,
   });
-  // "Hide <name>": this browser only, no confirm.
-  const hideInChat = useCallback(
+  // "Also block <name>?" -- asked after a Mute (never after Unmute), unless
+  // they are already blocked. Null: not asking.
+  const [blockAsk, setBlockAsk] = useState<{ userId: string; name: string } | null>(null);
+  // "Mute <name>": at once, this table on this browser, no confirm; their
+  // messages leave memory now. Then the question.
+  const { dropSender: dropChatSender } = chat;
+  const muteInChat = useCallback(
     (userId: string, name: string) => {
-      if (myUserId) hideSender(myUserId, { userId, name });
-      chat.dropSender(userId);
+      if (!myUserId || !chatTableId) return;
+      muteSender(myUserId, chatTableId, userId);
+      dropChatSender(userId);
+      if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });
     },
-    [myUserId, chat]
+    [myUserId, chatTableId, dropChatSender, blockedIds]
   );
-  // "Block <name>": a native confirm first (Walt's wording), then the Block
-  // List by the sender's account id. Muted at once; then the list is read.
-  const blockInChat = useCallback(
-    async (userId: string, name: string) => {
-      if (!window.confirm(chatBlockConfirmText(name))) return;
-      const outcome = await writeBlockById(userId);
-      const failure = chatBlockFailureText(outcome);
-      if (failure) {
-        setChatBlockNote(failure);
+  // "Unmute <name>": their NEW messages show again at once (the muted set
+  // follows the stored list); dropped ones stay gone.
+  const unmuteInChat = useCallback(
+    (userId: string) => {
+      if (myUserId && chatTableId) unmuteSender(myUserId, chatTableId, userId);
+    },
+    [myUserId, chatTableId]
+  );
+  // "Yes, block": the Block List by the person's account id (lib/blocks.ts
+  // writeBlockById), then the list is read again. A refusal (the cap, the
+  // rate limit...) shows in the table's error line. "No, thanks", Escape and
+  // a tap outside just close it: the Mute stays either way.
+  const confirmBlockAsk = useCallback(async () => {
+    const ask = blockAsk;
+    setBlockAsk(null);
+    if (!ask) return;
+    const outcome = await writeBlockById(ask.userId);
+    const failure = chatBlockFailureText(outcome);
+    if (failure) {
+      setChatBlockNote(failure);
+      return;
+    }
+    setBlockedIds((ids) => (ids.includes(ask.userId) ? ids : [...ids, ask.userId]));
+    void reloadBlocks();
+  }, [blockAsk, reloadBlocks]);
+  const declineBlockAsk = useCallback(() => setBlockAsk(null), []);
+  // THE HOST'S KICK from the person popup (moderation M2c). The host only
+  // (never a spectator). A SPECTATOR: the existing Kick (the old Remove) --
+  // its confirm in the spectator list, then remove_spectator
+  // (handleRemoveSpectator), then "Also block?". A PLAYER: not built until
+  // M3 -- the table's error line says so and nothing changes.
+  const popupIsHost = !spectating && !!myUserId && hostId === myUserId;
+  const kickFromPopup = useCallback(
+    (userId: string, name: string) => {
+      if (!popupIsHost) return;
+      const watching = !!spectatorList?.some((s) => s.userId === userId) && !members.some((m) => m.user_id === userId);
+      if (watching) {
+        setRemoveError(null);
+        setSpectatorsDialog({ kind: "confirm", userId, name });
         return;
       }
-      setBlockedIds((ids) => (ids.includes(userId) ? ids : [...ids, userId]));
-      chat.dropSender(userId);
-      void reloadBlocks();
+      setChatBlockNote(PLAYER_KICK_UNAVAILABLE);
     },
-    [reloadBlocks, chat]
+    [popupIsHost, spectatorList, members]
   );
+  const blockAskText = blockAsk ? blockQuestion(blockAsk.name) : null;
+
+  // THE PERSON MENU's store (components/table/PersonMenu.tsx): who I muted
+  // here and blocked, and the actions, for every seat, spectator row, chat
+  // card and the composer's "Muted:" line. Only at a human table I'm signed
+  // in at (never a computer table). The host also gets Kick.
+  const mutedSet = useMemo(() => new Set(mutedIds), [mutedIds]);
+  const blockedSet = useMemo(() => new Set(blockedIds), [blockedIds]);
+  const personModeration = useMemo<PersonModeration>(
+    () => ({
+      enabled: !!myUserId && !!table && !table.computer_level,
+      myUserId,
+      isHost: popupIsHost,
+      muted: mutedSet,
+      blocked: blockedSet,
+      people: chatRoster,
+      mute: muteInChat,
+      unmute: unmuteInChat,
+      kick: kickFromPopup,
+    }),
+    [myUserId, table, popupIsHost, mutedSet, blockedSet, chatRoster, muteInChat, unmuteInChat, kickFromPopup]
+  );
+  useEffect(() => {
+    publishPersonModeration(personModeration);
+  }, [personModeration]);
+  useEffect(() => () => publishPersonModeration(null), []);
 
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
@@ -3261,29 +3340,25 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // PHASE 3 (A2), 3- and 4-player tables. Nothing here applies to a
   // 2-player table.
   const isPhase3Table = !isTwoPlayerTable;
-  // THE HOST, worked out exactly as the server's table_host(): the creator
-  // while seated, otherwise the player in the lowest seat.
-  const seatedBySeat = [...members].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
-  const hostId =
-    table && members.some((m) => m.user_id === table.created_by)
-      ? table.created_by
-      : (seatedBySeat[0]?.user_id ?? null);
+  // THE HOST: hostId, worked out above (with the person popup's store).
   const isHost = !spectating && hostId === viewerId; // an action flag
-  // THE HOST'S REMOVE (spectator chat): the host only, never a spectator
-  // (remove_spectator checks table_host on the server too).
+  // THE HOST'S KICK of a spectator (spectator chat's Remove, renamed in
+  // moderation M2c): the host only, never a spectator (remove_spectator
+  // checks table_host on the server too).
   const hostMayRemove = canRemoveSpectator({ isHost, spectating, targetIsSpectator: true });
   const openSpectators = () => {
     setRemoveError(null);
     setSpectatorsDialog({ kind: "list" });
   };
-  // Remove, confirmed: remove_spectator through playerRpc (refused for a
+  // Kick, confirmed: remove_spectator through playerRpc (refused for a
   // spectator before anything is sent). On success the spectator leaves the
   // list on this screen AT ONCE -- and with it the chat roster, so their
   // messages stop here now -- and the list is read again; everyone else's
   // screen drops them at its next read (the safety poll). Their own screen
   // goes home on its next heartbeat ("The host removed you from this
-  // table.").
-  async function handleRemoveSpectator(userId: string) {
+  // table."). Then (moderation M2c) "Also block <name>?", unless they are
+  // already blocked; a Kick that failed shows its error and no question.
+  async function handleRemoveSpectator(userId: string, name: string) {
     if (spectating) return; // never a spectator
     if (!table || !hostMayRemove || removeBusy) return;
     setRemoveBusy(true);
@@ -3297,6 +3372,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     setSpectatorList((list) => withoutSpectator(list, userId));
     setSpectatorsDialog(null);
     void loadSpectators(table.id);
+    if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });
   }
   // Teams: 4 players in team_mode 'teams' -- seats 1 and 3 against 2 and 4.
   const isTeams = capacity === 4 && table?.team_mode === "teams";
@@ -3866,7 +3942,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     (playStatus === "error" && playMessage) ||
     (gameStatus === "error" && gameMessage) ||
     (seatStatus === "error" && seatMessage) ||
-    // A chat card's Block that didn't go through (moderation M2).
+    // An "Also block?" Yes that didn't go through, or the host's Kick on a
+    // player before M3 (moderation M2c).
     chatBlockNote ||
     null;
 
@@ -3896,6 +3973,22 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               setRemoveError(null);
             }}
           />
+          {/* THE PERSON POPUP (moderation M2c): a native dialog, opened
+              from a seat or a chat card's "...", above the cards, the
+              composer and the list. */}
+          <PersonPopup />
+          {/* "Also block <name>?" after a Mute or a spectator's Kick
+              (moderation M2c): a native dialog opened after the list's and
+              the popup's, so it is above them too. */}
+          <AskDialog
+            open={blockAskText !== null}
+            title={blockAskText?.title ?? ""}
+            body={blockAskText?.body ?? ""}
+            yesLabel={blockAskText?.yesLabel ?? ""}
+            noLabel={blockAskText?.noLabel ?? ""}
+            onYes={() => void confirmBlockAsk()}
+            onNo={declineBlockAsk}
+          />
           {/* CHAT, beside the speaker, the same size. Only while chat is
               available (an open, human table I'm seated at, my channel
               joined); not while Leave is asking to confirm. The composer
@@ -3905,7 +3998,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             <ChatButton open={chatOpen} onToggle={() => setChatOpen((o) => !o)} buttonRef={chatButtonRef} />
           )}
           {chat.available && chatOpen && (
-            <ChatComposer draft={chatDraft} onDraft={setChatDraft} onSend={chat.send} onClose={closeChat} />
+            <ChatComposer
+              draft={chatDraft}
+              onDraft={setChatDraft}
+              onSend={chat.send}
+              onClose={closeChat}
+              below={<MutedHereLine roster={chatRoster} />}
+            />
           )}
           <ChatAnnouncer newest={chat.messages[0]} />
           {/* The quick mute. Not while Leave is asking to confirm, for the
@@ -3998,8 +4097,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               }
             : undefined
         }
-        onHide={hideInChat}
-        onBlock={blockInChat}
       />
       {gameEndedNotice && (
         <div data-table-notice="" className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 rounded border border-amber-500 bg-background px-3 py-1 text-sm text-amber-700 shadow dark:text-amber-500">
@@ -4729,6 +4826,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     top
       ? {
           header: {
+            userId: top.userId,
             name: top.name,
             avatarUrl: top.avatarUrl,
             wings: top.wings,
@@ -5159,6 +5257,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               code={code}
               handNo={activeGame.hand_no ?? null}
               opponent={{
+                userId: squareOpponent.user_id,
                 name: oppName,
                 avatarUrl: squareOpponent.avatar_url,
                 wings: tierOf(squareOpponent.user_id),
@@ -5337,6 +5436,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               code={code}
               handNo={null}
               opponent={{
+                userId: squareOpponent.user_id,
                 name: oppName,
                 avatarUrl: squareOpponent.avatar_url,
                 wings: tierOf(squareOpponent.user_id),
