@@ -379,3 +379,15 @@ export function spectatorWaitingLine(t: { full: boolean; hostName: string | null
 // A full 2-player table with no game yet, on a spectator's screen: either
 // player deals, so nobody is named.
 export const SPECTATOR_NO_GAME_TEXT = "You're watching. Waiting for the players to start.";
+
+// LEAVING WITHOUT A LINGERING PLACE (moderation M5a test finding): which
+// table to call stop_watching for, once any watch_table still in flight has
+// answered. A late "in" wins (that is the place it just made); otherwise the
+// ticket's table; nothing when there is neither (never watched, or refused).
+export function tableToStopWatching(
+  ticketTableId: string | null,
+  late: { ok?: { tableId: string } } | { refused: string } | { closed: true } | null
+): string | null {
+  if (late && "ok" in late && late.ok) return late.ok.tableId;
+  return ticketTableId;
+}

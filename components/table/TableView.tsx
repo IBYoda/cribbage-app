@@ -40,6 +40,8 @@ import { isKickRefusal, kickConfirm, kickedNotice, kickNoticeAction, writeKick, 
 import { afterReportStep, reportedBlockQuestion, reportOutcomeText, reportSentNotice, writeReport, type ReportReason } from "@/lib/reports";
 import { ReportDialog } from "@/components/table/ReportDialog";
 import { useTableKicks } from "@/components/table/useTableKicks";
+import { useTableEvents } from "@/components/table/useTableEvents";
+import { tableEventRole, type TableEvent } from "@/lib/tableEvents";
 import { setLobbyNotice } from "@/lib/lobbyNotice";
 import { mutedSenders } from "@/lib/tableChat";
 import { JoinChoice } from "@/components/brand/JoinChoice";
@@ -1424,10 +1426,22 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
 
   // WHO IS WATCHING, read (get_table_spectators). A failed read keeps the
   // list as it was; a table that doesn't allow spectators is never asked.
+  // THE TICKET GUARD (moderation M5a): reads overlap -- a table event, the
+  // safety poll, a refresh -- and they don't take the same time: a list with
+  // someone in it needs a second round trip (their profiles), an empty one
+  // doesn't. So after a fast Watch -> Leave, the Leave's read (empty) could
+  // land BEFORE the Watch's read (one spectator) and be overwritten by it.
+  // Each read takes a ticket; one that finishes after a later-issued read
+  // was already applied is dropped.
+  const spectatorsReadSeqRef = useRef(0);
+  const spectatorsAppliedSeqRef = useRef(0);
   const loadSpectators = useCallback(async (tableId: string) => {
     if (!spectatorsAllowedRef.current) return;
+    const ticket = ++spectatorsReadSeqRef.current;
     const list = await readTableSpectators(tableId);
-    if (list) setSpectatorList(list);
+    if (!list || ticket < spectatorsAppliedSeqRef.current) return;
+    spectatorsAppliedSeqRef.current = ticket;
+    setSpectatorList(list);
   }, []);
 
   // A full refresh, counted while in flight, so the safety poll waits for it.
@@ -3227,6 +3241,44 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     [myUserId, popupIsHost, blockedIds, spectating, table]
   );
   useTableKicks({ enabled: chatOn, tableId: table?.id ?? null, onKick: handleKickNotice });
+
+  // TABLE EVENTS (moderation M5a, lib/tableEvents.ts): the server's push on
+  // table:<id> the moment the table's people or the table row change. Joined
+  // only once my place is confirmed (chat's rule: seated in the roster read,
+  // or in the spectator list read), and again when my place changes
+  // (watching -> seated). Each event re-reads exactly what the safety poll
+  // reads -- no second data path:
+  //   members     the roster (loadMembers; it also notices my own seat gone
+  //               and goes through the stale-tab / kicked check)
+  //   spectators  my heartbeat first when I'm watching (my own removal),
+  //               then who is watching (loadSpectators)
+  //   table       the table row: a spectator's heartbeat (it answers
+  //               table_ended), a player's checkTableEnded
+  // The old postgres_changes listeners and the safety poll are unchanged.
+  const handleTableEvent = useCallback(
+    (event: TableEvent) => {
+      if (!table || event.tableId !== table.id.toLowerCase()) return;
+      const tableId = table.id;
+      if (event.kind === "members") {
+        void loadMembers(tableId);
+      } else if (event.kind === "spectators") {
+        void (async () => {
+          if (spectating) await spectateRef.current?.heartbeat();
+          await loadSpectators(tableId);
+        })();
+      } else if (spectating) {
+        void spectateRef.current?.heartbeat();
+      } else {
+        checkTableEndedRef.current(tableId);
+      }
+    },
+    [table, spectating, loadMembers, loadSpectators]
+  );
+  useTableEvents({
+    role: tableEventRole({ available: chatOn, spectating }),
+    tableId: table?.id ?? null,
+    onEvent: handleTableEvent,
+  });
   const popupOpen = usePersonPopupOpen();
   // The first queued notice for someone I don't block (yet), shown only
   // while no other question and no person popup is open.

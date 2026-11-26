@@ -18,12 +18,14 @@ import {
   callStopWatching,
   callTablePreview,
   callWatchTable,
+  type WatchAnswer,
   type WatchTicket,
 } from "@/lib/spectatorData";
 import {
   followGame,
   heartbeatStep,
   rewatchStep,
+  tableToStopWatching,
   TABLE_CLOSED_TEXT,
   WATCH_RETRY_MS,
   watchHref,
@@ -82,6 +84,35 @@ export default function WatchPage() {
   // followed now), and whether this page has already left the table view.
   const ticketRef = useRef<WatchTicket | null>(null);
   const exitedRef = useRef(false);
+  // LEAVING WITHOUT A LINGERING PLACE (moderation M5a test finding): once
+  // the person has asked to stop (Leave, or this page going away), nothing
+  // here may watch again -- no heartbeat, no quiet rewatch, no new
+  // watch_table. A heartbeat that reached the server after stop_watching's
+  // delete answers "not_watching", and its rewatch used to INSERT the place
+  // again after the person had gone home. And the stop waits for any
+  // watch_table still in flight, so a late "in" is removed too.
+  const stopRequestedRef = useRef(false);
+  const watchInFlightRef = useRef<Promise<WatchAnswer> | null>(null);
+  // Every watch_table call goes through here, so a stop can wait for it.
+  const trackedWatch = useCallback((watchCode: string, tableId: string | null) => {
+    const call = callWatchTable(watchCode, tableId);
+    watchInFlightRef.current = call;
+    void call
+      .catch(() => null)
+      .finally(() => {
+        if (watchInFlightRef.current === call) watchInFlightRef.current = null;
+      });
+    return call;
+  }, []);
+  // Stop watching for good: wait for a watch_table in flight, then
+  // stop_watching for the table it (or the ticket) holds. Best effort: if it
+  // fails, the place lapses after 90 s as before.
+  const stopWatchingAfterPending = useCallback(async () => {
+    const pending = watchInFlightRef.current;
+    const late = pending ? await pending.catch(() => null) : null;
+    const tableId = tableToStopWatching(ticketRef.current?.tableId ?? null, late);
+    if (tableId) await callStopWatching(tableId).catch(() => {});
+  }, []);
   // THE TABLE, by id (step 3 slice B): the link's ?t= (every in-app Watch),
   // or the one the watch confirm previewed. Every watch_table call -- the
   // first, the waiting retries, the quiet rewatches -- passes it, so a code
@@ -152,8 +183,9 @@ export default function WatchPage() {
         return;
       }
       heldIdRef.current = held;
-      const result = await callWatchTable(code, held);
-      if (cancelled) return;
+      if (stopRequestedRef.current) return;
+      const result = await trackedWatch(code, held);
+      if (cancelled || stopRequestedRef.current) return;
       if ("ok" in result) {
         ticketRef.current = result.ok;
         setState({ kind: "watching", ticket: result.ok });
@@ -189,7 +221,23 @@ export default function WatchPage() {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [session, code, router, watchGo]);
+  }, [session, code, router, watchGo, trackedWatch]);
+
+  // THIS PAGE GOING AWAY without Leave (the Back button, a link, a route
+  // change -- including while watch_table is still in flight): the same
+  // stop, so no place is left behind. Not after a removal or a closed
+  // table (stop_watching never deletes a removed place; an ended table's
+  // place is harmless). Closing the tab can't run this: that place still
+  // lapses after 90 s. The setup resets the flag, so React's development
+  // double mount doesn't leave it set.
+  useEffect(() => {
+    stopRequestedRef.current = false;
+    return () => {
+      if (stopRequestedRef.current) return;
+      stopRequestedRef.current = true;
+      void stopWatchingAfterPending();
+    };
+  }, [stopWatchingAfterPending]);
 
   // LEAVING THE TABLE VIEW, once: home (only for a removal), the closed
   // screen, or a refusal's screen.
@@ -213,13 +261,16 @@ export default function WatchPage() {
   // STAY, the ticket moves on (a NULL game id too: the waiting room or
   // between games); refused -> rewatchOutcome ("no game yet" stays).
   const rewatch = useCallback(async () => {
+    // Never after a stop: that is how a left place came back.
+    if (stopRequestedRef.current || exitedRef.current) return;
     // By the ticket's id: if that table has gone, closed -- never the table
     // that holds the code now.
-    const again = await callWatchTable(code, ticketRef.current?.tableId ?? heldIdRef.current);
+    const again = await trackedWatch(code, ticketRef.current?.tableId ?? heldIdRef.current);
+    if (stopRequestedRef.current) return;
     if ("ok" in again) ticketRef.current = again.ok;
     const outcome: RewatchOutcome = rewatchStep(again);
     if (outcome.kind !== "continue") leave(outcome);
-  }, [code, leave]);
+  }, [code, leave, trackedWatch]);
 
   // THE HEARTBEAT (heartbeatStep, lib/spectators.ts). One at a time; none
   // once the table view is gone. The table view AWAITS it before reading
@@ -230,12 +281,14 @@ export default function WatchPage() {
   const heartbeat = useCallback(async () => {
     const ticket = ticketRef.current;
     if (beatingRef.current) return beatInFlightRef.current ?? undefined;
-    if (!ticket || beatingRef.current || exitedRef.current) return;
+    if (!ticket || beatingRef.current || exitedRef.current || stopRequestedRef.current) return;
     beatingRef.current = true;
     const beat = (async () => {
       try {
         const step = heartbeatStep(await callSpectatorHeartbeat(ticket.tableId));
-        if (step.kind === "continue") return;
+        // Asked to stop meanwhile: its answer changes nothing (a
+        // "not_watching" from after the stop must not rewatch).
+        if (stopRequestedRef.current || step.kind === "continue") return;
         if (step.kind === "rewatch") await rewatch();
         else leave(step);
       } finally {
@@ -254,7 +307,7 @@ export default function WatchPage() {
   const onLiveGame = useCallback(
     (gameId: string) => {
       const ticket = ticketRef.current;
-      if (!ticket || exitedRef.current || !followGame(ticket.gameId, gameId)) return;
+      if (!ticket || exitedRef.current || stopRequestedRef.current || !followGame(ticket.gameId, gameId)) return;
       ticketRef.current = { ...ticket, gameId };
       void rewatch();
     },
@@ -270,15 +323,14 @@ export default function WatchPage() {
       onLiveGame,
       onTableEnded: () => leave({ kind: "closed" }),
       onStop: () => {
-        const ticket = ticketRef.current;
-        if (exitedRef.current) return;
-        // Best effort: if it fails, the place lapses after 90 s anyway.
-        (ticket ? callStopWatching(ticket.tableId).catch(() => {}) : Promise.resolve()).then(() =>
-          leave({ kind: "home", text: null })
-        );
+        if (exitedRef.current || stopRequestedRef.current) return;
+        // Stop FIRST (no heartbeat or rewatch from here on), then remove
+        // the place once any watch_table in flight has answered, then home.
+        stopRequestedRef.current = true;
+        void stopWatchingAfterPending().then(() => leave({ kind: "home", text: null }));
       },
     }),
-    [heartbeat, onLiveGame, leave, watchingTableId]
+    [heartbeat, onLiveGame, leave, watchingTableId, stopWatchingAfterPending]
   );
 
   if (!authRead && state.kind === "loading") {
