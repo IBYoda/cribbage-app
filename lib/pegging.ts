@@ -10,6 +10,8 @@ export type PlayEvent = {
   kind: "play" | "go";
   card: string | null;
   count_after: number;
+  // The play's transaction time (moderation M5b1: the stale-plays guard).
+  created_at?: string | null;
 };
 
 // WHICH RUN IS ON THE TABLE -- shared by the play area (which draws it) and

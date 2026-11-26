@@ -41,7 +41,7 @@ import { afterReportStep, reportedBlockQuestion, reportOutcomeText, reportSentNo
 import { ReportDialog } from "@/components/table/ReportDialog";
 import { useTableKicks } from "@/components/table/useTableKicks";
 import { useTableEvents } from "@/components/table/useTableEvents";
-import { tableEventRole, type TableEvent } from "@/lib/tableEvents";
+import { gameEventStep, tableEventRole, type GameEvent, type TableEvent } from "@/lib/tableEvents";
 import { setLobbyNotice } from "@/lib/lobbyNotice";
 import { mutedSenders } from "@/lib/tableChat";
 import { JoinChoice } from "@/components/brand/JoinChoice";
@@ -82,7 +82,17 @@ import { mugginsPlateStates } from "@/lib/mugginsPlates";
 import { godLossSplash, hideRejoinedScores, scoreFromThisGame } from "@/lib/resultScores";
 import { GAME_HOLE } from "@/lib/boardLayout";
 import { isGodLevel } from "@/lib/splashPhrases";
-import { mergePlays, nextPollDelayMs, playsCatchUpApplies, pollRefreshesProfiles, profilesToFetch, wonBoardReusable } from "@/lib/tableSync";
+import {
+  mergePlays,
+  newestPlayTime,
+  nextPollDelayMs,
+  playEventApplies,
+  playsCatchUpApplies,
+  playsReadApplies,
+  pollRefreshesProfiles,
+  profilesToFetch,
+  wonBoardReusable,
+} from "@/lib/tableSync";
 import { isCountReason } from "@/components/table/countingView";
 import { ScoreFlash, ScoreStrip, type ScorePlate } from "@/components/table/ScoreStrip";
 import { HAND_CARD } from "@/components/table/sizes";
@@ -1012,13 +1022,34 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     [spectating, fetchMyHand]
   );
 
+  // THE STALE-PLAYS GUARD (moderation M5b1, lib/tableSync.ts
+  // playsReadApplies): a read applies only to the hand it was issued in
+  // (handKeyRef, set at once whenever the screen moves to a hand) and only
+  // if no later-issued read was applied first -- so a read sent in hand N
+  // can never replace the log once the screen is in hand N+1.
+  const playsReadSeqRef = useRef(0);
+  const playsAppliedSeqRef = useRef(0);
   const fetchPlays = useCallback(async (gameId: string) => {
+    const ticket = ++playsReadSeqRef.current;
+    const issuedHandKey = handKeyRef.current;
     const { data } = await supabase
       .from("game_plays")
-      .select("seq, segment, user_id, kind, card, count_after")
+      .select("seq, segment, user_id, kind, card, count_after, created_at")
       .eq("game_id", gameId)
       .order("seq", { ascending: true });
 
+    if (
+      !playsReadApplies({
+        gameId,
+        issuedHandKey,
+        nowHandKey: handKeyRef.current,
+        ticket,
+        appliedTicket: playsAppliedSeqRef.current,
+      })
+    ) {
+      return;
+    }
+    playsAppliedSeqRef.current = ticket;
     setPlays((data as PlayEvent[]) ?? []);
   }, []);
 
@@ -1032,7 +1063,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     const issued = { gameId, handNo: activeGameRef.current?.hand_no };
     const { data, error } = await supabase
       .from("game_plays")
-      .select("seq, segment, user_id, kind, card, count_after")
+      .select("seq, segment, user_id, kind, card, count_after, created_at")
       .eq("game_id", gameId)
       .order("seq", { ascending: true });
     if (error || !data) return;
@@ -1076,7 +1107,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // status line. The old hand is cleared too, so its cards can't sit on
   // screen while the new ones load. Scores are NOT touched -- they live on
   // table_members, and next_hand doesn't change them.
+  // THE HAND FLOOR (moderation M5b1, lib/tableSync.ts playEventApplies): the
+  // newest play time of the hand being left. A play insert event at or
+  // before it is the old hand's and is dropped.
+  const playsFloorRef = useRef<number | null>(null);
   const resetHandState = useCallback(() => {
+    const floor = newestPlayTime(playsRef.current);
+    if (floor !== null && (playsFloorRef.current === null || floor > playsFloorRef.current)) playsFloorRef.current = floor;
     setPlays([]);
     handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
     setMyHand([]);
@@ -2768,6 +2805,20 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           const event = payload.new as PlayEvent & { game_id: string };
           // The filter's game, and still the game on screen.
           if (cancelled || event.game_id !== gameId || event.game_id !== activeGameIdRef.current) return;
+          // ...and the HAND on screen (moderation M5b1): never the previous
+          // hand's late play -- not its sound, its Go splash or its card.
+          if (
+            !playEventApplies({
+              eventGameId: event.game_id,
+              eventCreatedAt: event.created_at,
+              screenGameId: activeGameIdRef.current,
+              screenStatus: activeGameRef.current?.status,
+              screenPhase: activeGameRef.current?.phase,
+              handFloor: playsFloorRef.current,
+            })
+          ) {
+            return;
+          }
 
           // A CARD PLAYED, on every screen, mine too.
           if (event.kind === "play") {
@@ -3255,6 +3306,36 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   //   table       the table row: a spectator's heartbeat (it answers
   //               table_ended), a player's checkTableEnded
   // The old postgres_changes listeners and the safety poll are unchanged.
+  // GAME EVENTS (moderation M5b1): "this game changed". The same reads the
+  // safety poll makes when it finds a difference, sooner -- never a sound,
+  // a splash, a banner or a computer move of their own (those stay with the
+  // old listeners and the screen's keyed effects):
+  //   another game than the one on screen -> the full refresh;
+  //   the game on screen -> reconcileGame (ticket-guarded, coalesced; its
+  //     afterGameChange reads the new hand and the reveals exactly when the
+  //     poll's would), then the play log (a merging read, guarded by game
+  //     and hand) when the event is ahead of the plays shown.
+  const handleGameEvent = useCallback(
+    (event: GameEvent) => {
+      if (!table) return;
+      const tableId = table.id;
+      const step = gameEventStep({
+        event,
+        shownGameId: activeGameIdRef.current,
+        shownHandKey: handKeyRef.current,
+        shownMaxSeq: playsRef.current.reduce((max, p) => Math.max(max, p.seq), 0),
+      });
+      if (step.kind === "refresh") {
+        void refreshTableState(tableId);
+        return;
+      }
+      void (async () => {
+        await reconcileGame(event.gameId);
+        if (step.readPlays && activeGameIdRef.current === event.gameId) await catchUpPlays(event.gameId);
+      })();
+    },
+    [table, refreshTableState, reconcileGame, catchUpPlays]
+  );
   const handleTableEvent = useCallback(
     (event: TableEvent) => {
       if (!table || event.tableId !== table.id.toLowerCase()) return;
@@ -3274,10 +3355,24 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     },
     [table, spectating, loadMembers, loadSpectators]
   );
+  // Who listens: chat's rule (my seat or spectator row confirmed, an open
+  // table, no error, not leaving) -- at a COMPUTER table too (moderation
+  // M5b1: the one human is seated there, so the topic rule lets them
+  // receive the game events).
+  const tableEventsOn =
+    !!session &&
+    !!table &&
+    table.status === "open" &&
+    !error &&
+    leaveStatus !== "leaving" &&
+    (spectating
+      ? !!spectatorList?.some((s) => s.userId === session.user.id)
+      : members.some((m) => m.user_id === session.user.id));
   useTableEvents({
-    role: tableEventRole({ available: chatOn, spectating }),
+    role: tableEventRole({ available: tableEventsOn, spectating }),
     tableId: table?.id ?? null,
     onEvent: handleTableEvent,
+    onGameEvent: handleGameEvent,
   });
   const popupOpen = usePersonPopupOpen();
   // The first queued notice for someone I don't block (yet), shown only

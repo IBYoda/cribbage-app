@@ -72,3 +72,57 @@ export function tableEventRole(input: {
   if (!input.available) return null;
   return input.spectating ? "spectator" : "player";
 }
+
+// GAME EVENTS (moderation M5b1, docs/sql/moderation-m5b1-part1.sql): one
+// 'game' event per game per committed transaction on the same topic:
+//   { event: 'game', game_id, hand_no, state_version, last_play_seq }
+// (Realtime adds its own "id": ignored). state_version is per game and
+// only moves up -- by several per action, on every update -- so it is only
+// ever COMPARED, never counted with. It means "this game changed": the
+// screen re-reads the game itself, exactly as the safety poll does.
+export type GameEvent = { gameId: string; handNo: number; stateVersion: number; lastPlaySeq: number };
+
+const isWholeNumber = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+// A broadcast's payload as a game event, or null when it isn't exactly one.
+export function parseGameEvent(payload: unknown): GameEvent | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as { event?: unknown; game_id?: unknown; hand_no?: unknown; state_version?: unknown; last_play_seq?: unknown };
+  if (p.event !== "game") return null;
+  if (typeof p.game_id !== "string" || !UUID.test(p.game_id)) return null;
+  // hand_no: a game's row always has one; null is read as 0 (before any hand).
+  const handNo = p.hand_no === null ? 0 : p.hand_no;
+  if (!isWholeNumber(handNo) || !isWholeNumber(p.state_version) || !isWholeNumber(p.last_play_seq)) return null;
+  return { gameId: p.game_id, handNo, stateVersion: p.state_version, lastPlaySeq: p.last_play_seq };
+}
+
+// THE GAME VERSION RULE, per game id: accept only an event NEWER than the
+// newest seen for that game -- a later hand, or the same hand with a higher
+// state_version. An equal or older one is a duplicate or arrived out of
+// order: dropped. The first event seen for a game id is always accepted,
+// and flagged firstForGame (the caller compares it with the game on screen:
+// a different game is a new game -- the poll's full refresh).
+export type GameSeen = { handNo: number; stateVersion: number };
+
+export function acceptGameEvent(
+  last: GameSeen | undefined,
+  event: GameEvent
+): { accept: boolean; firstForGame: boolean; last: GameSeen } {
+  if (!last) return { accept: true, firstForGame: true, last: { handNo: event.handNo, stateVersion: event.stateVersion } };
+  const newer = event.handNo > last.handNo || (event.handNo === last.handNo && event.stateVersion > last.stateVersion);
+  return { accept: newer, firstForGame: false, last: newer ? { handNo: event.handNo, stateVersion: event.stateVersion } : last };
+}
+
+// What an accepted game event asks of the screen: the game on screen ->
+// re-read it ("reconcile"), plus the play log when the event is ahead of
+// the plays shown; another game -> the full refresh.
+export function gameEventStep(input: {
+  event: GameEvent;
+  shownGameId: string | null;
+  shownHandKey: string | null;
+  shownMaxSeq: number;
+}): { kind: "refresh" } | { kind: "reconcile"; readPlays: boolean } {
+  if (input.event.gameId !== input.shownGameId) return { kind: "refresh" };
+  const sameHand = input.shownHandKey === `${input.event.gameId}:${input.event.handNo}`;
+  return { kind: "reconcile", readPlays: sameHand && input.event.lastPlaySeq > input.shownMaxSeq };
+}
