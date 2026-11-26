@@ -434,7 +434,19 @@ import {
   reportedBlockQuestion,
   showNoteCounter,
 } from "../lib/reports";
-import { acceptTableEvent, parseTableEvent, tableEventRole, tableEventTopic, type TableEvent } from "../lib/tableEvents";
+import {
+  acceptGameEvent,
+  acceptTableEvent,
+  gameEventStep,
+  parseGameEvent,
+  parseTableEvent,
+  tableEventRole,
+  tableEventTopic,
+  type GameEvent,
+  type GameSeen,
+  type TableEvent,
+} from "../lib/tableEvents";
+import { newestPlayTime, playEventApplies, playsReadApplies } from "../lib/tableSync";
 import { tableToStopWatching } from "../lib/spectators";
 import {
   CHAT_MUTE_KEEP_MS,
@@ -7574,7 +7586,7 @@ check("table events: joined only once my place is confirmed, again when it chang
   strictEqual(/\.send\(|\.rpc\(|\.from\(/.test(code), false, "it only listens");
   strictEqual(/catch \{\s*\}/.test(code) || code.includes("} catch {"), true, "a refused join stays quiet");
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(view.includes("role: tableEventRole({ available: chatOn, spectating }),"), true, "chat's rule: the seat or spectator row is confirmed");
+  strictEqual(view.includes("role: tableEventRole({ available: tableEventsOn, spectating }),"), true, "chat's rule: the seat or spectator row is confirmed (computer tables too, M5b1)");
   const handler = m3CodeOnly(view.slice(view.indexOf("const handleTableEvent = useCallback("), view.indexOf("useTableEvents({")));
   strictEqual(handler.includes("void loadMembers(tableId);"), true);
   strictEqual(handler.includes("await loadSpectators(tableId);"), true);
@@ -7639,6 +7651,126 @@ check("watching: Leave (or the page going away) stops for good -- no heartbeat o
   strictEqual(/useEffect\(\(\) => \{\s*stopRequestedRef\.current = false;\s*return \(\) => \{\s*if \(stopRequestedRef\.current\) return;\s*stopRequestedRef\.current = true;\s*void stopWatchingAfterPending\(\);\s*\};\s*\}, \[stopWatchingAfterPending\]\);/.test(page), true);
   // stop_watching only through the stop.
   strictEqual((page.match(/\bcallStopWatching\(/g) ?? []).length, 1);
+});
+// ---- Game events and the stale-plays fix (moderation M5b1) ----
+check("game events: the payload, exactly; anything else is dropped", () => {
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  deepStrictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: 2, state_version: 17, last_play_seq: 5 }), { gameId: G, handNo: 2, stateVersion: 17, lastPlaySeq: 5 });
+  deepStrictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: 1, state_version: 3, last_play_seq: 0, id: "realtime's own" }), { gameId: G, handNo: 1, stateVersion: 3, lastPlaySeq: 0 }, "Realtime's id is ignored");
+  deepStrictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: null, state_version: 0, last_play_seq: 0 }), { gameId: G, handNo: 0, stateVersion: 0, lastPlaySeq: 0 });
+  strictEqual(parseGameEvent({ event: "members", game_id: G, hand_no: 1, state_version: 3, last_play_seq: 0 }), null);
+  strictEqual(parseGameEvent({ event: "game", game_id: "not-a-uuid", hand_no: 1, state_version: 3, last_play_seq: 0 }), null);
+  strictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: 1, state_version: -1, last_play_seq: 0 }), null);
+  strictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: 1, state_version: 2.5, last_play_seq: 0 }), null);
+  strictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: 1, state_version: 3 }), null, "last_play_seq missing");
+  strictEqual(parseGameEvent({ event: "game", game_id: G, hand_no: "1", state_version: 3, last_play_seq: 0 }), null);
+  strictEqual(parseGameEvent(null), null);
+});
+check("game events: the version rule per game -- newer (hand, state_version) only; a new game id; out of order and duplicates dropped", () => {
+  const A = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const B = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const ev = (gameId: string, handNo: number, stateVersion: number, lastPlaySeq = 0): GameEvent => ({ gameId, handNo, stateVersion, lastPlaySeq });
+  // The first event for a game id: taken, and flagged as a first sight.
+  deepStrictEqual(acceptGameEvent(undefined, ev(A, 1, 10)), { accept: true, firstForGame: true, last: { handNo: 1, stateVersion: 10 } });
+  // Same hand: only a higher state_version (it climbs by several per action: compared, never counted).
+  deepStrictEqual(acceptGameEvent({ handNo: 1, stateVersion: 10 }, ev(A, 1, 13)).accept, true);
+  deepStrictEqual(acceptGameEvent({ handNo: 1, stateVersion: 10 }, ev(A, 1, 10)), { accept: false, firstForGame: false, last: { handNo: 1, stateVersion: 10 } }, "a duplicate");
+  deepStrictEqual(acceptGameEvent({ handNo: 1, stateVersion: 10 }, ev(A, 1, 8)).accept, false, "out of order");
+  // A later hand wins even with any state_version; an earlier hand never does.
+  deepStrictEqual(acceptGameEvent({ handNo: 1, stateVersion: 40 }, ev(A, 2, 41)).accept, true);
+  deepStrictEqual(acceptGameEvent({ handNo: 2, stateVersion: 41 }, ev(A, 1, 99)).accept, false, "the previous hand's late event");
+  // Per game id: a sequence over two games, as the hook keeps it.
+  const seen = new Map<string, GameSeen>();
+  const taken: string[] = [];
+  for (const e of [ev(A, 1, 5), ev(A, 1, 9), ev(A, 1, 7), ev(B, 1, 2), ev(A, 1, 9), ev(B, 1, 3), ev(A, 2, 12)]) {
+    const step = acceptGameEvent(seen.get(e.gameId), e);
+    seen.set(e.gameId, step.last);
+    if (step.accept) taken.push(`${e.gameId === A ? "A" : "B"}${e.handNo}.${e.stateVersion}${step.firstForGame ? "*" : ""}`);
+  }
+  deepStrictEqual(taken, ["A1.5*", "A1.9", "B1.2*", "B1.3", "A2.12"]);
+  // What an accepted event asks of the screen.
+  deepStrictEqual(gameEventStep({ event: ev(B, 1, 2), shownGameId: A, shownHandKey: `${A}:1`, shownMaxSeq: 0 }), { kind: "refresh" }, "another game: the poll's full refresh");
+  deepStrictEqual(gameEventStep({ event: ev(A, 1, 9, 4), shownGameId: A, shownHandKey: `${A}:1`, shownMaxSeq: 3 }), { kind: "reconcile", readPlays: true }, "plays ahead of the screen");
+  deepStrictEqual(gameEventStep({ event: ev(A, 1, 9, 3), shownGameId: A, shownHandKey: `${A}:1`, shownMaxSeq: 3 }), { kind: "reconcile", readPlays: false });
+  deepStrictEqual(gameEventStep({ event: ev(A, 2, 12, 0), shownGameId: A, shownHandKey: `${A}:1`, shownMaxSeq: 8 }), { kind: "reconcile", readPlays: false }, "a new hand: the reconcile resets it, no plays read");
+});
+check("stale plays: a late read from hand N after Next Hand, and a late insert from hand N with a clashing seq, never reach hand N+1", () => {
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  // The read: issued in hand 1, answered after the screen moved to hand 2 -> dropped.
+  strictEqual(playsReadApplies({ gameId: G, issuedHandKey: `${G}:1`, nowHandKey: `${G}:2`, ticket: 7, appliedTicket: 6 }), false);
+  // Same hand, the latest read -> applied; an older read after a newer one -> dropped.
+  strictEqual(playsReadApplies({ gameId: G, issuedHandKey: `${G}:2`, nowHandKey: `${G}:2`, ticket: 7, appliedTicket: 6 }), true);
+  strictEqual(playsReadApplies({ gameId: G, issuedHandKey: `${G}:2`, nowHandKey: `${G}:2`, ticket: 5, appliedTicket: 6 }), false);
+  strictEqual(playsReadApplies({ gameId: G, issuedHandKey: null, nowHandKey: `${G}:2`, ticket: 9, appliedTicket: 0 }), false, "no hand set up yet");
+  strictEqual(playsReadApplies({ gameId: G, issuedHandKey: `other:2`, nowHandKey: `other:2`, ticket: 9, appliedTicket: 0 }), false, "another game's hand");
+  // The insert event, in the exact order of the bug: hand 1 ended with seq 8 at
+  // 12:00:10; Next Hand; the screen is in hand 2's discard; hand 1's seq-8
+  // insert arrives late -> dropped (it would have taken seq 8 in hand 2).
+  const hand1 = [
+    { seq: 7, created_at: "2026-11-26T12:00:05.000Z" },
+    { seq: 8, created_at: "2026-11-26T12:00:10.000Z" },
+  ];
+  const floor = newestPlayTime(hand1);
+  strictEqual(floor, Date.parse("2026-11-26T12:00:10.000Z"));
+  const late = { eventGameId: G, eventCreatedAt: "2026-11-26T12:00:10.000Z", screenGameId: G, screenStatus: "active", handFloor: floor };
+  strictEqual(playEventApplies({ ...late, screenPhase: "discard" }), false, "during the discard: never a play");
+  strictEqual(playEventApplies({ ...late, screenPhase: "play" }), false, "even in hand 2's play: at or before the floor");
+  // Hand 2's own plays come after the floor -> applied (counting too: the last play's insert can land after the phase moves on).
+  strictEqual(playEventApplies({ ...late, eventCreatedAt: "2026-11-26T12:00:41.000Z", screenPhase: "play" }), true);
+  strictEqual(playEventApplies({ ...late, eventCreatedAt: "2026-11-26T12:00:41.000Z", screenPhase: "counting" }), true);
+  // Another game, or no live game on screen -> dropped.
+  strictEqual(playEventApplies({ ...late, eventGameId: "x", eventCreatedAt: "2026-11-26T12:00:41.000Z", screenPhase: "play" }), false);
+  strictEqual(playEventApplies({ ...late, screenStatus: "cutting", eventCreatedAt: "2026-11-26T12:00:41.000Z", screenPhase: null }), false);
+  // No floor yet (the first hand on this screen): the phase rule alone.
+  strictEqual(playEventApplies({ ...late, handFloor: null, screenPhase: "play" }), true);
+  // The seq merge is kept for what does apply.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const fetch = view.slice(view.indexOf("const fetchPlays = useCallback("), view.indexOf("// THE PLAYS CATCH-UP READ"));
+  strictEqual(/const ticket = \+\+playsReadSeqRef\.current;\s*const issuedHandKey = handKeyRef\.current;/.test(fetch), true, "the hand and ticket taken BEFORE the read");
+  strictEqual(/if \(\s*!playsReadApplies\(\{[\s\S]*?nowHandKey: handKeyRef\.current,[\s\S]*?\}\)\s*\) \{\s*return;\s*\}\s*playsAppliedSeqRef\.current = ticket;\s*setPlays\(/.test(fetch), true);
+  strictEqual(fetch.includes('.select("seq, segment, user_id, kind, card, count_after, created_at")'), true);
+  const reset = view.slice(view.indexOf("const resetHandState = useCallback("), view.indexOf("// What follows from the game row on screen changing"));
+  strictEqual(reset.indexOf("newestPlayTime(playsRef.current)") < reset.indexOf("setPlays([]);"), true, "the floor is taken from the hand being left, before it is cleared");
+  const listener = view.slice(view.indexOf('.channel(`table-plays-${table.id}-${gameId}`)'), view.indexOf("// TABLE SYNC: CATCH UP when the tab"));
+  strictEqual(listener.indexOf("playEventApplies({") > 0 && listener.indexOf("playEventApplies({") < listener.indexOf("tableSound.card(playKey("), true, "checked before its sound");
+  strictEqual(listener.indexOf("playEventApplies({") < listener.indexOf("showGo("), true, "and before its Go splash");
+  strictEqual(listener.includes("setPlays((current) => mergePlays(current, [event]));"), true, "the seq merge kept");
+});
+check("game events: the same channel, computer tables too; only the poll's own reads -- never a sound, splash, banner or computer move", () => {
+  const hook = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
+  strictEqual((hook.match(/supabase\.channel\(/g) ?? []).length, 1, "one channel");
+  strictEqual(/channel\.on\("broadcast", \{ event: "game" \}, \(\{ payload \}\) => \{/.test(hook), true);
+  strictEqual(/const step = acceptGameEvent\(games\.get\(event\.gameId\), event\);\s*games\.set\(event\.gameId, step\.last\);\s*if \(step\.accept\) onGameEventRef\.current\(event\);/.test(hook), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  // Computer tables: the role no longer needs chat (which is off there).
+  const on = view.slice(view.indexOf("const tableEventsOn ="), view.indexOf("useTableEvents({"));
+  strictEqual(on.includes("computer_level"), false, "no computer-table exclusion");
+  strictEqual(on.includes("members.some((m) => m.user_id === session.user.id)"), true, "still only once my seat is confirmed");
+  strictEqual(view.includes("onGameEvent: handleGameEvent,"), true);
+  // The handler: the poll's reads only.
+  const handler = m3CodeOnly(view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  strictEqual(handler.includes("void refreshTableState(tableId);"), true);
+  strictEqual(handler.includes("await reconcileGame(event.gameId);"), true);
+  strictEqual(handler.includes("await catchUpPlays(event.gameId);"), true, "a MERGING plays read (never a replace)");
+  strictEqual(/tableSound|showGo|showZero|showWings|showGodLoss|setTossLanding|soundCatchUpRef|trackAction|supabase|\.rpc\(|\.from\(|fetchPlays|setFinishedGame|setActiveGame/.test(handler), false,
+    "no sound, splash, banner, computer action or read of its own");
+  // The reads it calls never play a sound or splash: sounds come from the
+  // old listeners and keyed effects only (the file's rule), and a read never
+  // sets the sound catch-up (so it can't silence or replay one).
+  const reconcile = m3CodeOnly(view.slice(view.indexOf("const reconcileGame = useCallback("), view.indexOf("// MEMBERS READ (with the guard above)")));
+  strictEqual(/tableSound\.|show[A-Z]\w*\(|soundCatchUpRef/.test(reconcile), false);
+  const after = m3CodeOnly(view.slice(view.indexOf("const afterGameChange = useCallback("), view.indexOf("// RECONCILE: re-read the current game's row")));
+  strictEqual(/tableSound\.|show[A-Z]\w*\(|soundCatchUpRef/.test(after), false);
+  const catchUp = m3CodeOnly(view.slice(view.indexOf("const catchUpPlays = useCallback("), view.indexOf("// Fetches every hand and the crib this player")));
+  strictEqual(/tableSound\.|show[A-Z]\w*\(|soundCatchUpRef/.test(catchUp), false);
+  const refresh = m3CodeOnly(view.slice(view.indexOf("const refreshTableState = useCallback("), view.indexOf("const refreshTableState = useCallback(") + 900));
+  strictEqual(refresh.includes("soundCatchUpRef"), false, "the refresh (like the poll's) never sets the catch-up");
+  // The old listeners, the poll and the computer driver are as they were.
+  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
+  strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
+  strictEqual(/useTableEvents|tableEvents|handleGameEvent/.test(readFileSync("components/table/useComputerDriver.ts", "utf8")), false);
+  // A computer move is keyed (one per key), so an earlier re-read can't make it move twice.
+  strictEqual(readFileSync("components/table/useComputerDriver.ts", "utf8").includes("a key is sent at most once at a time"), true);
 });
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");

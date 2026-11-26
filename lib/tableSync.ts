@@ -107,3 +107,60 @@ export function wonBoardReusable(
 ): boolean {
   return !!shown && shown.id === gameId && shown.board.complete === true;
 }
+
+// THE STALE-PLAYS GUARDS (moderation M5b1). game_plays is emptied at every
+// Next Hand and its seq starts again at 1, so a read or an insert event from
+// hand N that lands after the screen moved to hand N+1 used to put hand N's
+// plays into the new hand (a read replaced the log; an event merged in, and
+// could even take a seq the new hand was about to use).
+//
+// A REPLACING READ (fetchPlays) applies only to the hand it was issued in --
+// handKey "<game id>:<hand no>", set at once whenever the screen moves to a
+// hand -- and only if no later-issued read was applied first.
+export function playsReadApplies(input: {
+  gameId: string;
+  issuedHandKey: string | null;
+  nowHandKey: string | null;
+  ticket: number;
+  appliedTicket: number;
+}): boolean {
+  return (
+    input.issuedHandKey !== null &&
+    input.issuedHandKey.startsWith(`${input.gameId}:`) &&
+    input.nowHandKey === input.issuedHandKey &&
+    input.ticket > input.appliedTicket
+  );
+}
+
+// A PLAY INSERT EVENT carries no hand number. It is from the hand on screen
+// only if: it is the game on screen, live; the screen is past the discard
+// (no play exists before it: a play arriving during the discard is the
+// previous hand's); and it is newer than the newest play of the previous
+// hand (handFloor, ms, from created_at -- the play's transaction time).
+export function playEventApplies(input: {
+  eventGameId: string | null | undefined;
+  eventCreatedAt: string | null | undefined;
+  screenGameId: string | null;
+  screenStatus: string | null | undefined;
+  screenPhase: string | null | undefined;
+  handFloor: number | null;
+}): boolean {
+  if (!input.eventGameId || input.eventGameId !== input.screenGameId) return false;
+  if (input.screenStatus !== "active" || input.screenPhase === "discard") return false;
+  if (input.handFloor !== null && input.eventCreatedAt) {
+    const at = Date.parse(input.eventCreatedAt);
+    if (Number.isFinite(at) && at <= input.handFloor) return false;
+  }
+  return true;
+}
+
+// The newest play's time (ms) among those on screen, for handFloor when the
+// screen moves to a new hand; null when none carries a time.
+export function newestPlayTime(plays: readonly { created_at?: string | null }[]): number | null {
+  let newest: number | null = null;
+  for (const p of plays) {
+    const at = p.created_at ? Date.parse(p.created_at) : NaN;
+    if (Number.isFinite(at) && (newest === null || at > newest)) newest = at;
+  }
+  return newest;
+}
