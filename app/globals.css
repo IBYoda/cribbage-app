@@ -737,13 +737,6 @@ body {
   padding-inline: 5px;
   font-size: 0.875rem;
 }
-/* A self-scoring (Muggins) table: its tag on a short line under the header
-   line (as the classic header), ~20px taken from the middle. */
-.sq-muggins-tag {
-  display: flex;
-  padding-inline: 5px;
-  font-size: 0.875rem;
-}
 /* The across player's hand. Its piles (when they deal) hang below it, at
    the sides, over the top of the middle -- hence the z-index. */
 .sq-opponent-row {
@@ -2511,9 +2504,9 @@ section.felt-panel {
   opacity: 0.8;
   vertical-align: -2px;
 }
-/* THE HEADER'S EYE (spectator chat): drawn small beside the code (or as a
-   pill on the Muggins tag line), with the count; its tap target is a 44x44
-   layer centred on it, so the header keeps its height. */
+/* THE HEADER'S EYE (spectator chat): drawn small beside the code on every
+   table (Muggins too), with the count; its tap target is a 44x44 layer
+   centred on it, so the header keeps its height. */
 .spectators-eye {
   position: relative;
   display: inline-flex;
@@ -2539,11 +2532,6 @@ section.felt-panel {
   outline: 2px solid currentColor;
   outline-offset: 2px;
   border-radius: 4px;
-}
-.spectators-eye--pill {
-  margin-inline-start: 0;
-  gap: 3px;
-  opacity: 1;
 }
 /* THE SPECTATORS LIST (components/table/SpectatorsList.tsx): the About
    dialog's look. Its row buttons (Mute/Unmute, the host's Kick) and the

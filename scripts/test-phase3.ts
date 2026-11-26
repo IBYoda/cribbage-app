@@ -1867,18 +1867,21 @@ check("Open Tables: one row per table -- Join (with the choice), Join (straight 
 });
 check("Spectators: the players are told -- the tag in the headers and the waiting screens", () => {
   const page = readFileSync("components/table/TableView.tsx", "utf8");
-  // Every header that shows the Muggins tag gets the watcher count too.
-  strictEqual(page.split("muggins={isMuggins}").length, page.split("spectators={headerSpectatorCount}").length);
+  // The headers no longer take muggins (2026-11-26: no Muggins tag line);
+  // every one gets the watcher count.
+  strictEqual(page.includes("muggins={isMuggins}"), false);
+  strictEqual((page.match(/spectators=\{headerSpectatorCount\}/g) ?? []).length, 5);
   strictEqual(/<WaitingForPlayer[\s\S]{0,120}spectators=\{allowsSpectators\}/.test(page), true);
   strictEqual(/<WaitingRoom[\s\S]{0,80}spectators=\{allowsSpectators\}/.test(page), true);
   // The in-game header never gets a line of its own for it: the eye beside
-  // the code, or a pill on the Muggins line that is already there -- only
-  // while someone is watching (SpectatorsEye renders nothing at 0).
+  // the code on EVERY table, a Muggins one too (2026-11-26: the Muggins tag
+  // line and the eye's pill are gone) -- only while someone is watching
+  // (SpectatorsEye renders nothing at 0).
   for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
     const src = readFileSync(f, "utf8");
-    strictEqual(src.includes("{!muggins && <SpectatorsEye count={spectators} onOpen={onSpectators} />}"), true, f);
-    strictEqual(src.includes("<SpectatorsEye count={spectators} onOpen={onSpectators} pill />"), true, f);
-    strictEqual(src.includes("{watching && <WatchingRow />}"), true, f);
+    strictEqual((src.match(/<SpectatorsEye count=\{spectators\} onOpen=\{onSpectators\} \/>/g) ?? []).length, 1, f);
+    strictEqual(/!muggins|\bpill\b|MugginsTag|sq-muggins-tag/.test(src.replace(/\/\/[^\n]*/g, "")), false, `${f}: no Muggins line, no pill`);
+    strictEqual((src.match(/\{watching && <WatchingRow \/>\}/g) ?? []).length, 1, f);
   }
 });
 check("Header: 'Hand N' sits under the table code, the spectators eye stays on the top row beside it", () => {
@@ -1984,7 +1987,9 @@ check("Spectator chat: the eye shows only while someone is watching, with the co
   const tag = readFileSync("components/SpectatorsTag.tsx", "utf8");
   strictEqual(tag.includes("if (count <= 0) return null;"), true);
   strictEqual(tag.includes('aria-haspopup="dialog"'), true);
-  strictEqual(tag.includes("{pill ? `${count} watching` : count}"), true);
+  strictEqual(tag.includes('<span aria-hidden="true">{count}</span>'), true, "the count only, never the word");
+  // No pill variant; "watching" stays only in the tooltip and the screen-reader label.
+  strictEqual(/\bpill\b/.test(tag.slice(tag.indexOf("export function SpectatorsEye"), tag.indexOf("export function WatchingRow"))), false);
   // Its tap target is 44x44 around the small eye.
   const css = readFileSync("app/globals.css", "utf8");
   strictEqual(/\.spectators-eye::after \{[^}]*width: 44px;[^}]*height: 44px;/.test(css), true);
@@ -1996,10 +2001,8 @@ check("Spectator chat: the eye shows only while someone is watching, with the co
   strictEqual(/async function pollOnce\(\) \{[\s\S]{0,2600}await loadSpectators\(tableId\);/.test(view), true);
   strictEqual(/const refreshTableState = useCallback\([\s\S]{0,500}void loadSpectators\(tableId\);/.test(view), true);
   strictEqual(view.includes("if (!list || ticket < spectatorsAppliedSeqRef.current) return;"), true, "a failed read keeps the list (and an older read never overwrites a newer one: moderation M5a)");
-  // Muggins: the pill on the tag line follows the same rule.
-  for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
-    strictEqual(readFileSync(f, "utf8").includes("<SpectatorsEye count={spectators} onOpen={onSpectators} pill />"), true, f);
-  }
+  // Muggins: the same eye beside the code (no pill, no tag line).
+  strictEqual(/\.spectators-eye--pill|\.sq-muggins-tag/.test(css), false);
 });
 check("Spectator chat: the roster merges players and spectators; a spectator's own echo has their name", () => {
   const players = [
