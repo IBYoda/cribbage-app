@@ -382,6 +382,8 @@ from (
               then 'INFO: moderation M5a''s table event trigger (moderation-m5a-part1.sql)'
               when tg.tgname in ('games_state_version', 'games_zz_game_event')
               then 'INFO: moderation M5b1''s game event trigger (moderation-m5b1-part1.sql; games_zz_game_event fires at commit)'
+              when tg.tgname = 'table_members_zz_scores_event'
+              then 'INFO: moderation M5b2''s scores event trigger (moderation-m5b2-part1.sql; fires at commit, once per table)'
               when mr.relname = 'table_members'
               then 'FLAG: a block/kick check on a new seat would be a trigger beside these; BEFORE triggers fire in name order'
               else '' end
