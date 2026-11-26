@@ -37,6 +37,8 @@ import { MutedHereLine, PersonPopup, publishPersonModeration, usePersonPopupOpen
 import { AskDialog } from "@/components/brand/AskDialog";
 import { blockQuestion, shouldAskToBlock } from "@/lib/personMenu";
 import { isKickRefusal, kickConfirm, kickedNotice, kickNoticeAction, writeKick, type KickNotice } from "@/lib/kicks";
+import { afterReportStep, reportedBlockQuestion, reportOutcomeText, reportSentNotice, writeReport, type ReportReason } from "@/lib/reports";
+import { ReportDialog } from "@/components/table/ReportDialog";
 import { useTableKicks } from "@/components/table/useTableKicks";
 import { setLobbyNotice } from "@/lib/lobbyNotice";
 import { mutedSenders } from "@/lib/tableChat";
@@ -3056,8 +3058,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     muted: chatMuted,
   });
   // "Also block <name>?" -- asked after a Mute (never after Unmute), unless
-  // they are already blocked. Null: not asking.
-  const [blockAsk, setBlockAsk] = useState<{ userId: string; name: string } | null>(null);
+  // they are already blocked. Null: not asking. afterReport: the same
+  // question after a sent report (moderation M6), titled "Report sent".
+  const [blockAsk, setBlockAsk] = useState<{ userId: string; name: string; afterReport?: boolean } | null>(null);
   // "Mute <name>": at once, this table on this browser, no confirm; their
   // messages leave memory now. Then the question.
   const { dropSender: dropChatSender } = chat;
@@ -3102,6 +3105,44 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (ask) void blockFromQuestion(ask.userId);
   }, [blockAsk, blockFromQuestion]);
   const declineBlockAsk = useCallback(() => setBlockAsk(null), []);
+
+  // REPORT (moderation M6, lib/reports.ts): the popup's Report and the eye
+  // list's Report open the report dialog for that person -- anyone the
+  // popup shows for (never me, never at a computer table), even someone
+  // who has left (a chat card's "..."): the server takes its own snapshot.
+  // Send: report_player (writeReport, the only call) with this table's id.
+  // "reported" closes the dialog, then "Report sent" -- with the block
+  // question when I haven't blocked them (Yes, block: blockFromQuestion,
+  // as after a Mute or a Kick), or a plain "We'll take a look." with OK
+  // when I have. Any other answer stays in the dialog, the form kept.
+  // Nothing happens to the reported person; nothing is muted or sent to
+  // anyone's screen.
+  const [reportAsk, setReportAsk] = useState<{ userId: string; name: string } | null>(null);
+  const [reportSent, setReportSent] = useState(false);
+  const askReport = useCallback((userId: string, name: string) => {
+    setReportAsk({ userId, name });
+  }, []);
+  const tableIdForReport = table?.id ?? null;
+  const sendReport = useCallback(
+    async (reason: ReportReason, note: string): Promise<string | null> => {
+      const ask = reportAsk;
+      if (!ask) return null;
+      const result = await writeReport({ targetId: ask.userId, reason, note, tableId: tableIdForReport });
+      if (!result.ok) return result.text;
+      const line = reportOutcomeText(result.outcome, ask.name);
+      if (line) return line;
+      setReportAsk(null);
+      if (afterReportStep({ blocked: blockedIds.includes(ask.userId) }) === "ask_block") {
+        setBlockAsk({ userId: ask.userId, name: ask.name, afterReport: true });
+      } else {
+        setReportSent(true);
+      }
+      return null;
+    },
+    [reportAsk, tableIdForReport, blockedIds]
+  );
+  const closeReport = useCallback(() => setReportAsk(null), []);
+  const reportSentText = reportSent ? reportSentNotice() : null;
 
   // THE HOST'S KICK (moderation M3). The host only (never a spectator).
   // Every Kick -- the person popup's, the spectator list's, a spectator's
@@ -3190,7 +3231,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // The first queued notice for someone I don't block (yet), shown only
   // while no other question and no person popup is open.
   const kickNotice = kickNotices.find((n) => !blockedIds.includes(n.userId)) ?? null;
-  const kickNoticeShown = kickNotice && !blockAsk && !kickAsk && !popupOpen ? kickNotice : null;
+  const kickNoticeShown = kickNotice && !blockAsk && !kickAsk && !popupOpen && !reportAsk && !reportSent ? kickNotice : null;
   const kickNoticeText = kickNoticeShown ? kickedNotice(kickNoticeShown.name) : null;
   const closeKickNotice = useCallback((block: boolean) => {
     setKickNotices((queue) => {
@@ -3200,7 +3241,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       return queue.filter((n) => n !== first);
     });
   }, [blockedIds, blockFromQuestion]);
-  const blockAskText = blockAsk ? blockQuestion(blockAsk.name) : null;
+  const blockAskText = blockAsk ? (blockAsk.afterReport ? reportedBlockQuestion(blockAsk.name) : blockQuestion(blockAsk.name)) : null;
 
   // THE PERSON MENU's store (components/table/PersonMenu.tsx): who I muted
   // here and blocked, and the actions, for every seat, spectator row, chat
@@ -3218,9 +3259,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       people: chatRoster,
       mute: muteInChat,
       unmute: unmuteInChat,
+      report: askReport,
       kick: askKick,
     }),
-    [myUserId, table, popupIsHost, mutedSet, blockedSet, chatRoster, muteInChat, unmuteInChat, askKick]
+    [myUserId, table, popupIsHost, mutedSet, blockedSet, chatRoster, muteInChat, unmuteInChat, askReport, askKick]
   );
   useEffect(() => {
     publishPersonModeration(personModeration);
@@ -4075,8 +4117,24 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             onYes={() => void confirmKick()}
             onNo={declineKick}
           />
+          {/* THE REPORT DIALOG (moderation M6): "Report <name>", the three
+              choices, the note, Send report / Cancel. A native dialog, opened
+              after the popup closes (or above the eye list). */}
+          <ReportDialog target={reportAsk} onSend={sendReport} onClose={closeReport} />
+          {/* "Report sent. We'll take a look." with OK, when I already block
+              the person I reported (moderation M6). */}
+          <AskDialog
+            open={reportSentText !== null}
+            title={reportSentText?.title ?? ""}
+            body={reportSentText?.body ?? ""}
+            yesLabel=""
+            noLabel={reportSentText?.noLabel ?? ""}
+            onYes={() => setReportSent(false)}
+            onNo={() => setReportSent(false)}
+          />
           {/* "Also block <name>?" after a Mute or a successful Kick
-              (moderation M2c/M3): a native dialog opened after the list's
+              (moderation M2c/M3), or "Report sent" with the same question
+              after a report (M6): a native dialog opened after the list's
               and the popup's, so it is above them too. */}
           <AskDialog
             open={blockAskText !== null}

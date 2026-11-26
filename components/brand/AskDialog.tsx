@@ -16,6 +16,10 @@ import { createPortal } from "react-dom";
 // taps). Drawn in a portal to <body>, so no ancestor can hide it.
 //
 // An empty body draws no paragraph (e.g. "Kick <name>?" with no live game).
+// A blank line in the body starts a new paragraph on screen (whitespace
+// pre-line), e.g. "Report sent" (moderation M6): "We'll take a look.", then
+// the block question. An empty yesLabel draws only the no button (a plain
+// notice with OK).
 //
 // Controlled: the parent says when it is open. Only the yes button calls
 // onYes. The no button, Escape, a tap on the backdrop, and a close the
@@ -85,11 +89,13 @@ export function AskDialog({
           <h2 id={titleId} className="font-display text-2xl font-bold italic">
             {title}
           </h2>
-          {body && <p id={bodyId}>{body}</p>}
+          {body && <p id={bodyId} className="whitespace-pre-line">{body}</p>}
           <div className="mt-2 flex flex-col gap-2">
-            <button type="button" onClick={onYes} className="peg-btn peg-btn--brass">
-              {yesLabel}
-            </button>
+            {yesLabel && (
+              <button type="button" onClick={onYes} className="peg-btn peg-btn--brass">
+                {yesLabel}
+              </button>
+            )}
             <button ref={noRef} type="button" onClick={onNo} className="peg-btn peg-btn--ghost">
               {noLabel}
             </button>

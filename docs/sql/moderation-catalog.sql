@@ -132,10 +132,18 @@ m1_fp(fn, lf, crlf) as (
     ('join_table_by_code', 'cf40593ee5afda235144a13e38d27f4a', 'c3ee9ced2e1033f9c068acd3325c5583'),
     ('watch_table', '5bf6065de215d92a02af63d035c7f910', '2aa5f9c37d65271f3b4619e58c171ea0')
 ),
+-- The moderation slices' own objects (M1, M2, M3, M6): listed as INFO in
+-- section 09, not STOP.
 m1_names(name) as (
   values ('blocks'), ('blocks_pkey'), ('blocks_blocked_id_idx'),
          ('block_player'), ('unblock_player'), ('get_my_blocks'), ('_is_blocked_from_table'),
-         ('block_player_by_id')
+         ('block_player_by_id'),
+         ('table_kicks'), ('table_kicks_pkey'), ('table_kicks_created_at_idx'), ('table_kicks_kicked_id_idx'),
+         ('table_kicks_host_id_idx'), ('_is_kicked_from_table'), ('_send_kick_notice'), ('kick_player'),
+         ('kick_topic_allows'), ('admin_recent_kicks'),
+         ('player_reports'), ('player_reports_pkey'), ('player_reports_created_at_idx'), ('player_reports_reported_idx'),
+         ('player_reports_reporter_idx'), ('player_reports_pair_idx'), ('_report_avatar_object'), ('report_player'),
+         ('admin_list_reports'), ('admin_delete_report'), ('purge_old_reports')
 ),
 fp_live as (
   select f.o, f.fn, f.kind, f.lf, f.crlf, f.src, l.n, l.sig, l.m, l.info
@@ -406,7 +414,7 @@ from (
          'relation ' || n.nspname::text || '.' || c.relname::text || ' (' || c.relkind::text || ')',
          'matches ' || (select re from mod_words),
          case when n.nspname = 'public' and c.relname in (select m.name from m1_names m)
-              then 'INFO: moderation M1''s own (moderation-m1-part1.sql)'
+              then 'INFO: a moderation slice''s own (moderation-m1-part1.sql, moderation-m3-part1.sql, moderation-m6-part1.sql)'
               else 'STOP: expected none; look at it before naming a new object' end
   from pg_class c
   join pg_namespace n on n.oid = c.relnamespace
@@ -424,7 +432,7 @@ from (
          'function ' || p.oid::regprocedure::text,
          'matches ' || (select re from mod_words),
          case when p.proname in (select m.name from m1_names m)
-              then 'INFO: moderation M1''s or M2''s own (moderation-m1-part1.sql, moderation-m2-part1.sql)'
+              then 'INFO: a moderation slice''s own (moderation-m1-part1.sql, moderation-m2-part1.sql, moderation-m3-part1.sql, moderation-m6-part1.sql)'
               else 'STOP: expected none; look at it before naming a new function' end
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
@@ -538,7 +546,7 @@ from (
   select 12, 0, '', 0, 'attempt', 'attempt_log action check',
          coalesce((select pg_get_constraintdef(con.oid) from pg_constraint con
                    where con.conrelid = to_regclass('public.attempt_log') and con.conname = 'attempt_log_action_check'), '(missing)'),
-         'FLAG: a report or chat rate limit through _attempts_guard widens this check'
+         'INFO: moderation M3 added kick and M6 report_filed; a chat rate limit through _attempts_guard would widen this check again'
 
   union all
   select 12, 1, '', 0, 'attempt', '_attempts_guard signature',

@@ -22,6 +22,12 @@
 -- kick_topic_allows and admin_recent_kicks). Re-run it after M3 part 1 and
 -- after part 2.
 --
+-- UPDATED FOR MODERATION M6 (docs/sql/moderation-m6-part1.sql): once
+-- public.player_reports exists, T1 expects it with NO privilege for any
+-- client role, and X1 expects 59 names (the 56 plus report_player,
+-- admin_list_reports and admin_delete_report; never _report_avatar_object
+-- or purge_old_reports). Re-run it after M6 part 1.
+--
 -- It WRITES -- one temporary function in public (X2), two temporary accounts
 -- in auth.users, and a few storage.objects rows in the avatars bucket written
 -- as one of them (rows only: no file is uploaded, and every row is rolled
@@ -47,14 +53,18 @@
 --         user_appearance  INSERT, SELECT, UPDATE   / -      / -
 --         table_spectators SELECT                   / -      / -
 --         attempt_log, computer_accounts, follows, game_results,
---         leaderboard_hidden, and blocks (once moderation M1 part 1 has
---         made it): nothing for any of the three.
+--         leaderboard_hidden, blocks (once moderation M1 part 1 has made
+--         it), table_kicks (once M3 part 1 has) and player_reports (once
+--         M6 part 1 has): nothing for any of the three.
 --   T2  no column-level grant on any table in public.
 --   X1  functions: none executable by anon, none granted to PUBLIC, and
 --       authenticated may execute exactly these 49 (by name) -- 52 once
 --       moderation M1 part 1 is in (plus block_player, unblock_player,
 --       get_my_blocks; never _is_blocked_from_table), 53 once moderation
---       M2 part 1 is in (plus block_player_by_id): every RPC the
+--       M2 part 1 is in (plus block_player_by_id), 56 once M3 part 1 is in
+--       (plus kick_player, kick_topic_allows, admin_recent_kicks), 59 once
+--       M6 part 1 is in (plus report_player, admin_list_reports,
+--       admin_delete_report): every RPC the
 --       app calls, chat_topic_allows (Realtime evaluates it as the user), the
 --       seven slice D helpers (the row policies evaluate them as the user),
 --       and show_hand (granted since phase 2; the app no longer calls it --
@@ -101,6 +111,8 @@ declare
   v_m2 boolean := to_regprocedure('public.block_player_by_id(uuid)') is not null;
   -- Moderation M3 part 1 is in when its table exists.
   v_m3 boolean := to_regclass('public.table_kicks') is not null;
+  -- Moderation M6 part 1 is in when its table exists.
+  v_m6 boolean := to_regclass('public.player_reports') is not null;
   v_expected_fns text[] := array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
@@ -134,6 +146,12 @@ begin
       raise exception 'SETUP: the expected function list has % names after moderation M3 part 1; expected 56 (M3 needs M1 and M2 part 1).', array_length(v_expected_fns, 1);
     end if;
   end if;
+  if v_m6 then
+    v_expected_fns := v_expected_fns || array['admin_delete_report', 'admin_list_reports', 'report_player'];
+    if array_length(v_expected_fns, 1) <> 59 then
+      raise exception 'SETUP: the expected function list has % names after moderation M6 part 1; expected 59 (M6 needs M1, M2 and M3 part 1).', array_length(v_expected_fns, 1);
+    end if;
+  end if;
 
   -- ==== T: tables ===================================================================
   -- [T1] Every table's exact privileges for authenticated / anon / PUBLIC.
@@ -161,6 +179,9 @@ begin
     union all
     -- Moderation M3's kick log: no client privileges at all.
     select 'table_kicks', '', '' where v_m3
+    union all
+    -- Moderation M6's reports: no client privileges at all.
+    select 'player_reports', '', '' where v_m6
   ),
   actual as (
     select c.relname::text as tbl,
@@ -231,7 +252,7 @@ begin
                                                   where e.name not in (select o.name from open_fns o)))
   into v_bad;
   if v_bad <> '' then
-    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1): %.', array_length(v_expected_fns, 1), v_bad;
+    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1; 59 after M6 part 1): %.', array_length(v_expected_fns, 1), v_bad;
   end if;
   v_checks := v_checks + 1;
 

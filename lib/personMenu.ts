@@ -6,8 +6,9 @@
 // are components/table/PersonMenu.tsx. Tested by scripts/test-phase3.ts.
 //
 // Its buttons, by what I already did to that person and who I am:
-//   everyone:  "Mute" (not muted) or "Unmute" (muted) -- just the word
-//   the HOST:  also "Kick"
+//   everyone:  "Mute" (not muted) or "Unmute" (muted) -- just the word --
+//              then "Report" (moderation M6: lib/reports.ts)
+//   the HOST:  also "Kick", last
 // Mute is PERSONAL (it changes only what I see, the host's too), kept for
 // this table on this browser (lib/chatMute.ts). There is no Block or Unblock
 // button at the table: Block only comes from the question after a Mute or a
@@ -15,11 +16,18 @@
 // the Profile page only. Never on my own seat, row or card, and never at a
 // computer table.
 
-export type PersonAction = "mute" | "unmute" | "kick";
+export type PersonAction = "mute" | "unmute" | "report" | "kick";
 
 export function personPopupButtons(state: { muted: boolean; isHost: boolean }): { action: PersonAction; label: string }[] {
   const mute: { action: PersonAction; label: string } = state.muted ? { action: "unmute", label: "Unmute" } : { action: "mute", label: "Mute" };
-  return state.isHost ? [mute, { action: "kick", label: "Kick" }] : [mute];
+  const report: { action: PersonAction; label: string } = { action: "report", label: "Report" };
+  return state.isHost ? [mute, report, { action: "kick", label: "Kick" }] : [mute, report];
+}
+
+// The spectator list's inline buttons for another person's row, in order:
+// the same as the popup's (Mute/Unmute, Report, the host's Kick).
+export function spectatorRowButtons(state: { muted: boolean; isHost: boolean }): PersonAction[] {
+  return personPopupButtons(state).map((b) => b.action);
 }
 
 // The host's Kick (moderation M3) is the real one for a player or a

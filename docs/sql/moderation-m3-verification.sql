@@ -49,7 +49,8 @@
 --       host and game ON DELETE SET NULL), the three indexes, RLS on, no
 --       policies, NO privilege for PUBLIC, anon, authenticated or
 --       service_role, not in supabase_realtime; attempt_log allows exactly
---       the nine actions (kick included).
+--       the nine actions (kick included) -- or ten once moderation M6 part
+--       1 has added report_filed.
 --   K2  the five functions: part 1's bodies, security definer, search_path
 --       ''; kick_player, kick_topic_allows, admin_recent_kicks executable
 --       by authenticated only; _is_kicked_from_table and _send_kick_notice
@@ -287,7 +288,9 @@ begin
   select pg_get_constraintdef(con.oid) into v_txt
   from pg_constraint con
   where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check';
-  if v_txt is null or (length(v_txt) - length(replace(v_txt, '::text', ''))) / 6 <> 9
+  -- Nine actions, or ten with moderation M6's report_filed.
+  if v_txt is null or (length(v_txt) - length(replace(v_txt, '::text', ''))) / 6 not in (9, 10)
+     or ((length(v_txt) - length(replace(v_txt, '::text', ''))) / 6 = 10 and v_txt !~ '''report_filed''')
      or v_txt !~ '''kick''' or v_txt !~ '''block_change''' or v_txt !~ '''follow_change''' or v_txt !~ '''game_start'''
      or v_txt !~ '''code_guess''' or v_txt !~ '''watch''' or v_txt !~ '''join''' or v_txt !~ '''create_computer_table''' or v_txt !~ '''create_table''' then
     v_bad := v_bad || 'attempt_log_action_check "' || coalesce(v_txt, 'missing') || '"; ';

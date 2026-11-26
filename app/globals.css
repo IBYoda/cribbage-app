@@ -2572,7 +2572,44 @@ section.felt-panel {
 }
 .person-btn--large {
   min-height: 52px;
+  padding-inline: 0.5rem;
   font-size: 1.0625rem;
+}
+/* THE REPORT DIALOG (components/table/ReportDialog.tsx, moderation M6): the
+   About panel; each choice a 44px row, the note a cream-bordered box. */
+.report-dialog {
+  width: min(24rem, calc(100vw - 2rem));
+}
+.report-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 44px;
+  cursor: pointer;
+}
+.report-choice input {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  accent-color: var(--brass);
+}
+.report-note {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--brass);
+  border-radius: 12px;
+  background: rgb(0 0 0 / 0.25);
+  color: var(--cream);
+  font-size: 1rem;
+  resize: vertical;
+}
+.report-note::placeholder {
+  color: var(--cream);
+  opacity: 0.6;
+}
+.report-note:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
 }
 /* "Watching": a spectator's thin row under the header -- 20px, text only. */
 .watching-row {

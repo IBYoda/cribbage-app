@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Avatar } from "@/components/Avatar";
-import { PersonMark, PersonMuteButton } from "@/components/table/PersonMenu";
+import { PersonMark, PersonMuteButton, PersonReportButton } from "@/components/table/PersonMenu";
 import type { TableSpectator } from "@/lib/spectatorData";
 
 // THE SPECTATORS LIST (spectator chat, PRD item 40): opened from the header's
@@ -19,10 +19,12 @@ import type { TableSpectator } from "@/lib/spectatorData";
 // composer (70) alike. Escape, a click on the backdrop and Close all close
 // it; nothing is sent from here.
 //
-// MODERATION M2c: every OTHER watcher's row has its buttons inline after the
-// name -- "Mute"/"Unmute" for everyone (PersonMuteButton), then the host's
-// "Kick". Their avatar carries the quiet mark when I muted or blocked them.
-// No Mute on my own row.
+// MODERATION M2c/M6: every OTHER watcher's row has its buttons inline after
+// the name -- "Mute"/"Unmute" and "Report" for everyone (PersonMuteButton,
+// PersonReportButton), then the host's "Kick". Their avatar carries the
+// quiet mark when I muted or blocked them. No Mute or Report on my own row.
+// On a narrow phone the buttons wrap under the name (the name keeps at
+// least 5rem), so nothing overlaps.
 
 export type SpectatorsListMode = { kind: "list" };
 
@@ -84,23 +86,26 @@ export function SpectatorsList({
         ) : (
           <ul className="flex flex-col gap-1" aria-label="Spectators">
             {spectators.map((s) => (
-              <li key={s.userId} className="flex min-h-11 items-center gap-2">
+              <li key={s.userId} className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1">
                 <PersonMark userId={s.userId}>
                   <Avatar name={nameOf(s)} url={s.avatarUrl} size="sm" />
                 </PersonMark>
-                <span className="min-w-0 flex-1 truncate font-semibold">{nameOf(s)}</span>
-                <PersonMuteButton userId={s.userId} name={nameOf(s)} />
-                {canKick && (
-                  <button
-                    type="button"
-                    onClick={() => onAskKick(s.userId, nameOf(s))}
-                    className="person-btn"
-                    data-person-action="kick"
-                    aria-label={`Kick ${nameOf(s)}`}
-                  >
-                    Kick
-                  </button>
-                )}
+                <span className="min-w-20 flex-1 truncate font-semibold">{nameOf(s)}</span>
+                <span className="ml-auto flex shrink-0 gap-1">
+                  <PersonMuteButton userId={s.userId} name={nameOf(s)} />
+                  <PersonReportButton userId={s.userId} name={nameOf(s)} />
+                  {canKick && (
+                    <button
+                      type="button"
+                      onClick={() => onAskKick(s.userId, nameOf(s))}
+                      className="person-btn"
+                      data-person-action="kick"
+                      aria-label={`Kick ${nameOf(s)}`}
+                    >
+                      Kick
+                    </button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
