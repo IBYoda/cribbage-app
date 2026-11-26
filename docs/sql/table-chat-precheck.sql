@@ -99,7 +99,7 @@ from (
   union all
   select 2, 0, 'policies', 'count on realtime.messages',
          (select count(*)::text from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'),
-         'expected 0'
+         'expected 0 before table-chat.sql (2 after it; 3 once moderation M3 part 1 adds its kicks policy)'
 
   union all
   -- ---- Names table-chat.sql will create --------------------------------------

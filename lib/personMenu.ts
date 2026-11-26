@@ -22,10 +22,8 @@ export function personPopupButtons(state: { muted: boolean; isHost: boolean }): 
   return state.isHost ? [mute, { action: "kick", label: "Kick" }] : [mute];
 }
 
-// The host's Kick on a PLAYER, until M3 wires it: this line in the table's
-// error line, and nothing changes. (A spectator's Kick works today: it is
-// the old Remove, remove_spectator.)
-export const PLAYER_KICK_UNAVAILABLE = "Kicking players isn't available yet.";
+// The host's Kick (moderation M3) is the real one for a player or a
+// spectator alike: lib/kicks.ts (the confirm, the notice, writeKick).
 
 // Whether this person gets a menu at all: a real other person, while the
 // table offers it (signed in, a human table).

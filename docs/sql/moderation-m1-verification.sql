@@ -95,7 +95,8 @@
 --       both rows (ON DELETE CASCADE).
 -- WHAT IT CHECKS -- PART 2 (once join_table_by_code and watch_table have
 -- part 2's bodies)
---   K5  join_table_by_code and watch_table: part 2's bodies, EXECUTE for
+--   K5  join_table_by_code and watch_table: part 2's bodies (or moderation
+--       M3 part 2's, which are M1's plus the kick refusal), EXECUTE for
 --       authenticated only.
 --   J1  B, blocked by A, joining by TYPED CODE: TA (public) and TP
 --       (private): "You can't join this table.", P0001, no detail, no hint,
@@ -182,17 +183,23 @@ declare
   v_limit_msg text := 'You have changed your Block List 30 times in the last hour. Please try again a little later.';
 begin
   -- ==== MODE ======================================================================
-  select (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.join_table_by_code(text, boolean, uuid)'))
-           in ('cf40593ee5afda235144a13e38d27f4a', 'c3ee9ced2e1033f9c068acd3325c5583')
-     and (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.watch_table(text, uuid)'))
-           in ('5bf6065de215d92a02af63d035c7f910', '2aa5f9c37d65271f3b4619e58c171ea0')
+  -- Part 2 mode: M1 part 2's bodies, or moderation M3 part 2's (M1's plus
+  -- the kick refusal, which none of these people meets), in pairs.
+  select ((select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.join_table_by_code(text, boolean, uuid)'))
+            in ('cf40593ee5afda235144a13e38d27f4a', 'c3ee9ced2e1033f9c068acd3325c5583')
+          and (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.watch_table(text, uuid)'))
+            in ('5bf6065de215d92a02af63d035c7f910', '2aa5f9c37d65271f3b4619e58c171ea0'))
+      or ((select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.join_table_by_code(text, boolean, uuid)'))
+            in ('297fa4f04a02e226691ebf3b5b135f83', 'fbf046f1582863cc5697b06f670481b2')
+          and (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.watch_table(text, uuid)'))
+            in ('bdebb2e1a8213baa2a04666bcad59adb', 'ea5c3bd739b2f7243b985c7ea1fd9f2a'))
   into v_p2;
   if not coalesce(v_p2, false)
      and not ((select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.join_table_by_code(text, boolean, uuid)'))
                 in ('1a2ff167c6d09fef6acd17177493422d', '9f3cee04a063447d626a1354533fda51')
               and (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.watch_table(text, uuid)'))
                 in ('43775b57dffaec98ee7c003304a0c951', 'df591fa16528afd81a13bfdc3e975538')) then
-    raise exception 'SETUP: join_table_by_code / watch_table are neither today''s nor M1 part 2''s bodies (or only one of them is part 2''s). Run docs/sql/moderation-m1-precheck.sql.';
+    raise exception 'SETUP: join_table_by_code / watch_table are neither today''s, M1 part 2''s nor M3 part 2''s bodies (or only one of them is part 2''s). Run docs/sql/moderation-m1-precheck.sql.';
   end if;
   v_p2 := coalesce(v_p2, false);
   if to_regclass('public.blocks') is null or to_regprocedure('public.block_player(text)') is null then

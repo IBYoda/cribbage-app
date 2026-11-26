@@ -34,9 +34,12 @@
 --            must not change them); _attempts_guard (the block/unblock limit
 --            uses it); join_table_by_code and watch_table: today's
 --            (free-codes-part1.sql: 9f3cee04... / df591fa1... CRLF) before
---            part 2, part 2's after.
+--            part 2, part 2's after -- or moderation M3 part 2's (M1's
+--            bodies plus the kick refusal), which counts as "part 2
+--            present".
 --   part1    attempt_log_action_check (the seven slice A/E actions before,
---            plus block_change after); public.blocks (absent before; after:
+--            plus block_change after; plus kick too once moderation M3
+--            part 1 is in); public.blocks (absent before; after:
 --            its columns, primary key, self check, both foreign keys ON
 --            DELETE CASCADE, the blocked_id index, RLS on, no policies, no
 --            privileges for PUBLIC, anon, authenticated or service_role);
@@ -46,7 +49,8 @@
 --            the exact-nickname lookup relies on; computer_accounts.
 --   names    any OTHER relation, function, trigger, policy or type in public
 --            whose name contains "block" (expected none).
---   grants   the client-executable functions (49 before part 1, 52 after);
+--   grants   the client-executable functions (49 before part 1, 52 after;
+--            53 after moderation M2 part 1, 56 after M3 part 1);
 --            postgres's global default ACL for new functions (INFO).
 --   count    blocks rows, blockers, the longest list; attempt_log
 --            block_change rows; profiles that cannot be blocked by nickname
@@ -66,15 +70,15 @@ with fp_known(o, fn, sig, lf, crlf, src) as (
     (7, 'chat_topic_allows', 'public.chat_topic_allows(text, boolean)', '0458d5122d68d511b2e0fbceafe84aae', 'c4e6eda360de7d7723c4069e60d95345', 'spectator-chat.sql (M1 leaves it alone)'),
     (8, '_attempts_guard', 'public._attempts_guard(uuid, text, integer, interval, text)', 'b1b69dbbdf10d50f78655a0da3b3ac69', '9406938991e89dcd38d0686a279b432a', 'join-create.sql (the block/unblock limit uses it)')
 ),
-swap_known(o, fn, sig, lf, crlf, m1_lf, m1_crlf) as (
+swap_known(o, fn, sig, lf, crlf, m1_lf, m1_crlf, m3_lf, m3_crlf) as (
   values
-    (1, 'join_table_by_code', 'public.join_table_by_code(text, boolean, uuid)', '1a2ff167c6d09fef6acd17177493422d', '9f3cee04a063447d626a1354533fda51', 'cf40593ee5afda235144a13e38d27f4a', 'c3ee9ced2e1033f9c068acd3325c5583'),
-    (2, 'watch_table', 'public.watch_table(text, uuid)', '43775b57dffaec98ee7c003304a0c951', 'df591fa16528afd81a13bfdc3e975538', '5bf6065de215d92a02af63d035c7f910', '2aa5f9c37d65271f3b4619e58c171ea0')
+    (1, 'join_table_by_code', 'public.join_table_by_code(text, boolean, uuid)', '1a2ff167c6d09fef6acd17177493422d', '9f3cee04a063447d626a1354533fda51', 'cf40593ee5afda235144a13e38d27f4a', 'c3ee9ced2e1033f9c068acd3325c5583', '297fa4f04a02e226691ebf3b5b135f83', 'fbf046f1582863cc5697b06f670481b2'),
+    (2, 'watch_table', 'public.watch_table(text, uuid)', '43775b57dffaec98ee7c003304a0c951', 'df591fa16528afd81a13bfdc3e975538', '5bf6065de215d92a02af63d035c7f910', '2aa5f9c37d65271f3b4619e58c171ea0', 'bdebb2e1a8213baa2a04666bcad59adb', 'ea5c3bd739b2f7243b985c7ea1fd9f2a')
 ),
 swap_state as (
   select s.o, s.fn, s.sig,
          (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure(s.sig)) as m,
-         s.lf, s.crlf, s.m1_lf, s.m1_crlf
+         s.lf, s.crlf, s.m1_lf, s.m1_crlf, s.m3_lf, s.m3_crlf
   from swap_known s
 ),
 new_fns(o, name, sig, lf, client) as (
@@ -111,7 +115,8 @@ check_state as (
          (length(cd.d) - length(replace(cd.d, '::text', ''))) / 6 as n_actions,
          cd.d ~ '''create_table''' and cd.d ~ '''create_computer_table''' and cd.d ~ '''join''' and cd.d ~ '''watch'''
            and cd.d ~ '''code_guess''' and cd.d ~ '''game_start''' and cd.d ~ '''follow_change''' as has_seven,
-         cd.d ~ '''block_change''' as has_block
+         cd.d ~ '''block_change''' as has_block,
+         cd.d ~ '''kick''' as has_kick
   from check_def cd
 ),
 blk as (
@@ -170,7 +175,8 @@ flags as (
     to_regclass('public.blocks') is not null as p1_table,
     (select count(*) from new_fn_state n where n.fn_oid is not null) as p1_fns,
     (select count(*) from swap_state s where s.m in (s.lf, s.crlf)) as swap_today,
-    (select count(*) from swap_state s where s.m in (s.m1_lf, s.m1_crlf)) as swap_m1
+    -- M3 part 2's bodies are M1's plus the kick refusal: they count as M1's.
+    (select count(*) from swap_state s where s.m in (s.m1_lf, s.m1_crlf, s.m3_lf, s.m3_crlf)) as swap_m1
 )
 select z.section::text as section, z.item::text as item, z.value::text as value, z.note::text as note
 from (
@@ -206,6 +212,7 @@ from (
          case
            when s.m in (s.lf, s.crlf) then 'before part 2: free-codes-part1.sql''s body (' || case when s.m = s.lf then 'LF' else 'CRLF' end || '), as expected'
            when s.m in (s.m1_lf, s.m1_crlf) then 'after part 2: M1''s body (' || case when s.m = s.m1_lf then 'LF' else 'CRLF' end || '), as expected'
+           when s.m in (s.m3_lf, s.m3_crlf) then 'after part 2: moderation M3 part 2''s body (M1''s plus the kick refusal; ' || (case when s.m = s.m3_lf then 'LF' else 'CRLF' end) || '), as expected'
            else 'STOP: neither today''s ' || s.crlf || ' / ' || s.lf || ' nor part 2''s ' || s.m1_crlf || ' / ' || s.m1_lf
                 || '. Capture it first: select pg_get_functiondef(''' || s.sig || '''::regprocedure);' end
   from swap_state s
@@ -218,9 +225,12 @@ from (
            when not exists (select 1 from check_state) then 'STOP: the constraint is missing'
            when (select cs.has_seven and not cs.has_block and cs.n_actions = 7 from check_state cs)
              then 'before part 1: the seven slice A/E actions'
-           when (select cs.has_seven and cs.has_block and cs.n_actions = 8 from check_state cs)
+           when (select cs.has_seven and cs.has_block and not cs.has_kick and cs.n_actions = 8 from check_state cs)
              then 'after part 1: plus block_change'
-           else 'STOP: neither the seven slice A/E actions nor those plus block_change' end
+           when (select cs.has_seven and cs.has_block and cs.has_kick and cs.n_actions = 9 from check_state cs)
+                and to_regclass('public.table_kicks') is not null
+             then 'after part 1: plus block_change (and moderation M3''s kick)'
+           else 'STOP: neither the seven slice A/E actions nor those plus block_change (and kick, after M3)' end
 
   union all
   -- ==== part1: public.blocks =====================================================
@@ -371,16 +381,25 @@ from (
                                   and cf.name <> 'block_player_by_id')
                 and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
              then 'after moderation M2 part 1: the 52 plus block_player_by_id'
-           else 'STOP: neither 49, 52 nor 53; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 56
+                and to_regprocedure('public.block_player_by_id(uuid)') is not null
+                and to_regclass('public.table_kicks') is not null
+                and not exists (select 1 from client_fns cf
+                                where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
+                                  and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks'))
+                and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
+                and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
+             then 'after moderation M3 part 1: the 53 plus kick_player, kick_topic_allows, admin_recent_kicks'
+           else 'STOP: neither 49, 52, 53 nor 56; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
-  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id aside)',
+  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id and M3''s three aside)',
          coalesce((select string_agg(cf.name, ', ' order by cf.name) from client_fns cf
                    where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
-                     and cf.name <> 'block_player_by_id'), '(none)'),
+                     and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks')), '(none)'),
          case when exists (select 1 from client_fns cf
                            where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
-                             and cf.name <> 'block_player_by_id')
+                             and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks'))
               then 'STOP: paste back' else '' end
 
   union all

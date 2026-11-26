@@ -356,7 +356,6 @@ export function soundSeatId(t: { spectating: boolean; viewerId: string; myId: st
 // The DEAL is not played for a spectator: only the deal animation starts it,
 // and a spectator has no deal animation.
 
-export const SPECTATOR_REMOVE_CONFIRM = "They can't watch this table again.";
 
 // ---------------------------------------------------------------------------
 // THE SPECTATOR'S WAITING ROOM (the table's own waiting screens, read-only).

@@ -26,7 +26,8 @@
 --   K3  attempt_log_action_check allows exactly the seven actions (the five
 --       slice A ones plus game_start and follow_change) -- or, once
 --       moderation M1 part 1 is in (public.blocks exists), exactly those
---       eight with block_change.
+--       eight with block_change -- or, once moderation M3 part 1 is in
+--       (public.table_kicks exists), exactly those nine with kick.
 --   K4  the cleanup deletes rows older than 7 days and keeps the rest: of
 --       the temporary account's rows at 8 days, 7 days and a minute, 6 days
 --       and 23 hours, and now, the last two stay; afterwards no row older
@@ -46,6 +47,7 @@ declare
   v_ok boolean;
   v_state text;
   v_state2 text;
+  v_want int;
 begin
   if to_regprocedure('public.cleanup_attempt_log()') is null then
     raise exception 'SETUP: slice-e-part1.sql has not run (cleanup_attempt_log() is missing).';
@@ -81,20 +83,27 @@ begin
 
   -- [K3] The seven actions -- eight with block_change once moderation M1
   -- part 1 is in (its table exists; slice-e-grants-verification.sql decides
-  -- the same way).
+  -- the same way) -- nine with kick once moderation M3 part 1 is in
+  -- (public.table_kicks exists). The expected count goes into a variable
+  -- first (a CASE inside an IF condition is a syntax trap in PL/pgSQL).
   select pg_get_constraintdef(con.oid) into v_txt
   from pg_constraint con
   where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check';
+  v_want := (case when to_regclass('public.table_kicks') is not null then 9
+                  when to_regclass('public.blocks') is not null then 8
+                  else 7 end);
   if v_txt is null
-     or (length(v_txt) - length(replace(v_txt, '::text', ''))) / 6
-          <> (case when to_regclass('public.blocks') is not null then 8 else 7 end)
+     or (length(v_txt) - length(replace(v_txt, '::text', ''))) / 6 <> v_want
      or v_txt !~ '''create_table''' or v_txt !~ '''create_computer_table''' or v_txt !~ '''join'''
      or v_txt !~ '''watch''' or v_txt !~ '''code_guess''' or v_txt !~ '''game_start''' or v_txt !~ '''follow_change'''
-     or (to_regclass('public.blocks') is not null and v_txt !~ '''block_change''') then
+     or (v_want >= 8 and v_txt !~ '''block_change''')
+     or (v_want = 9 and v_txt !~ '''kick''') then
     raise exception 'FAIL [K3] attempt_log_action_check is "%"; expected exactly %.', coalesce(v_txt, 'missing'),
-      case when to_regclass('public.blocks') is not null
-           then 'the eight actions (the seven slice A/E ones plus block_change: moderation M1 part 1 is in)'
-           else 'the seven actions (the five slice A ones plus game_start and follow_change)' end;
+      (case when v_want = 9
+            then 'the nine actions (the seven slice A/E ones plus block_change and kick: moderation M3 part 1 is in)'
+            when v_want = 8
+            then 'the eight actions (the seven slice A/E ones plus block_change: moderation M1 part 1 is in)'
+            else 'the seven actions (the five slice A ones plus game_start and follow_change)' end);
   end if;
   v_checks := v_checks + 1;
 

@@ -67,8 +67,10 @@
 --       definer, stable, and has search_path set to ''.
 --   C2  grants: authenticated can execute it; anon, service_role and PUBLIC
 --       can't.
---   C3  the two policies on realtime.messages, as above. (Any OTHER policies
---       on realtime.messages are counted in the verdict, for the record.)
+--   C3  the two policies on realtime.messages, as above, and no UNKNOWN
+--       policy on it (moderation M3's "table kicks: people at the table
+--       receive" is known once kick_topic_allows exists; the verdict names
+--       it). Any other policy fails C3.
 --   C4  nothing stored: no relation with "chat" in its name in any
 --       non-system schema, no storage bucket (or object in one) with "chat"
 --       in its name, no other "chat" function in public, and
@@ -215,10 +217,24 @@ begin
                      where p.schemaname = 'realtime' and p.tablename = 'messages'
                        and p.policyname = 'table chat: members send'), 'missing');
   end if;
+  -- UNKNOWN policies: anything but the two table-chat ones -- and, once
+  -- moderation M3 part 1 is in (kick_topic_allows exists), its one SELECT
+  -- policy for kicks: topics, which can't match a chat topic. Policies are
+  -- OR'ed, so an unknown one fails here.
   select count(*) into v_others
   from pg_policies p
   where p.schemaname = 'realtime' and p.tablename = 'messages'
-    and p.policyname not in ('table chat: members receive', 'table chat: members send');
+    and p.policyname not in ('table chat: members receive', 'table chat: members send')
+    and not (p.policyname = 'table kicks: people at the table receive'
+             and p.cmd = 'SELECT'
+             and to_regprocedure('public.kick_topic_allows(text)') is not null);
+  if v_others <> 0 then
+    raise exception 'FAIL [%] % unknown polic(ies) on realtime.messages: %.', 'C3', v_others,
+      (select string_agg(p.policyname::text, ', ' order by p.policyname)
+       from pg_policies p
+       where p.schemaname = 'realtime' and p.tablename = 'messages'
+         and p.policyname not in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive'));
+  end if;
   v_checks := v_checks + 1;
 
   -- [C4] Nothing stored.
@@ -613,6 +629,9 @@ begin
   end if;
 
   raise exception 'ALL % CHECKS PASSED (rolled back).% Other policies on realtime.messages: %.',
-    v_checks, v_skips, v_others;
+    v_checks, v_skips, v_others::text
+    || (case when exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'
+                         and p.policyname = 'table kicks: people at the table receive')
+          then ' (plus moderation M3''s kicks policy)' else '' end);
 end;
 $$;

@@ -12,6 +12,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { existsSync, readdirSync, readFileSync as readFileSyncRaw, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import {
   WINGS_ASPECT,
   WINGS_BADGE,
@@ -406,7 +407,6 @@ import {
   mutedAtTable,
   mutedMark,
   mutedMarkText,
-  PLAYER_KICK_UNAVAILABLE,
   personPopupButtons,
   shouldAskToBlock,
 } from "../lib/personMenu";
@@ -424,6 +424,20 @@ import {
   withMuted,
   withoutMuted,
 } from "../lib/chatMute";
+import {
+  KICK_EVENT,
+  KICK_FAILED_TEXT,
+  KICK_GAME_LINE,
+  isKickRefusal,
+  kickConfirm,
+  kickFailureText,
+  kickNoticeAction,
+  kickTopic,
+  kickedNotice,
+  parseKickNotice,
+  recentKickLine,
+  recentKicksFromRows,
+} from "../lib/kicks";
 import { cardName, comboText, handBreakdown, type HandBreakdown } from "../lib/handBreakdown";
 import { scoreHand } from "../lib/scoring";
 import {
@@ -1995,9 +2009,9 @@ check("Spectator chat: a spectator who leaves the list is dropped; the host's cl
   const hook = readFileSync("components/table/useTableChat.ts", "utf8");
   strictEqual(/const member = rosterRef\.current\.find\(\(m\) => m\.user_id === senderId\);\s*\/\/[^\n]*\n\s*if \(!member\) return;/.test(hook), true);
   strictEqual(hook.includes("const others = on ? roster.map((m) => m.user_id).filter((id) => id !== myUserId).sort() : [];"), true);
-  // The host's Remove: the list loses them on success, before the next read.
+  // The host's Kick (moderation M3, the old Remove): the list loses them on success, before the next read.
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(/if \(rpcError\) \{\s*setRemoveError\(rpcError\.message\);\s*return;\s*\}\s*setSpectatorList\(\(list\) => withoutSpectator\(list, userId\)\);/.test(view), true);
+  strictEqual(/return;\s*\}\s*setSpectatorList\(\(list\) => withoutSpectator\(list, ask\.userId\)\);/.test(view), true);
 });
 check("Spectator chat: Kick (the old Remove) is the host's only -- the list's rows and the chat card's eye", () => {
   strictEqual(canRemoveSpectator({ isHost: true, spectating: false, targetIsSpectator: true }), true);
@@ -2006,19 +2020,18 @@ check("Spectator chat: Kick (the old Remove) is the host's only -- the list's ro
   strictEqual(canRemoveSpectator({ isHost: true, spectating: false, targetIsSpectator: false }), false, "never a player");
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(view.includes("const hostMayRemove = canRemoveSpectator({ isHost, spectating, targetIsSpectator: true });"), true);
-  strictEqual(view.includes("canRemove={hostMayRemove}"), true);
+  strictEqual(view.includes("canKick={hostMayRemove}"), true);
   strictEqual(/onRemoveSpectator=\{\s*hostMayRemove\s*\?/.test(view), true);
-  // Through playerRpc (refused for a spectator before anything is sent), guarded twice.
-  strictEqual(view.includes('playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId })'), true);
-  strictEqual(/async function handleRemoveSpectator\(userId: string, name: string\) \{\s*if \(spectating\) return;[^\n]*\n\s*if \(!table \|\| !hostMayRemove \|\| removeBusy\) return;/.test(view), true);
+  // Moderation M3: kick_player through lib/kicks.ts, the host only (never a spectator).
+  strictEqual(view.includes("const result = await writeKick(table.id, ask.userId);"), true);
+  strictEqual(view.includes("if (!ask || !table || !popupIsHost || kickBusyRef.current) return;"), true);
   // The card: the eye is a button only when the host's handler is passed; a 44px layer; the confirm is a native dialog.
   const ui = readFileSync("components/table/TableChat.tsx", "utf8");
   strictEqual(ui.includes("onRemove={m.spectator && onRemoveSpectator ? () => onRemoveSpectator(m.senderId, m.name) : undefined}"), true);
   strictEqual(/\.chat-eye-tap::after \{[^}]*width: 44px;[^}]*height: 44px;/.test(readFileSync("app/globals.css", "utf8")), true);
   const list = readFileSync("components/table/SpectatorsList.tsx", "utf8");
   strictEqual(list.includes("d.showModal()"), true, "the top layer: above the chat portal (55), counts (62), composer (70)");
-  strictEqual(list.includes("{canRemove && ("), true);
-  strictEqual(list.includes("{SPECTATOR_REMOVE_CONFIRM}"), true);
+  strictEqual(list.includes("{canKick && ("), true);
   strictEqual(/\.person-btn \{[^}]*min-height: 44px;[^}]*border-radius: 12px;/.test(readFileSync("app/globals.css", "utf8")), true);
   // The removed spectator goes home with the message (the heartbeat), the only forced exit home.
   deepStrictEqual(heartbeatStep("removed"), { kind: "home", text: REMOVED_TEXT });
@@ -2146,7 +2159,7 @@ check("Watching: every action flag of the shared table view is off when spectati
   const handlers = [...view.matchAll(/\n  (?:async )?function (handle\w+|run\w+Action)\(/g)].map((m) => m[1]);
   deepStrictEqual([...handlers].sort(), [
     "handleAcknowledgeCut", "handleConfirmCount", "handleDiscard", "handleDrawCutCard", "handleLeave", "handleNextHand",
-    "handlePlayCard", "handleRemoveSpectator", "handleSeatMove", "handleStartNewGame", "runCountAction", "runWinAction",
+    "handlePlayCard", "handleSeatMove", "handleStartNewGame", "runCountAction", "runWinAction",
   ]);
   for (const name of handlers) {
     // The handler's signature line ends with "{", and its first statement is the guard.
@@ -2272,10 +2285,10 @@ check("Watching: the RPC allowlist -- the spectator route and its own modules ca
     strictEqual(data.includes('supabase.rpc("join_table_by_code", { p_code: code, p_preview: true })'), true, "only ever a preview");
   }
   strictEqual(codeOnly(readFileSync("lib/spectatorData.ts", "utf8")).includes('supabase.rpc("get_table_spectators", { p_table_id: tableId })'), true);
-  // remove_spectator: only in the shared view, only through playerRpc.
+  // remove_spectator: no longer called by the app at all (moderation M3:
+  // the host's Kick is kick_player, through lib/kicks.ts).
   const viewSrc = codeOnly(readFileSync("components/table/TableView.tsx", "utf8"));
-  strictEqual((viewSrc.match(/remove_spectator/g) ?? []).length, 1);
-  strictEqual(viewSrc.includes('playerRpc("remove_spectator"'), true);
+  strictEqual((viewSrc.match(/remove_spectator/g) ?? []).length, 0);
   // The shared view: one supabase.rpc, inside playerRpc, refused for a spectator;
   // NO direct write at all since step 3 slice A: the seat is
   // join_table_by_code through playerRpc, in takeSeat, which a spectator
@@ -2303,7 +2316,7 @@ check("Private tables (step 3 slice D): a non-member reads a private table throu
   strictEqual(view.includes("const isMember = previewed ? previewSeated : !seatsError && seated.includes(session!.user.id);"), true);
   strictEqual(view.includes("? { data: previewed.gameLive ? { id: \"live\" } : null, error: null }"), true);
   // The stale-tab check: no row -> the preview by id; not_found -> the ended screen.
-  strictEqual(/checkTableEndedRef\.current = \(tableId: string\) => \{\s*if \(spectating \|\| leavingRef\.current\) return;[\s\S]{0,600}await playerRpc\("join_table_by_code", \{\s*p_code: code,\s*p_table_id: tableId,\s*p_preview: true,\s*\}\);[\s\S]{0,300}if \(previewFromRow\(previewData\)\?\.outcome !== "not_found"\) return;\s*setClosedHumanTable\(true\);\s*setError\(TABLE_ENDED_TEXT\);/.test(view), true, "stale tab: preview by id");
+  strictEqual(/checkTableEndedRef\.current = \(tableId: string\) => \{\s*if \(spectating \|\| leavingRef\.current\) return;[\s\S]{0,600}(?:await )?playerRpc\("join_table_by_code", \{\s*p_code: code,\s*p_table_id: tableId,\s*p_preview: true,\s*\}\);[\s\S]{0,900}if \(previewFromRow\(previewData\)\?\.outcome !== "not_found"\) return;\s*setClosedHumanTable\(true\);\s*setError\(TABLE_ENDED_TEXT\);/.test(view), true, "stale tab: preview by id");
   // Every preview call in the view is a preview (seats nobody) or the seat in takeSeat.
   const calls = [...view.matchAll(/playerRpc\("join_table_by_code", \{([^}]*)\}/g)].map((m) => m[1]);
   strictEqual(calls.length, 5, "bare-code preview, by-id preview, stale-tab preview, the Block List entry check (moderation M1), takeSeat");
@@ -6495,7 +6508,6 @@ check("person popup: Mute or Unmute for everyone, Kick for the host only; no Hid
     { action: "kick", label: "Kick" },
   ]);
   deepStrictEqual(personPopupButtons({ muted: true, isHost: true }).map((b) => b.label), ["Unmute", "Kick"]);
-  strictEqual(PLAYER_KICK_UNAVAILABLE, "Kicking players isn't available yet.");
   strictEqual(mutedMark({ muted: false, blocked: false }), null);
   strictEqual(mutedMark({ muted: true, blocked: false }), "muted");
   strictEqual(mutedMark({ muted: true, blocked: true }), "blocked", "blocked wins");
@@ -6595,15 +6607,12 @@ check("eye list: each other person's row has [Mute/Unmute]; the host's also [Kic
   const row = list.slice(list.indexOf("{spectators.map((s) => ("), list.indexOf("</ul>"));
   strictEqual(row.includes("<PersonMuteButton userId={s.userId} name={nameOf(s)} />"), true);
   strictEqual(row.indexOf("<PersonMuteButton") > row.indexOf("{nameOf(s)}</span>"), true, "after the name");
-  strictEqual(row.indexOf("<PersonMuteButton") < row.indexOf("{canRemove && ("), true, "Mute, then the host's Kick");
-  strictEqual(/\{canRemove && \(\s*<button[\s\S]*?onClick=\{\(\) => onAskRemove\(s\.userId, nameOf\(s\)\)\}[\s\S]*?className="person-btn"[\s\S]*?aria-label=\{`Kick \$\{nameOf\(s\)\}`\}\s*>\s*Kick\s*<\/button>/.test(row), true);
+  strictEqual(row.indexOf("<PersonMuteButton") < row.indexOf("{canKick && ("), true, "Mute, then the host's Kick");
+  strictEqual(/\{canKick && \(\s*<button[\s\S]*?onClick=\{\(\) => onAskKick\(s\.userId, nameOf\(s\)\)\}[\s\S]*?className="person-btn"[\s\S]*?aria-label=\{`Kick \$\{nameOf\(s\)\}`\}\s*>\s*Kick\s*<\/button>/.test(row), true);
   strictEqual(/>\s*Remove\s*<|`Remove |"Remove"/.test(row), false, "no Remove button left");
   strictEqual(row.includes("<PersonMark userId={s.userId}>"), true);
-  // The confirm: Kick wording, the same remove path.
-  strictEqual(list.includes("Kick {mode.name}?"), true);
-  strictEqual(list.includes('{busy ? "Kicking..." : "Kick"}'), true);
-  strictEqual(list.includes("onClick={() => onConfirmRemove(mode.userId, mode.name)}"), true);
-  strictEqual(/Remove \{mode\.name\}|Removing\.\.\./.test(list), false);
+  // The confirm is TableView's one kick confirm (moderation M3), not the list's own.
+  strictEqual(/Remove \{mode\.name\}|Removing\.\.\.|Kick \{mode\.name\}/.test(list), false);
   // The inline Mute: only for another person at a human table; Mute or Unmute by what I did.
   const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
   const mute = menu.slice(menu.indexOf("export function PersonMuteButton"), menu.indexOf("export function PersonMark"));
@@ -6611,9 +6620,9 @@ check("eye list: each other person's row has [Mute/Unmute]; the host's also [Kic
   strictEqual(mute.includes("onClick={() => (muted ? mod.unmute(userId) : mod.mute(userId, name))}"), true);
   strictEqual(mute.includes('{muted ? "Unmute" : "Mute"}'), true);
   strictEqual(/kick|Kick/.test(mute), false, "the list's Kick is the host's own button, never here");
-  // A non-host sees no Kick: the button needs canRemove, which is the host's only.
+  // A non-host sees no Kick: the button needs canKick, which is the host's only.
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(view.includes("canRemove={hostMayRemove}"), true);
+  strictEqual(view.includes("canKick={hostMayRemove}"), true);
 });
 check("person popup: the composer lists only the people at THIS table I muted, each with Unmute", () => {
   const roster = [
@@ -6643,28 +6652,202 @@ check("person popup: the composer lists only the people at THIS table I muted, e
   strictEqual(view.includes("if (myUserId && chatTableId) unmuteSender(myUserId, chatTableId, userId);"), true);
   strictEqual(view.includes('const mutedIds = useMemo(() => (mutedRaw ? mutedRaw.split(",") : []), [mutedRaw]);'), true);
 });
-check("host Kick: a spectator gets only the existing remove path, then the block question; a player gets the placeholder", () => {
+// ---- Kick (moderation M3: lib/kicks.ts, docs/sql/moderation-m3-*.sql) ------
+// Code only: comments may name the RPCs.
+const m3CodeOnly = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+check("kick: the confirm, the notice, the topic, and what a notice does on my screen", () => {
+  deepStrictEqual(kickConfirm("Bo", { playerInLiveGame: true }), {
+    title: "Kick Bo?",
+    body: "This ends the current game for everyone.",
+    yesLabel: "Kick",
+    noLabel: "Cancel",
+  });
+  deepStrictEqual(kickConfirm("Bo", { playerInLiveGame: false }), { title: "Kick Bo?", body: "", yesLabel: "Kick", noLabel: "Cancel" });
+  strictEqual(KICK_GAME_LINE, "This ends the current game for everyone.");
+  const n = kickedNotice("Bo");
+  strictEqual(`${n.title} ${n.body}`, "Bo was kicked from the table. Would you like to add them to your Block list?");
+  strictEqual(n.yesLabel, "Yes, block");
+  strictEqual(n.noLabel, "No, thanks");
+  strictEqual(kickTopic("AAAAAAAA-1111-2222-3333-444444444444"), "kicks:aaaaaaaa-1111-2222-3333-444444444444");
+  strictEqual(KICK_EVENT, "kick");
+  const id = "aaaaaaaa-1111-2222-3333-444444444444";
+  deepStrictEqual(parseKickNotice({ kicked_id: id, nickname: "  Bo ", at: 5, host_id: "x" }), { kickedId: id, nickname: "Bo", at: 5 });
+  deepStrictEqual(parseKickNotice({ kicked_id: id, nickname: "" }), { kickedId: id, nickname: "A player", at: 0 });
+  for (const bad of [null, "x", {}, { kicked_id: "nope" }, { kicked_id: id.toUpperCase() }]) strictEqual(parseKickNotice(bad), null);
+  const notice = { kickedId: id, nickname: "Bo", at: 1_000_000_000 };
+  const base = { notice, myUserId: "me", iAmHost: false, blocked: false, alreadyShown: false, openedAt: 1_000_000_000 };
+  strictEqual(kickNoticeAction(base), "ask");
+  strictEqual(kickNoticeAction({ ...base, myUserId: id }), "self", "I was kicked");
+  strictEqual(kickNoticeAction({ ...base, myUserId: id, iAmHost: true }), "self");
+  strictEqual(kickNoticeAction({ ...base, iAmHost: true }), "ignore", "the host gets their own question");
+  strictEqual(kickNoticeAction({ ...base, blocked: true }), "ignore", "already blocked");
+  strictEqual(kickNoticeAction({ ...base, alreadyShown: true }), "ignore", "once each");
+  strictEqual(kickNoticeAction({ ...base, myUserId: null }), "ignore");
+  strictEqual(kickNoticeAction({ ...base, openedAt: notice.at + 5 * 60 * 1000 + 1 }), "ignore", "older than this screen");
+  strictEqual(kickNoticeAction({ ...base, openedAt: notice.at + 60 * 1000 }), "ask", "a little clock difference is fine");
+  strictEqual(isKickRefusal({ message: "You can't join this table." }), true);
+  strictEqual(isKickRefusal({ message: "This table has ended." }), false);
+  strictEqual(isKickRefusal(null), false);
+  for (const m of ["Only the host can kick.", "You can't kick yourself.", "You have kicked 20 people in the last hour. Please try again a little later."]) {
+    strictEqual(kickFailureText({ message: m }), m);
+  }
+  strictEqual(kickFailureText({ message: "permission denied for function kick_player" }), KICK_FAILED_TEXT);
+  const rows = recentKicksFromRows([
+    { kicked_at: "2026-11-25T10:00:00Z", table_id: "t", table_code: "0412", host_nickname: "Ann", kicked_nickname: "Bo", kicked_role: "player", game_live: true },
+    { kicked_at: "2026-11-25T09:00:00Z", table_id: "t", table_code: "0412", host_nickname: null, kicked_nickname: null, kicked_role: "absent", game_live: false },
+    { nope: 1 },
+  ]);
+  deepStrictEqual(rows.map(recentKickLine), [
+    "Table 0412: Ann kicked Bo (player, game ended)",
+    "Table 0412: A deleted account kicked Unnamed player (had just left)",
+  ]);
+  deepStrictEqual(recentKicksFromRows(null), []);
+});
+check("kick: the placeholder is gone; every Kick asks the one confirm, then only writeKick (kick_player)", () => {
+  for (const f of ["lib/personMenu.ts", "components/table/TableView.tsx", "components/table/PersonMenu.tsx"]) {
+    strictEqual(/PLAYER_KICK_UNAVAILABLE|isn't available yet/.test(readFileSync(f, "utf8")), false, f);
+  }
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  const kick = view.slice(view.indexOf("const kickFromPopup = useCallback("), view.indexOf("const blockAskText ="));
-  strictEqual(kick.includes("if (!popupIsHost) return;"), true, "never for a non-host");
-  // A spectator: the list's own Kick confirm (the old Remove's), nothing sent yet.
-  strictEqual(/if \(watching\) \{\s*setRemoveError\(null\);\s*setSpectatorsDialog\(\{ kind: "confirm", userId, name \}\);\s*return;\s*\}/.test(kick), true);
-  // A player: the table's error line, and nothing changes.
-  strictEqual(kick.includes("setChatBlockNote(PLAYER_KICK_UNAVAILABLE);"), true);
-  strictEqual(/playerRpc|\.rpc\(|setMembers|leave_table|muteSender|setBlockAsk/.test(kick), false, "a player's Kick changes nothing");
-  // The confirmed Kick: remove_spectator only, then (worked) the block question unless blocked; failed: the error, no question.
-  const remove = view.slice(view.indexOf("async function handleRemoveSpectator(userId: string, name: string) {"));
-  const body = remove.slice(0, remove.indexOf("\n  }\n") + 4);
-  strictEqual(body.includes('const { error: rpcError } = await playerRpc("remove_spectator", { p_table_id: table.id, p_user_id: userId });'), true);
-  strictEqual((body.match(/playerRpc\(|\.rpc\(/g) ?? []).length, 1, "nothing but remove_spectator");
-  strictEqual(/if \(rpcError\) \{\s*setRemoveError\(rpcError\.message\);\s*return;\s*\}/.test(body), true);
-  strictEqual(body.indexOf("return;") < body.indexOf("setBlockAsk"), true, "a failed Kick never asks");
-  strictEqual(body.includes("if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });"), true);
-  strictEqual(view.includes("onConfirmRemove={handleRemoveSpectator}"), true);
-  // The kicked spectator's own message is unchanged.
+  // The three openers all reach askKick.
+  strictEqual(view.includes("kick: askKick,"), true, "the person popup");
+  strictEqual(view.includes("onAskKick={askKick}"), true, "the spectator list");
+  strictEqual(view.includes("onRemoveSpectator={hostMayRemove ? askKick : undefined}"), true, "a spectator's chat-card eye");
+  const ask = view.slice(view.indexOf("const askKick = useCallback("), view.indexOf("const kickBusyRef"));
+  strictEqual(ask.includes("if (!popupIsHost) return;"), true, "the host only");
+  strictEqual(ask.includes("setKickAsk({ userId, name, playerInLiveGame: isPlayer && gameLive });"), true, "the game line for a player in a live game only");
+  strictEqual(view.includes("const popupIsHost = !spectating && !!myUserId && hostId === myUserId;"), true, "never a spectator");
+  // Yes: writeKick only; a failure shows its line and asks nothing; a real kick asks "Also block?".
+  const yes = view.slice(view.indexOf("const confirmKick = useCallback("), view.indexOf("const declineKick"));
+  strictEqual(yes.includes("const result = await writeKick(table.id, ask.userId);"), true);
+  strictEqual(/playerRpc|supabase|\.rpc\(/.test(yes), false, "nothing but writeKick");
+  strictEqual(/if \(!result\.ok\) \{\s*if \(spectatorsOpen\) setRemoveError\(result\.text\);\s*else setChatBlockNote\(result\.text\);\s*return;\s*\}/.test(yes), true);
+  strictEqual(yes.indexOf("return;\n") < yes.indexOf("setBlockAsk"), true, "a failed kick never asks");
+  strictEqual(yes.includes('if (result.outcome === "kicked" && shouldAskToBlock({ blocked: blockedIds.includes(ask.userId) })) {'), true);
+  strictEqual(view.includes("onYes={() => void confirmKick()}") && view.includes("onNo={declineKick}"), true);
+  // The old remove path is gone from the app; only lib/kicks.ts calls kick_player.
+  const walk = (d: string): string[] =>
+    readdirSync(d).flatMap((f) => {
+      const p = `${d}/${f}`;
+      return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(f) ? [p] : [];
+    });
+  for (const dir of ["app", "components", "lib"]) {
+    for (const f of walk(dir)) {
+      const src = m3CodeOnly(readFileSync(f, "utf8"));
+      strictEqual(src.includes("remove_spectator"), false, `${f}: remove_spectator`);
+      strictEqual(/table_kicks/.test(src), false, `${f}: nobody reads table_kicks`);
+      if (f !== "lib/kicks.ts") strictEqual(/kick_player|admin_recent_kicks/.test(src), false, `${f}: only lib/kicks.ts calls the kick RPCs`);
+    }
+  }
+  const lib = readFileSync("lib/kicks.ts", "utf8");
+  strictEqual(lib.includes('supabase.rpc("kick_player", { p_table_id: tableId, p_target: userId })'), true);
+  strictEqual(lib.includes('supabase.rpc("admin_recent_kicks", { p_limit: limit })'), true);
+  // The spectator list no longer confirms by itself.
+  const list = readFileSync("components/table/SpectatorsList.tsx", "utf8");
+  strictEqual(/kind: "confirm"|onConfirmRemove|Kicking\.\.\.|SPECTATOR_REMOVE_CONFIRM/.test(list), false);
+  strictEqual(list.includes('export type SpectatorsListMode = { kind: "list" };'), true);
+  // AskDialog: an empty body draws no paragraph.
+  strictEqual(readFileSync("components/brand/AskDialog.tsx", "utf8").includes("{body && <p id={bodyId}>{body}</p>}"), true);
+});
+check("kick notice: one private channel, asked of everyone else once, queued, never for the host, the kicked or the blocking", () => {
+  const hook = readFileSync("components/table/useTableKicks.ts", "utf8");
+  strictEqual(hook.includes("const CHANNEL_CONFIG = { config: { private: true } };"), true);
+  strictEqual(hook.includes("const topic = kickTopic(tableId);"), true);
+  strictEqual(hook.includes('channel.on("broadcast", { event: KICK_EVENT }, ({ payload }) => {'), true);
+  strictEqual(hook.includes("const notice = parseKickNotice(payload);"), true);
+  strictEqual(/\.send\(|\.rpc\(/.test(m3CodeOnly(hook)), false, "it only listens");
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("useTableKicks({ enabled: chatOn, tableId: table?.id ?? null, onKick: handleKickNotice });"), true);
+  const handle = view.slice(view.indexOf("const handleKickNotice = useCallback("), view.indexOf("useTableKicks({"));
+  strictEqual(handle.includes("iAmHost: popupIsHost,"), true);
+  strictEqual(handle.includes("blocked: blockedIds.includes(notice.kickedId),"), true);
+  strictEqual(handle.includes("alreadyShown: shownKicksRef.current.has(notice.kickedId),"), true);
+  strictEqual(handle.includes("openedAt: openedAtRef.current,"), true);
+  strictEqual(view.includes("const kickNoticeShown = kickNotice && !blockAsk && !kickAsk && !popupOpen ? kickNotice : null;"), true, "queued behind other questions and the popup");
+  strictEqual(view.includes("onYes={() => closeKickNotice(true)}") && view.includes("onNo={() => closeKickNotice(false)}"), true);
+  strictEqual(/if \(block\) void blockFromQuestion\(first\.userId\);/.test(view), true, "Yes blocks through the same path");
+  strictEqual(readFileSync("components/table/PersonMenu.tsx", "utf8").includes("export function usePersonPopupOpen(): boolean {"), true);
+});
+check("kicked person: \"The host removed you from this table.\" and home -- players too", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const leave = view.slice(view.indexOf("const leaveAsKicked = useCallback("), view.indexOf("const checkTableEndedRef"));
+  strictEqual(leave.includes("setLobbyNotice(REMOVED_TEXT);"), true);
+  strictEqual(leave.includes('router.replace("/");'), true);
+  strictEqual(leave.includes("if (kickedExitRef.current || leavingRef.current) return;"), true, "once, and never on my own Leave");
+  const check = view.slice(view.indexOf("checkTableEndedRef.current = (tableId: string) => {"), view.indexOf("}, [spectating, code, playerRpc, leaveAsKicked]);"));
+  strictEqual(/if \(data\.status === "open"\) \{\s*const \{ error: previewError \} = await previewById\(\);\s*if \(!leavingRef\.current && isKickRefusal\(previewError\)\) leaveAsKicked\(\);/.test(check), true, "seat gone, table open");
+  strictEqual(/if \(isKickRefusal\(previewError\)\) \{\s*leaveAsKicked\(\);/.test(check), true, "seat gone, private table unreadable");
+  strictEqual(view.includes("if (spectating) void spectateRef.current?.heartbeat();"), true, "a spectator: the heartbeat answers removed");
+  strictEqual(view.includes("else if (table) checkTableEndedRef.current(table.id);"), true);
   strictEqual(REMOVED_TEXT, "The host removed you from this table.");
-  // The player-Kick line shares the block errors' line.
-  strictEqual(/const errorToast =[\s\S]*?chatBlockNote \|\|/.test(view), true);
+});
+check("admin: Recent kicks, through admin_recent_kicks only", () => {
+  const page = readFileSync("app/admin/page.tsx", "utf8");
+  strictEqual(page.includes("<AdminRecentKicks />"), true);
+  const ui = readFileSync("components/brand/AdminRecentKicks.tsx", "utf8");
+  strictEqual(ui.includes("readRecentKicks(50).then((read) => {"), true);
+  strictEqual(ui.includes("Recent kicks"), true);
+  strictEqual(/supabase|\.rpc\(|\.from\(/.test(m3CodeOnly(ui)), false);
+});
+check("M3 SQL: kick_player's notice can't undo a kick; the files' md5s match their text; join/watch are M1's plus one (M3) block", () => {
+  const p1 = readFileSync("docs/sql/moderation-m3-part1.sql", "utf8");
+  const p2 = readFileSync("docs/sql/moderation-m3-part2.sql", "utf8");
+  const m1p2 = readFileSync("docs/sql/moderation-m1-part2.sql", "utf8");
+  const body = (src: string, name: string) => {
+    const at = src.indexOf(`create or replace function public.${name}(`);
+    const start = src.indexOf("as $$", at) + "as $$".length;
+    return src.slice(start, src.indexOf("$$;", start));
+  };
+  const md5 = (s: string) => createHash("md5").update(s, "utf8").digest("hex");
+  for (const [name, src] of [
+    ["_is_kicked_from_table", p1], ["_send_kick_notice", p1], ["kick_player", p1], ["kick_topic_allows", p1], ["admin_recent_kicks", p1],
+    ["join_table_by_code", p2], ["watch_table", p2],
+  ] as const) {
+    const lf = md5(body(src, name));
+    const crlf = md5(body(src, name).replace(/\n/g, "\r\n"));
+    strictEqual(new RegExp(`--   ${name}\\s+${lf} / ${crlf}`).test(src), true, `${name}: header md5`);
+  }
+  const kp = body(p1, "kick_player");
+  strictEqual(/\n  begin\n    perform public\._send_kick_notice\(p_table_id, [^;]*\);\n  exception when others then\n    null;\n  end;\n\n  return 'kicked';\nend;\n$/.test(kp), true, "the send in its own subtransaction, last");
+  strictEqual(kp.indexOf("perform public._send_kick_notice(") > kp.indexOf("insert into public.table_kicks"), true);
+  strictEqual(kp.includes("perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('one_table:' || p_target::text, 0));"), true, "the target's person lock");
+  strictEqual(kp.indexOf("from public.games g") < kp.indexOf("from public.tables t"), true, "games then tables, leave_table's order");
+  strictEqual(kp.includes("if public.table_host(p_table_id) is distinct from v_actor then"), true);
+  strictEqual(kp.includes("perform public._attempts_guard(v_actor, 'kick', 20, interval '1 hour',"), true);
+  strictEqual(kp.indexOf("return 'already_kicked';") < kp.indexOf("_attempts_guard"), true, "a no-op counts nothing");
+  strictEqual(body(p1, "_send_kick_notice").includes("perform realtime.send(p_payload, 'kick', 'kicks:' || p_table_id::text, true);"), true);
+  // Grants and the table: least privilege.
+  for (const role of ["public", "anon", "authenticated", "service_role"]) strictEqual(p1.includes(`revoke all on table public.table_kicks from ${role};`), true, role);
+  strictEqual(/grant [a-z, ]+ on table public\.table_kicks/.test(p1), false, "no table grants");
+  strictEqual(p1.includes("alter table public.table_kicks enable row level security;"), true);
+  for (const fn of ["kick_player(uuid, uuid)", "kick_topic_allows(text)", "admin_recent_kicks(integer)"]) {
+    strictEqual(p1.includes(`grant execute on function public.${fn} to authenticated;`), true, fn);
+  }
+  for (const fn of ["_is_kicked_from_table(uuid, uuid)", "_send_kick_notice(uuid, jsonb)"]) {
+    strictEqual(p1.includes(`grant execute on function public.${fn}`), false, `${fn}: internal`);
+  }
+  strictEqual(p1.includes("'game_start', 'follow_change', 'block_change', 'kick'));"), true, "nine actions");
+  strictEqual(p1.includes('create policy "table kicks: people at the table receive"'), true);
+  strictEqual(/create policy[^\n]*\n\s*on realtime\.messages\n\s*for insert/.test(p1), false, "no insert policy");
+  strictEqual(/chat/i.test(p1.match(/create policy "[^"]*"/g)?.join() ?? ""), false, "no \"chat\" in the policy's name");
+  // join/watch: M1 part 2's bodies plus exactly the (M3) block.
+  const strip = (s: string) => s.replace(/  -- ===== \(M3\)[\s\S]*?\(M3\) CHANGED FOR MODERATION M3, KICK \(end\) =====\n(\n)?/, "");
+  strictEqual(strip(body(p2, "join_table_by_code")), body(m1p2, "join_table_by_code"));
+  strictEqual(strip(body(p2, "watch_table")).replace(/\n\n  -- ===== \(M1\)/, "\n  -- ===== (M1)"), body(m1p2, "watch_table").replace(/\n\n  -- ===== \(M1\)/, "\n  -- ===== (M1)"));
+  strictEqual((body(p2, "join_table_by_code").match(/raise exception 'You can''t join this table\.';/g) ?? []).length, 2, "M1's and M3's refusal");
+  // The verification's verdicts and the state-aware suites.
+  const v = readFileSync("docs/sql/moderation-m3-verification.sql", "utf8");
+  strictEqual(v.includes("v_expect := 17 + (case when v_live then 2 else 0 end) + (case when v_p2 then 7 else 0 end);"), true);
+  strictEqual((v.match(/v_checks := v_checks \+ 1;/g) ?? []).length, 26);
+  strictEqual(v.includes("raise exception 'm3 verification: the notice fails on purpose';"), true, "C12 makes the send fail");
+  strictEqual(readFileSync("docs/sql/slice-e-attempt-log-cleanup-verification.sql", "utf8").includes("v_want := (case when to_regclass('public.table_kicks') is not null then 9"), true);
+  strictEqual(readFileSync("docs/sql/slice-e-grants-verification.sql", "utf8").includes("v_expected_fns := v_expected_fns || array['admin_recent_kicks', 'kick_player', 'kick_topic_allows'];"), true);
+  for (const f of ["spectator-chat-verification", "table-chat-verification", "spectator-chat-precheck", "moderation-catalog"]) {
+    strictEqual(readFileSync(`docs/sql/${f}.sql`, "utf8").includes("table kicks: people at the table receive"), true, f);
+  }
+  for (const f of ["precheck", "part1", "part1-rollback", "part2", "part2-rollback", "verification"]) {
+    const raw = readFileSync(`docs/sql/moderation-m3-${f}.sql`).toString("latin1");
+    strictEqual(/(?<!\r)\n/.test(raw), false, `${f}: a bare LF`);
+  }
 });
 check("block question: Walt's words after a Mute, skipped when already blocked, closing is No, only writeBlockById", () => {
   deepStrictEqual(blockQuestion("Elsa"), {
@@ -6692,11 +6875,12 @@ check("block question: Walt's words after a Mute, skipped when already blocked, 
     "if (shouldAskToBlock({ blocked: blockedIds.includes(userId) })) setBlockAsk({ userId, name });",
   ].map((s) => mute.indexOf(s));
   strictEqual(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1])), true, "mute, drop, then ask");
-  const unmute = view.slice(view.indexOf("const unmuteInChat = useCallback("), view.indexOf("const confirmBlockAsk = useCallback("));
+  const unmute = view.slice(view.indexOf("const unmuteInChat = useCallback("), view.indexOf("const blockFromQuestion = useCallback("));
   strictEqual(unmute.includes("setBlockAsk"), false, "never after Unmute");
   // Yes: only writeBlockById (through lib/blocks.ts), a refusal in the error line, then the list re-read.
-  const yes = view.slice(view.indexOf("const confirmBlockAsk = useCallback("), view.indexOf("const declineBlockAsk = useCallback("));
-  strictEqual(yes.includes("const outcome = await writeBlockById(ask.userId);"), true);
+  const yes = view.slice(view.indexOf("const blockFromQuestion = useCallback("), view.indexOf("const declineBlockAsk = useCallback("));
+  strictEqual(yes.includes("const outcome = await writeBlockById(userId);"), true);
+  strictEqual(yes.includes("if (ask) void blockFromQuestion(ask.userId);"), true);
   strictEqual(yes.includes("setChatBlockNote(failure);"), true);
   strictEqual(yes.includes("void reloadBlocks();"), true);
   strictEqual(yes.includes("unmuteSender"), false, "the Mute stays");

@@ -16,6 +16,12 @@
 -- block_player_by_id(uuid) exists, X1 expects 53 names (the 52 plus
 -- block_player_by_id). Re-run it after M2 part 1.
 --
+-- UPDATED FOR MODERATION M3 (docs/sql/moderation-m3-part1.sql): once
+-- public.table_kicks exists, T1 expects it with NO privilege for any client
+-- role, and X1 expects 56 names (the 53 plus kick_player,
+-- kick_topic_allows and admin_recent_kicks). Re-run it after M3 part 1 and
+-- after part 2.
+--
 -- It WRITES -- one temporary function in public (X2), two temporary accounts
 -- in auth.users, and a few storage.objects rows in the avatars bucket written
 -- as one of them (rows only: no file is uploaded, and every row is rolled
@@ -93,6 +99,8 @@ declare
   v_m1 boolean := to_regclass('public.blocks') is not null;
   -- Moderation M2 part 1 is in when its function exists.
   v_m2 boolean := to_regprocedure('public.block_player_by_id(uuid)') is not null;
+  -- Moderation M3 part 1 is in when its table exists.
+  v_m3 boolean := to_regclass('public.table_kicks') is not null;
   v_expected_fns text[] := array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
@@ -120,6 +128,12 @@ begin
       raise exception 'SETUP: the expected function list has % names after moderation M2 part 1; expected 53 (M2 needs M1 part 1).', array_length(v_expected_fns, 1);
     end if;
   end if;
+  if v_m3 then
+    v_expected_fns := v_expected_fns || array['admin_recent_kicks', 'kick_player', 'kick_topic_allows'];
+    if array_length(v_expected_fns, 1) <> 56 then
+      raise exception 'SETUP: the expected function list has % names after moderation M3 part 1; expected 56 (M3 needs M1 and M2 part 1).', array_length(v_expected_fns, 1);
+    end if;
+  end if;
 
   -- ==== T: tables ===================================================================
   -- [T1] Every table's exact privileges for authenticated / anon / PUBLIC.
@@ -144,6 +158,9 @@ begin
     union all
     -- Moderation M1's Block List: no client privileges at all.
     select 'blocks', '', '' where v_m1
+    union all
+    -- Moderation M3's kick log: no client privileges at all.
+    select 'table_kicks', '', '' where v_m3
   ),
   actual as (
     select c.relname::text as tbl,
@@ -214,7 +231,7 @@ begin
                                                   where e.name not in (select o.name from open_fns o)))
   into v_bad;
   if v_bad <> '' then
-    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1): %.', array_length(v_expected_fns, 1), v_bad;
+    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1): %.', array_length(v_expected_fns, 1), v_bad;
   end if;
   v_checks := v_checks + 1;
 
