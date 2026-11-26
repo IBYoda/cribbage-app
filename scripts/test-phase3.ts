@@ -434,6 +434,8 @@ import {
   reportedBlockQuestion,
   showNoteCounter,
 } from "../lib/reports";
+import { acceptTableEvent, parseTableEvent, tableEventRole, tableEventTopic, type TableEvent } from "../lib/tableEvents";
+import { tableToStopWatching } from "../lib/spectators";
 import {
   CHAT_MUTE_KEEP_MS,
   CHAT_MUTE_LIMIT,
@@ -1585,7 +1587,7 @@ check("Slice B: the watch confirm -- a bare /watch/<code> previews first; with ?
   strictEqual(page.includes('setState({ kind: "confirm", preview: answer.preview });'), true);
   strictEqual(page.includes("setState({ kind: \"refused\", text: notFoundText(code), login: false });"), true);
   // With the id: watch_table by id; no row = closed.
-  strictEqual(page.includes("const result = await callWatchTable(code, held);"), true);
+  strictEqual(page.includes("const result = await trackedWatch(code, held);"), true);
   strictEqual(/if \("closed" in result\) \{\s*setState\(\{ kind: "closed" \}\);/.test(page), true);
   // The confirm's Watch: by the previewed id, the URL then carries it.
   strictEqual(/onWatch=\{\(\) => \{\s*heldIdRef\.current = previewed\.tableId;\s*router\.replace\(watchHref\(code, previewed\.tableId\), \{ scroll: false \}\);/.test(page), true);
@@ -1595,7 +1597,7 @@ check("Slice B: the watch confirm -- a bare /watch/<code> previews first; with ?
 });
 check("Slice B: the spectator's rewatch, the seat and Retry go by id", () => {
   const page = codeOnly(readFileSync("app/watch/[code]/page.tsx", "utf8"));
-  strictEqual(page.includes("const again = await callWatchTable(code, ticketRef.current?.tableId ?? heldIdRef.current);"), true);
+  strictEqual(page.includes("const again = await trackedWatch(code, ticketRef.current?.tableId ?? heldIdRef.current);"), true);
   // A rewatch with no row by id: closed, never the table that holds the code now.
   deepStrictEqual(rewatchStep({ closed: true }), { kind: "closed" });
   const data = codeOnly(readFileSync("lib/spectatorData.ts", "utf8"));
@@ -1981,7 +1983,7 @@ check("Spectator chat: the eye shows only while someone is watching, with the co
   // Refreshed on the safety poll, on every full refresh (game-state changes) and after a Remove.
   strictEqual(/async function pollOnce\(\) \{[\s\S]{0,2600}await loadSpectators\(tableId\);/.test(view), true);
   strictEqual(/const refreshTableState = useCallback\([\s\S]{0,500}void loadSpectators\(tableId\);/.test(view), true);
-  strictEqual(view.includes("if (list) setSpectatorList(list);"), true, "a failed read keeps the list");
+  strictEqual(view.includes("if (!list || ticket < spectatorsAppliedSeqRef.current) return;"), true, "a failed read keeps the list (and an older read never overwrites a newer one: moderation M5a)");
   // Muggins: the pill on the tag line follows the same rule.
   for (const f of ["components/table/TableShell.tsx", "components/table/SquareTable.tsx"]) {
     strictEqual(readFileSync(f, "utf8").includes("<SpectatorsEye count={spectators} onOpen={onSpectators} pill />"), true, f);
@@ -2233,7 +2235,7 @@ check("Watching: the heartbeat's answers (part C: stay through game over, closed
   strictEqual((page.match(/router\.replace\("\/"\)/g) ?? []).length, 1, "one redirect home");
   strictEqual(/if \(outcome\.kind === "home"\) \{[\s\S]{0,120}router\.replace\("\/"\);/.test(page), true);
   strictEqual(page.includes('onTableEnded: () => leave({ kind: "closed" }),'), true);
-  strictEqual(page.includes("if (!ticket || beatingRef.current || exitedRef.current) return;"), true);
+  strictEqual(page.includes("if (!ticket || beatingRef.current || exitedRef.current || stopRequestedRef.current) return;"), true);
   strictEqual(/state\.kind === "closed"[\s\S]{0,300}\{TABLE_CLOSED_TEXT\}[\s\S]{0,300}Back home/.test(page), true);
   // The table view no longer sends a spectator away when the game ends.
   const tv = readFileSync("components/table/TableView.tsx", "utf8");
@@ -7522,6 +7524,121 @@ check("reports: the admin list -- plain-text note, counts, picture flag, Delete 
   }
   const page = readFileSync("app/admin/page.tsx", "utf8");
   strictEqual(page.indexOf("<AdminRecentKicks />") > 0 && page.indexOf("<AdminReports />") > page.indexOf("<AdminRecentKicks />"), true, "after Recent kicks");
+});
+// ---- Table events (moderation M5a, docs/sql/moderation-m5a-part1.sql) ----
+check("table events: the topic, the payload, and the version rule (> for members/spectators, >= for table)", () => {
+  const T = "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5";
+  strictEqual(tableEventTopic(T.toUpperCase()), `table:${T}`);
+  deepStrictEqual(parseTableEvent({ event: "members", table_id: T, roster_version: 4 }, T), { kind: "members", tableId: T, rosterVersion: 4 });
+  deepStrictEqual(parseTableEvent({ event: "table", table_id: T, roster_version: 7, id: "x" }, T), { kind: "table", tableId: T, rosterVersion: 7 }, "Realtime's own id is ignored");
+  strictEqual(parseTableEvent({ event: "members", table_id: T, roster_version: 4 }, "00000000-0000-4000-8000-000000000000"), null, "another table");
+  strictEqual(parseTableEvent({ event: "chat", table_id: T, roster_version: 4 }, T), null, "an unknown kind");
+  strictEqual(parseTableEvent({ event: "members", table_id: T, roster_version: -1 }, T), null);
+  strictEqual(parseTableEvent({ event: "members", table_id: T, roster_version: 1.5 }, T), null);
+  strictEqual(parseTableEvent({ event: "members", table_id: T }, T), null);
+  strictEqual(parseTableEvent(null, T), null);
+  const ev = (kind: TableEvent["kind"], v: number): TableEvent => ({ kind, tableId: T, rosterVersion: v });
+  // The first event is always taken.
+  deepStrictEqual(acceptTableEvent(null, ev("members", 3)), { accept: true, lastSeen: 3 });
+  deepStrictEqual(acceptTableEvent(null, ev("table", 3)), { accept: true, lastSeen: 3 });
+  // members / spectators: strictly newer only (each bumps the version).
+  deepStrictEqual(acceptTableEvent(3, ev("members", 4)), { accept: true, lastSeen: 4 });
+  deepStrictEqual(acceptTableEvent(4, ev("members", 4)), { accept: false, lastSeen: 4 }, "a duplicate");
+  deepStrictEqual(acceptTableEvent(4, ev("spectators", 2)), { accept: false, lastSeen: 4 }, "out of order");
+  // table: carries the current version without bumping, so the same number counts.
+  deepStrictEqual(acceptTableEvent(4, ev("table", 4)), { accept: true, lastSeen: 4 });
+  deepStrictEqual(acceptTableEvent(4, ev("table", 3)), { accept: false, lastSeen: 4 }, "an older table event");
+  deepStrictEqual(acceptTableEvent(4, ev("table", 6)), { accept: true, lastSeen: 6 });
+  // A sequence: a seat, a table end at that version, a duplicate, a spectator.
+  let seen: number | null = null;
+  const taken: string[] = [];
+  for (const e of [ev("members", 5), ev("table", 5), ev("members", 5), ev("spectators", 6), ev("members", 4)]) {
+    const step = acceptTableEvent(seen, e);
+    seen = step.lastSeen;
+    if (step.accept) taken.push(`${e.kind}:${e.rosterVersion}`);
+  }
+  deepStrictEqual(taken, ["members:5", "table:5", "spectators:6"]);
+});
+check("table events: joined only once my place is confirmed, again when it changes; quiet on refusal; the poll and old listeners unchanged", () => {
+  strictEqual(tableEventRole({ available: false, spectating: false }), null);
+  strictEqual(tableEventRole({ available: false, spectating: true }), null);
+  strictEqual(tableEventRole({ available: true, spectating: false }), "player");
+  strictEqual(tableEventRole({ available: true, spectating: true }), "spectator");
+  const hook = readFileSync("components/table/useTableEvents.ts", "utf8");
+  const code = m3CodeOnly(hook);
+  strictEqual(code.includes("const CHANNEL_CONFIG = { config: { private: true } };"), true, "private");
+  strictEqual(/await supabase\.realtime\.setAuth\(\);\s*const \{ data \} = await supabase\.auth\.getSession\(\);\s*if \(cancelled \|\| !data\.session\) return;/.test(code), true, "the kick channel's token handling");
+  strictEqual(code.includes("if (!role || !tableId) return;"), true, "no place, no channel");
+  strictEqual(code.includes("}, [role, tableId]);"), true, "a new place joins again");
+  strictEqual(code.includes("if (channel) void supabase.removeChannel(channel).catch(() => null);"), true, "removed on leave / unmount");
+  strictEqual(/\.send\(|\.rpc\(|\.from\(/.test(code), false, "it only listens");
+  strictEqual(/catch \{\s*\}/.test(code) || code.includes("} catch {"), true, "a refused join stays quiet");
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("role: tableEventRole({ available: chatOn, spectating }),"), true, "chat's rule: the seat or spectator row is confirmed");
+  const handler = m3CodeOnly(view.slice(view.indexOf("const handleTableEvent = useCallback("), view.indexOf("useTableEvents({")));
+  strictEqual(handler.includes("void loadMembers(tableId);"), true);
+  strictEqual(handler.includes("await loadSpectators(tableId);"), true);
+  strictEqual(handler.includes("checkTableEndedRef.current(tableId);"), true);
+  strictEqual(/supabase|\.from\(|\.rpc\(/.test(handler), false, "no second data path: only the poll's own reads");
+  // The old listeners and the safety poll are untouched.
+  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
+  strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
+  // Chat is untouched.
+  strictEqual(/table:|tableEvent/.test(readFileSync("components/table/useTableChat.ts", "utf8")), false);
+});
+check("table events: overlapping spectator reads -- an older read that finishes last never overwrites a newer one", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const load = view.slice(view.indexOf("const loadSpectators = useCallback("), view.indexOf("// A full refresh, counted while in flight"));
+  strictEqual(load.includes("const ticket = ++spectatorsReadSeqRef.current;"), true, "each read takes a ticket before it is sent");
+  strictEqual(/const list = await readTableSpectators\(tableId\);\s*if \(!list \|\| ticket < spectatorsAppliedSeqRef\.current\) return;\s*spectatorsAppliedSeqRef\.current = ticket;\s*setSpectatorList\(list\);/.test(load), true);
+  // The rule itself, on the fast Watch -> Leave order: the Leave read (2,
+  // empty, one round trip) lands first; the Watch read (1, with a person,
+  // two round trips) lands last and is dropped.
+  let applied = 0;
+  let shown: string[] = ["(before)"];
+  const land = (ticket: number, list: string[] | null) => {
+    if (!list || ticket < applied) return;
+    applied = ticket;
+    shown = list;
+  };
+  land(2, []);
+  land(1, ["Tester 1"]);
+  deepStrictEqual(shown, []);
+  // In order, both apply; a failed newer read keeps the older result.
+  applied = 0;
+  land(1, ["Tester 1"]);
+  land(2, null);
+  deepStrictEqual(shown, ["Tester 1"]);
+});
+check("watching: Leave (or the page going away) stops for good -- no heartbeat or rewatch after it, and a watch in flight is waited for", () => {
+  // Which table to stop: a late "in" from a watch in flight wins; else the ticket's.
+  strictEqual(tableToStopWatching("t1", null), "t1");
+  strictEqual(tableToStopWatching(null, { ok: { tableId: "t2" } }), "t2", "the place the late watch just made");
+  strictEqual(tableToStopWatching("t1", { ok: { tableId: "t1" } }), "t1");
+  strictEqual(tableToStopWatching(null, { refused: "no" }), null);
+  strictEqual(tableToStopWatching(null, { closed: true }), null);
+  strictEqual(tableToStopWatching(null, null), null, "never watched: nothing to stop");
+  const page = m3CodeOnly(readFileSync("app/watch/[code]/page.tsx", "utf8"));
+  // Every watch_table goes through trackedWatch, so a stop can wait for it.
+  strictEqual((page.match(/\bcallWatchTable\(/g) ?? []).length, 1, "only inside trackedWatch");
+  strictEqual(/const call = callWatchTable\(watchCode, tableId\);\s*watchInFlightRef\.current = call;/.test(page), true);
+  // The stop: wait for a watch in flight, then stop_watching for its table (or the ticket's).
+  strictEqual(/const pending = watchInFlightRef\.current;\s*const late = pending \? await pending\.catch\(\(\) => null\) : null;\s*const tableId = tableToStopWatching\(ticketRef\.current\?\.tableId \?\? null, late\);\s*if \(tableId\) await callStopWatching\(tableId\)\.catch\(\(\) => \{\}\);/.test(page), true);
+  // Leave: the flag FIRST, then the stop, then home -- in that order.
+  const stop = page.slice(page.indexOf("onStop: () => {"), page.indexOf("[heartbeat, onLiveGame, leave, watchingTableId, stopWatchingAfterPending]"));
+  const order = ["if (exitedRef.current || stopRequestedRef.current) return;", "stopRequestedRef.current = true;", "void stopWatchingAfterPending().then(() => leave({ kind: \"home\", text: null }));"].map((x) => stop.indexOf(x));
+  strictEqual(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1])), true, "flag, stop, then home");
+  // After the flag nothing watches again: the first watch and its retries,
+  // the quiet rewatch, the heartbeat (and its answer), following a new game.
+  strictEqual(/if \(stopRequestedRef\.current\) return;\s*const result = await trackedWatch\(code, held\);\s*if \(cancelled \|\| stopRequestedRef\.current\) return;/.test(page), true);
+  strictEqual(/const rewatch = useCallback\(async \(\) => \{\s*if \(stopRequestedRef\.current \|\| exitedRef\.current\) return;/.test(page), true);
+  strictEqual(/const again = await trackedWatch\([^;]*\);\s*if \(stopRequestedRef\.current\) return;/.test(page), true, "a late rewatch answer changes nothing");
+  strictEqual(page.includes('if (stopRequestedRef.current || step.kind === "continue") return;'), true, "a not_watching after the stop never rewatches");
+  strictEqual(page.includes("if (!ticket || exitedRef.current || stopRequestedRef.current || !followGame(ticket.gameId, gameId)) return;"), true);
+  // The page going away (Back, a link): the same stop, once; the dev double mount resets the flag.
+  strictEqual(/useEffect\(\(\) => \{\s*stopRequestedRef\.current = false;\s*return \(\) => \{\s*if \(stopRequestedRef\.current\) return;\s*stopRequestedRef\.current = true;\s*void stopWatchingAfterPending\(\);\s*\};\s*\}, \[stopWatchingAfterPending\]\);/.test(page), true);
+  // stop_watching only through the stop.
+  strictEqual((page.match(/\bcallStopWatching\(/g) ?? []).length, 1);
 });
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");
