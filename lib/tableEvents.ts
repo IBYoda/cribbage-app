@@ -23,6 +23,7 @@
 // components/table/useTableEvents.ts. Tested by scripts/test-phase3.ts.
 
 import { CHAT_MAX_LENGTH } from "./tableChat";
+import { cutKeys, isZeroCount, zeroKey } from "./sounds";
 
 export type TableEventKind = "members" | "spectators" | "table";
 
@@ -145,11 +146,14 @@ export function gameEventStep(input: {
 // time across the table, in whole ms rounded DOWN (0 after a reset);
 // user_id / points / reason that award's scorer, points and reason.
 //
-// REPAIR ONLY (Walt, 2026-11-26): the old table_members listener stays the
-// live path for scores and everything they drive (the "+2" flash, the pegs,
-// the "19" splash and its sound). A scores event only arms a short wait;
-// if the screen still doesn't show that award afterwards, the roster is
-// re-read with the poll's own read. Nothing here plays, flashes or moves.
+// THE LIVE PATH (M5 final cleanup, App A; it was repair-only in M5b2): when
+// the screen doesn't show the event's award yet (scoresScreenBehind), the
+// roster is read AT ONCE -- or, if a roster read is already in flight, after
+// that one, checked again. The "+2" flash and the pegs follow the roster as
+// they follow any read. The "19" splash and its sound come from the event
+// itself (zeroFromScoresEvent), with the old table_members listener's own
+// keys, so whichever of the two arrives first plays and the other is a
+// no-op. The old listener still runs (until App B).
 export type ScoresEvent = {
   gameId: string | null;
   awardMs: number;
@@ -204,8 +208,96 @@ export function scoresScreenBehind(input: {
   return newest < input.event.awardMs;
 }
 
-// How long a scores event waits for the old listener before checking.
-export const SCORES_REPAIR_DELAY_MS = 1500;
+// THE "19" FROM A SCORES EVENT: a hand or crib counted 0 (confirm_count's
+// "hand: nothing" / "crib: nothing") in the game on screen, while it is
+// live. The keys are exactly the old listener's: the splash
+// zeroSplashKey(scorer, award time in whole ms) -- the listener reads
+// Date.parse(last_awarded_at), the same ms rounded down that award_ms
+// carries -- and the sound zeroKey(game, hand, scorer, reason). null: no
+// splash, no sound.
+export const zeroSplashKey = (userId: string, awardMs: number) => `zero:${userId}:${awardMs}`;
+
+export function zeroFromScoresEvent(
+  event: ScoresEvent,
+  screen: { gameId: string | null; status: string | null | undefined; handNo: number | null | undefined }
+): { userId: string; crib: boolean; splashKey: string; soundKey: string } | null {
+  if (!event.userId || !event.gameId || event.awardMs <= 0) return null;
+  if (!isZeroCount(event.points, event.reason)) return null;
+  if (event.gameId !== screen.gameId || screen.status !== "active") return null;
+  const reason = event.reason as string;
+  return {
+    userId: event.userId,
+    crib: reason.startsWith("crib:"),
+    splashKey: zeroSplashKey(event.userId, event.awardMs),
+    soundKey: zeroKey(event.gameId, screen.handNo, event.userId, reason),
+  };
+}
+
+// LIVE vs CATCH-UP (M5 final cleanup, App A). A read made BECAUSE a game
+// event arrived is live: what it finds just happened, so it may play the
+// table's sounds, splashes and the "player left" banner. The poll, a
+// visibility change and the catch-up on subscribe stay catch-up: they only
+// show what already happened, never play it. What a live read of the
+// event's game row (the row as read, the game on screen when the event
+// arrived and now, and whether a catch-up is pending) asks for -- each
+// with the old games listener's own condition and keys:
+//   rowSounds   the cut and discard card sounds (cutKeys / discardKey):
+//               the game on screen, live, no catch-up pending;
+//   shuffle     the cut has just opened (cutting, no card cut yet):
+//               cutOpenKey;
+//   won         the game was won and nobody has tapped New Game yet: the
+//               game-end sound and God's splash (endKey, godloss:/wings:);
+//   playerLeft  the game on screen when the event arrived was ended by a
+//               player leaving: the banner;
+//   ended       that game ended: the full refresh (the poll's own repair
+//               for "the live game is gone") brings the result.
+export type LiveGameRow = {
+  id: string;
+  status: string;
+  ended_reason: string | null;
+  ready_by: string[] | null;
+  deal_cut: { user_id: string }[][] | null;
+};
+
+const LIVE_STATUSES = ["cutting", "active"];
+
+export function gameEventLiveEffects(input: {
+  row: LiveGameRow | null;
+  onScreenAtArrival: string | null;
+  onScreenNow: string | null;
+  catchingUp: boolean;
+}): { rowSounds: boolean; shuffle: boolean; won: boolean; playerLeft: boolean; ended: boolean } {
+  const none = { rowSounds: false, shuffle: false, won: false, playerLeft: false, ended: false };
+  const row = input.row;
+  if (!row) return none;
+  const live = LIVE_STATUSES.includes(row.status);
+  if (live) {
+    return {
+      ...none,
+      rowSounds: row.id === input.onScreenNow && !input.catchingUp,
+      shuffle: row.status === "cutting" && cutKeys(row.id, row.deal_cut).length === 0,
+    };
+  }
+  const wasOnScreen = row.id === input.onScreenAtArrival;
+  return {
+    ...none,
+    won: row.ended_reason === "won" && (row.ready_by ?? []).length === 0,
+    playerLeft: row.ended_reason === "player_left" && wasOnScreen,
+    ended: wasOnScreen,
+  };
+}
+
+// THE PLAYS A LIVE READ ANNOUNCES: those newer than the newest play on
+// screen just before the read (floorSeq), in seq order -- never one the
+// screen already had (a refresh shows plays without playing them). Each is
+// a card sound (playKey) or, for a go, the Go splash (goSplashKey): the old
+// game_plays listener's keys.
+export const goSplashKey = (gameId: string, handNo: number | null | undefined, segment: number, userId: string) =>
+  `go:${gameId}:${handNo}:${segment}:${userId}`;
+
+export function playsToAnnounce<T extends { seq: number }>(rows: readonly T[], floorSeq: number): T[] {
+  return rows.filter((r) => r.seq > floorSeq).sort((a, b) => a.seq - b.seq);
+}
 
 // CHAT EVENTS (moderation M5c1, docs/sql/moderation-m5c1-part1.sql): a chat
 // message, sent by send_table_message (never by a client directly) on the

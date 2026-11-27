@@ -42,10 +42,14 @@ import { ReportDialog } from "@/components/table/ReportDialog";
 import { useTableKicks } from "@/components/table/useTableKicks";
 import { useTableEvents } from "@/components/table/useTableEvents";
 import {
-  SCORES_REPAIR_DELAY_MS,
+  gameEventLiveEffects,
   gameEventStep,
+  goSplashKey,
+  playsToAnnounce,
   scoresScreenBehind,
   tableEventRole,
+  zeroFromScoresEvent,
+  zeroSplashKey,
   type ChatEvent,
   type GameEvent,
   type ScoresEvent,
@@ -430,6 +434,23 @@ function revealKey(row: {
 // played. Both block a second game at the table, and both must be found by the
 // client, the admin view, leave-table and the timeout sweep.
 const LIVE_GAME_STATUSES = ["cutting", "active"];
+// A game event's LIVE read (handleGameEvent): what gameEventLiveEffects and
+// the shared live effects need from the row.
+const LIVE_ROW_COLUMNS = "id, status, ended_reason, ready_by, deal_cut, discarded_by, hand_no, players, winner_id";
+// DEV ONLY (M5 final cleanup, App A hand test): with localStorage
+// "nobs-dev-old-listeners-off" set to "1", this window skips the two old
+// postgres_changes channels (members/games/tables, and the plays), so only
+// the new table-channel events can play a sound or a splash here. Never in
+// a production build (NODE_ENV), nothing shown; removed with App B.
+const DEV_OLD_LISTENERS_OFF_KEY = "nobs-dev-old-listeners-off";
+function devOldListenersOff(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  try {
+    return window.localStorage.getItem(DEV_OLD_LISTENERS_OFF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 // HAND SIZES come from handSizes() in lib/phase3.ts, by the number of
 // players: 6 dealt, 2 discarded and 4 kept with 2 players (as always); 5, 1
@@ -1068,16 +1089,19 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // the same game and hand are still on screen (playsCatchUpApplies): plays
   // are emptied at each next hand and their seq starts again. No sound or
   // splash: like any read, it only shows what already happened.
-  const catchUpPlays = useCallback(async (gameId: string) => {
+  // Returns the plays it merged (null when it applied nothing): a game
+  // event's LIVE read announces the new ones (handleGameEvent).
+  const catchUpPlays = useCallback(async (gameId: string): Promise<PlayEvent[] | null> => {
     const issued = { gameId, handNo: activeGameRef.current?.hand_no };
     const { data, error } = await supabase
       .from("game_plays")
       .select("seq, segment, user_id, kind, card, count_after, created_at")
       .eq("game_id", gameId)
       .order("seq", { ascending: true });
-    if (error || !data) return;
-    if (!playsCatchUpApplies(issued, { gameId: activeGameIdRef.current, handNo: activeGameRef.current?.hand_no })) return;
+    if (error || !data) return null;
+    if (!playsCatchUpApplies(issued, { gameId: activeGameIdRef.current, handNo: activeGameRef.current?.hand_no })) return null;
     setPlays((current) => mergePlays(current, data as PlayEvent[]));
+    return data as PlayEvent[];
   }, []);
 
   // Fetches every hand and the crib this player is allowed to see. No
@@ -1261,7 +1285,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // profiles are read only for players not already on screen (refreshProfiles:
   // everyone's, so name and avatar edits arrive -- every few polls). Otherwise
   // (a full refresh), also for a changed seat or a name never loaded.
-  const loadMembers = useCallback(async (tableId: string, poll = false, refreshProfiles = false): Promise<string | null> => {
+  const readMembers = useCallback(async (tableId: string, poll = false, refreshProfiles = false): Promise<string | null> => {
     for (let attempt = 0; ; attempt++) {
       const ticket = ++membersReadSeqRef.current;
       const eventsAtIssue = membersEventSeqRef.current;
@@ -1343,6 +1367,21 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       return null;
     }
   }, [tableSound, applyWings]);
+  // Every roster read goes through here, so the one in flight (if any) is
+  // known: a scores event waits for it instead of starting another
+  // (handleScoresEvent).
+  const membersPendingRef = useRef<Promise<string | null> | null>(null);
+  const loadMembers = useCallback(
+    (tableId: string, poll = false, refreshProfiles = false): Promise<string | null> => {
+      const pending = readMembers(tableId, poll, refreshProfiles);
+      membersPendingRef.current = pending;
+      void pending.finally(() => {
+        if (membersPendingRef.current === pending) membersPendingRef.current = null;
+      });
+      return pending;
+    },
+    [readMembers]
+  );
 
   // Fetches the current active game + full roster for a table. Used both for
   // the initial load and to "catch up" after the realtime connection drops
@@ -2190,9 +2229,133 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     setDiscardStatus("idle");
   }
 
+  // LIVE EFFECTS, SHARED (M5 final cleanup, App A): the old listeners below
+  // and a game event's live read (handleGameEvent) call the SAME functions
+  // with the SAME keys, so whichever arrives first plays and the other is a
+  // no-op -- in either order. Sounds and splashes are claimed by their own
+  // keys (useTableSounds, useSplash); the two effects that read or show
+  // something else first are claimed here: the won game's effects (won:<id>,
+  // before their score reads) and the "player left" banner (left:<id>, so a
+  // banner dismissed after the first path never comes back from the second).
+  const liveClaimsRef = useRef(new Set<string>());
+  const claimLive = useCallback((key: string) => {
+    if (liveClaimsRef.current.has(key)) return false;
+    liveClaimsRef.current.add(key);
+    return true;
+  }, []);
+  // A CUT CARD OR A DISCARD, in sound. Neither has an event of its own:
+  // the row just lists who has, and repeats it on every later UPDATE,
+  // so each is keyed by player and heard once. A discard's one list
+  // entry stands for all that player's cards (2, or 1 with 3 or 4
+  // players): one sound each. Not during a catch-up, which marks them
+  // heard instead (see soundCatchUpRef).
+  const playRowSounds = useCallback(
+    (row: { id: string; hand_no: number | null; deal_cut: DealCutRound[] | null; discarded_by: string[] | null; players: string[] | null }) => {
+      if (soundCatchUpRef.current) return;
+      for (const key of cutKeys(row.id, row.deal_cut)) tableSound.card(key);
+      // Another player's cards fly to the crib here when the toss is
+      // on, so the tick waits for them to land; mine are heard on the
+      // tap (handleDiscard), and this key stays quiet.
+      const cards = sizesFor(row.players).discard;
+      for (const id of row.discarded_by ?? []) {
+        const landIn = id === myHandRef.current?.userId ? 0 : tableSound.tossLanding();
+        tableSound.card(discardKey(row.id, row.hand_no, id), cards, landIn);
+      }
+    },
+    [tableSound]
+  );
+  // THE WON GAME, LIVE: God's splash (and the wings milestone first) and the
+  // game's end in sound. The caller has checked it is the win itself
+  // (ended 'won', nobody has tapped New Game yet).
+  const playWonGameEffects = useCallback(
+    (row: { id: string; winner_id: string | null; players: string[] | null }) => {
+      if (!table || !claimLive(`won:${row.id}`)) return;
+      // GOD LOSING BADLY. God's score comes from a fresh read, not the
+      // roster on screen, in case an event is still on its way; the
+      // human's 121 in that same read proves it isn't a New Game's reset.
+      if (row.winner_id === table.created_by && isGodLevel(table.computer_level)) {
+        const wonGameId = row.id;
+        const level = table.computer_level;
+        const humanId = table.created_by;
+        // THE WINGS MILESTONE comes first if this win earned it, and God's
+        // splash follows: so both answers are in before either shows.
+        const moment = wingsMoment(wonGameId);
+        supabase
+          .from("table_members")
+          .select("user_id, score")
+          .eq("table_id", table.id)
+          .then(async ({ data, error }) => {
+            const human = data?.find((m) => m.user_id === humanId);
+            const god = data?.find((m) => m.user_id !== humanId);
+            const final = !error && data?.length === 2 && human?.score === GAME_HOLE;
+            const loss = final ? godLossSplash(level, true, god?.score) : null;
+            const lossKey = `godloss:${wonGameId}`;
+            const wings = await moment;
+            if (wings) showWings(`wings:${wonGameId}`, wings, loss ? { key: lossKey, loss } : undefined);
+            else if (loss) showGodLoss(lossKey, loss);
+          });
+      }
+      // THE GAME'S END, IN SOUND. A win plays now. A loss first reads the
+      // final scores for its tier (a failed read is a plain loss), except at
+      // a Muggins table, which never has one (endSoundEvent).
+      const endedKey = endKey(row.id);
+      // Whose win or loss: mine, or Seat 1's on a spectator's screen
+      // (the game's players are in seat order: Seat 1 first).
+      const myId = soundSeatId({
+        spectating,
+        viewerId: row.players?.[0] ?? NOBODY_SEATED,
+        myId: myHandRef.current?.userId ?? null,
+      });
+      const players = row.players ?? [];
+      const winnerId = row.winner_id;
+      const teams = table.max_players === 4 && table.team_mode === "teams";
+      const outcome = gameOutcome({ players, winnerId, myId, teams });
+      if (outcome === "win" || (outcome === "loss" && table.is_muggins)) {
+        tableSound.end(endedKey, endSoundEvent(outcome, null, { isMuggins: table.is_muggins }));
+      } else if (outcome === "loss" && myId) {
+        supabase
+          .from("table_members")
+          .select("user_id, score")
+          .eq("table_id", table.id)
+          .then(({ data }) => {
+            const score = loserScore({ rows: data ?? [], players, winnerId, myId, teams, gameHole: GAME_HOLE });
+            tableSound.end(endedKey, endSoundEvent("loss", score, { isMuggins: false }));
+          });
+      }
+    },
+    [table, spectating, claimLive, wingsMoment, showWings, showGodLoss, tableSound]
+  );
+  // Deliberately doesn't name the leaver: the roster change arrives
+  // separately with no ordering guarantee, so building the name in here
+  // would race. The roster visibly updating alongside this already shows
+  // *who* left.
+  const notePlayerLeft = useCallback(
+    (gameId: string) => {
+      if (claimLive(`left:${gameId}`)) setGameEndedNotice("A player left the table — the game was ended.");
+    },
+    [claimLive]
+  );
+  // A HAND OR CRIB THAT COUNTED 0: the "19" splash and its sound. Its sound
+  // not during a catch-up, which marks it heard instead (see
+  // soundCatchUpRef).
+  const playZero = useCallback(
+    (zero: { userId: string; crib: boolean; splashKey: string; soundKey: string | null }) => {
+      showZero(
+        zero.splashKey,
+        displayName(membersRef.current.find((m) => m.user_id === zero.userId)),
+        zero.crib,
+        // A computer table's one human is its creator.
+        zero.userId === table?.created_by
+      );
+      if (zero.soundKey && !soundCatchUpRef.current && !zeroCatchUpRef.current) tableSound.zeroHand(zero.soundKey);
+    },
+    [table, showZero, tableSound]
+  );
+
   // Live updates: append anyone who joins after we've loaded the roster.
   useEffect(() => {
     if (!table) return;
+    if (devOldListenersOff()) return; // the App A hand test only (never in production)
 
     const channel = supabase
       .channel(`table-members-${table.id}`)
@@ -2289,7 +2452,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           // (mine, or the computer's from this tab) the re-read can put this
           // very award there before this event arrives. The key stops a
           // repeat.
-          const shown = membersRef.current.find((m) => m.user_id === updated.user_id);
           const awardAge = updated.last_awarded_at
             ? Date.parse(payload.commit_timestamp) - Date.parse(updated.last_awarded_at)
             : NaN;
@@ -2301,21 +2463,15 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             // An unreadable commit time doesn't block the splash.
             (Number.isNaN(awardAge) || Math.abs(awardAge) < 10_000)
           ) {
-            showZero(
-              `zero:${updated.user_id}:${Date.parse(updated.last_awarded_at)}`,
-              displayName(shown),
-              updated.last_reason!.startsWith("crib:"),
-              // A computer table's one human is its creator.
-              updated.user_id === table.created_by
-            );
-            // Its sound: the same moment, with its own key and gate. Not during
-            // a catch-up, which marks it heard instead (see soundCatchUpRef).
+            // The splash and its sound, with the keys a scores event uses too
+            // (zeroFromScoresEvent): whichever arrives first plays.
             const zeroGameId = activeGameIdRef.current;
-            if (zeroGameId && !soundCatchUpRef.current && !zeroCatchUpRef.current) {
-              tableSound.zeroHand(
-                zeroKey(zeroGameId, activeGameRef.current?.hand_no, updated.user_id, updated.last_reason!)
-              );
-            }
+            playZero({
+              userId: updated.user_id,
+              crib: updated.last_reason!.startsWith("crib:"),
+              splashKey: zeroSplashKey(updated.user_id, Date.parse(updated.last_awarded_at)),
+              soundKey: zeroGameId ? zeroKey(zeroGameId, activeGameRef.current?.hand_no, updated.user_id, updated.last_reason!) : null,
+            });
           }
 
           setMembers((current) =>
@@ -2504,76 +2660,20 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             win_claim_by: string | null;
             win_confirmed_by?: string[] | null;
           };
-          // GOD LOSING BADLY: the moment the game becomes won, live. Before
-          // the checks below, because the read after my own winning tap can
-          // land first and make this game "not on screen". Live by nature:
-          // this event only arrives while subscribed. ready_by is empty only
-          // on the win itself -- later updates of the won game are New Game
-          // taps, so the computer's tap after a reload can't fire this. The
-          // key stops a repeat. God's score comes from a fresh read, not the
-          // roster on screen, in case an event is still on its way; the
-          // human's 121 in that same read proves it isn't a New Game's reset.
-          if (
-            updatedGame.ended_reason === "won" &&
-            !LIVE_GAME_STATUSES.includes(updatedGame.status) &&
-            (updatedGame.ready_by ?? []).length === 0 &&
-            updatedGame.winner_id === table.created_by &&
-            isGodLevel(table.computer_level)
-          ) {
-            const wonGameId = updatedGame.id;
-            const level = table.computer_level;
-            const humanId = table.created_by;
-            // THE WINGS MILESTONE comes first if this win earned it, and God's
-            // splash follows: so both answers are in before either shows.
-            const moment = wingsMoment(wonGameId);
-            supabase
-              .from("table_members")
-              .select("user_id, score")
-              .eq("table_id", table.id)
-              .then(async ({ data, error }) => {
-                const human = data?.find((m) => m.user_id === humanId);
-                const god = data?.find((m) => m.user_id !== humanId);
-                const final = !error && data?.length === 2 && human?.score === GAME_HOLE;
-                const loss = final ? godLossSplash(level, true, god?.score) : null;
-                const lossKey = `godloss:${wonGameId}`;
-                const wings = await moment;
-                if (wings) showWings(`wings:${wonGameId}`, wings, loss ? { key: lossKey, loss } : undefined);
-                else if (loss) showGodLoss(lossKey, loss);
-              });
-          }
-          // THE GAME'S END, IN SOUND: the same live moment, for the same
-          // reasons. A win plays now. A loss first reads the final scores for
-          // its tier (a failed read is a plain loss), except at a Muggins
-          // table, which never has one (endSoundEvent).
+          // THE WON GAME, LIVE (God's splash, the game-end sound): the moment
+          // the game becomes won. Before the checks below, because the read
+          // after my own winning tap can land first and make this game "not
+          // on screen". Live by nature: this event only arrives while
+          // subscribed. ready_by is empty only on the win itself -- later
+          // updates of the won game are New Game taps, so the computer's tap
+          // after a reload can't fire this. Shared with a game event's live
+          // read (playWonGameEffects, claimed won:<id>).
           if (
             updatedGame.ended_reason === "won" &&
             !LIVE_GAME_STATUSES.includes(updatedGame.status) &&
             (updatedGame.ready_by ?? []).length === 0
           ) {
-            const endedKey = endKey(updatedGame.id);
-            // Whose win or loss: mine, or Seat 1's on a spectator's screen
-            // (the game's players are in seat order: Seat 1 first).
-            const myId = soundSeatId({
-              spectating,
-              viewerId: updatedGame.players?.[0] ?? NOBODY_SEATED,
-              myId: myHandRef.current?.userId ?? null,
-            });
-            const players = updatedGame.players ?? [];
-            const winnerId = updatedGame.winner_id;
-            const teams = table.max_players === 4 && table.team_mode === "teams";
-            const outcome = gameOutcome({ players, winnerId, myId, teams });
-            if (outcome === "win" || (outcome === "loss" && table.is_muggins)) {
-              tableSound.end(endedKey, endSoundEvent(outcome, null, { isMuggins: table.is_muggins }));
-            } else if (outcome === "loss" && myId) {
-              supabase
-                .from("table_members")
-                .select("user_id, score")
-                .eq("table_id", table.id)
-                .then(({ data }) => {
-                  const score = loserScore({ rows: data ?? [], players, winnerId, myId, teams, gameHole: GAME_HOLE });
-                  tableSound.end(endedKey, endSoundEvent("loss", score, { isMuggins: false }));
-                });
-            }
+            playWonGameEffects(updatedGame);
           }
           // THE WON GAME ON SCREEN: its only change after it ends is a New
           // Game tap (ready_by). Merge that and nothing else -- a union, so an
@@ -2669,33 +2769,17 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
                 )
               );
             }
-            // Deliberately doesn't name the leaver: the roster DELETE arrives
-            // as a separate event with no ordering guarantee, so building the
-            // name in here would race. The roster visibly updating alongside
-            // this already shows *who* left.
+            // The banner, shared with a game event's live read
+            // (notePlayerLeft, claimed left:<id>).
             if (updatedGame.ended_reason === "player_left") {
-              setGameEndedNotice("A player left the table — the game was ended.");
+              notePlayerLeft(updatedGame.id);
             }
             return;
           }
 
-          // A CUT CARD OR A DISCARD, in sound. Neither has an event of its own:
-          // the row just lists who has, and repeats it on every later UPDATE,
-          // so each is keyed by player and heard once. A discard's one list
-          // entry stands for all that player's cards (2, or 1 with 3 or 4
-          // players): one sound each. Not during a catch-up, which marks them
-          // heard instead (see soundCatchUpRef).
-          if (!soundCatchUpRef.current) {
-            for (const key of cutKeys(updatedGame.id, updatedGame.deal_cut)) tableSound.card(key);
-            // Another player's cards fly to the crib here when the toss is
-            // on, so the tick waits for them to land; mine are heard on the
-            // tap (handleDiscard), and this key stays quiet.
-            const cards = sizesFor(updatedGame.players).discard;
-            for (const id of updatedGame.discarded_by ?? []) {
-              const landIn = id === myHandRef.current?.userId ? 0 : tableSound.tossLanding();
-              tableSound.card(discardKey(updatedGame.id, updatedGame.hand_no, id), cards, landIn);
-            }
-          }
+          // A CUT CARD OR A DISCARD, in sound (playRowSounds: shared with a
+          // game event's live read, the same keys; quiet during a catch-up).
+          playRowSounds(updatedGame);
 
           // Otherwise the game is live and something moved: a cut card, an
           // acknowledgement, a discard, the starter, a play, a count, a reveal,
@@ -2788,7 +2872,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, spectating, refreshTableState, readOwnHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, showZero, showGodLoss, showWings, wingsMoment, applyWings, tableSound]);
+  }, [table, spectating, refreshTableState, readOwnHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, applyWings, tableSound, playZero, playWonGameEffects, playRowSounds, notePlayerLeft]);
 
   // THE PLAY LOG, LIVE (realtime stopgap): game_plays INSERTs for the game on
   // screen only -- its own channel, filtered by game_id on the server, so a
@@ -2803,6 +2887,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const playsGameId = activeGame?.id ?? null;
   useEffect(() => {
     if (!table || !playsGameId) return;
+    if (devOldListenersOff()) return; // the App A hand test only (never in production)
     const gameId = playsGameId;
     let cancelled = false;
     const channel = supabase
@@ -2837,7 +2922,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           // THE GO SPLASH: once per player per run -- a player stuck for
           // several plays logs a go each time, like the one Go label.
           if (event.kind === "go") {
-            showGo(`go:${event.game_id}:${activeGameRef.current?.hand_no}:${event.segment}:${event.user_id}`);
+            showGo(goSplashKey(event.game_id, activeGameRef.current?.hand_no, event.segment, event.user_id));
           }
 
           // Once per seq: a play the catch-up read (or a refresh) already
@@ -3316,59 +3401,106 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   //               table_ended), a player's checkTableEnded
   // The old postgres_changes listeners and the safety poll are unchanged.
   // GAME EVENTS (moderation M5b1): "this game changed". The same reads the
-  // safety poll makes when it finds a difference, sooner -- never a sound,
-  // a splash, a banner or a computer move of their own (those stay with the
-  // old listeners and the screen's keyed effects):
+  // safety poll makes when it finds a difference, sooner:
   //   another game than the one on screen -> the full refresh;
   //   the game on screen -> reconcileGame (ticket-guarded, coalesced; its
   //     afterGameChange reads the new hand and the reveals exactly when the
   //     poll's would), then the play log (a merging read, guarded by game
   //     and hand) when the event is ahead of the plays shown.
+  // THE LIVE PATH (M5 final cleanup, App A): first ONE read of the event's
+  // game row. A read made because an event arrived is LIVE
+  // (gameEventLiveEffects): the shuffle as a cut opens, the cut and discard
+  // card sounds, the won game's sound and God's splash, the "player left"
+  // banner -- and, when the game on screen has ended, the full refresh that
+  // brings the result (reconcileGame leaves endings alone). The plays the
+  // play-log read adds (playsToAnnounce) play their card sound or Go
+  // splash. Every one with the old listeners' keys, through the same
+  // functions: whichever path arrives first plays, the other is a no-op.
+  // The poll, a visibility change and the catch-up on subscribe stay
+  // catch-up reads: they never play anything.
   const handleGameEvent = useCallback(
     (event: GameEvent) => {
       if (!table) return;
       const tableId = table.id;
+      const onScreenAtArrival = activeGameIdRef.current;
       const step = gameEventStep({
         event,
         shownGameId: activeGameIdRef.current,
         shownHandKey: handKeyRef.current,
         shownMaxSeq: playsRef.current.reduce((max, p) => Math.max(max, p.seq), 0),
       });
-      if (step.kind === "refresh") {
-        void refreshTableState(tableId);
-        return;
-      }
       void (async () => {
-        await reconcileGame(event.gameId);
-        if (step.readPlays && activeGameIdRef.current === event.gameId) await catchUpPlays(event.gameId);
+        // The live read and the screen's own read (as before) side by side:
+        // the screen waits for nothing new.
+        const rowRead = supabase.from("games").select(LIVE_ROW_COLUMNS).eq("id", event.gameId).maybeSingle();
+        const screenRead = step.kind === "refresh" ? refreshTableState(tableId) : reconcileGame(event.gameId);
+        const { data: row } = await rowRead;
+        if (row) {
+          const live = gameEventLiveEffects({
+            row,
+            onScreenAtArrival,
+            onScreenNow: activeGameIdRef.current,
+            catchingUp: soundCatchUpRef.current,
+          });
+          if (live.shuffle) tableSound.shuffle(cutOpenKey(row.id));
+          if (live.rowSounds) playRowSounds(row);
+          if (live.won) playWonGameEffects(row);
+          if (live.playerLeft) notePlayerLeft(row.id);
+          if (live.ended) {
+            await screenRead;
+            await refreshTableState(tableId);
+            return;
+          }
+        }
+        await screenRead;
+        if (step.kind === "refresh") return;
+        if (step.readPlays && activeGameIdRef.current === event.gameId) {
+          // The plays on screen just before the read: only newer ones are announced.
+          const floorSeq = playsRef.current.reduce((max, p) => Math.max(max, p.seq), 0);
+          const handNo = activeGameRef.current?.hand_no;
+          const merged = await catchUpPlays(event.gameId);
+          if (!merged || activeGameIdRef.current !== event.gameId || activeGameRef.current?.hand_no !== handNo) return;
+          for (const play of playsToAnnounce(merged, floorSeq)) {
+            if (play.kind === "play") tableSound.card(playKey(event.gameId, handNo, play.seq));
+            else if (play.kind === "go") showGo(goSplashKey(event.gameId, handNo, play.segment, play.user_id));
+          }
+        }
       })();
     },
-    [table, refreshTableState, reconcileGame, catchUpPlays]
+    [table, refreshTableState, reconcileGame, catchUpPlays, tableSound, showGo, playRowSounds, playWonGameEffects, notePlayerLeft]
   );
-  // SCORES EVENTS (moderation M5b2): REPAIR ONLY. The old table_members
-  // listener stays the live path for scores and for everything they drive
-  // (the "+2" flash, the pegs, the "19" splash and its sound). A scores
-  // event only arms ONE timer (SCORES_REPAIR_DELAY_MS, the newest event
-  // replacing a pending one); when it fires, the CURRENT screen (refs, not
-  // this closure) is checked with scoresScreenBehind, and only if it still
-  // doesn't show that award is the roster re-read -- the poll's own read
-  // (loadMembers, with its ticket and event guards), logged once as
-  // "[table-sync] scores repaired". It never plays a sound, flashes,
-  // splashes, moves the computer or touches the game or the plays: the
-  // flash and the pegs follow the roster read exactly as they follow the
-  // poll's. A Muggins table records no scores: a no-op there.
-  const scoresRepairRef = useRef<{ timer: number | null; event: ScoresEvent | null }>({ timer: null, event: null });
-  const clearScoresRepair = useCallback(() => {
-    if (scoresRepairRef.current.timer !== null) window.clearTimeout(scoresRepairRef.current.timer);
-    scoresRepairRef.current = { timer: null, event: null };
-  }, []);
+  // SCORES EVENTS (moderation M5b2; THE LIVE PATH since the M5 final
+  // cleanup, App A). Each event:
+  //   * the "19": a hand or crib counted 0 in the game on screen, live
+  //     (zeroFromScoresEvent) -> playZero, with the old listener's keys, so
+  //     whichever of the two arrives first plays and the other is a no-op;
+  //   * the roster AT ONCE when the screen doesn't show that award yet
+  //     (scoresScreenBehind against the CURRENT screen, refs) -- the poll's
+  //     own read (loadMembers, ticket- and event-guarded), logged once as
+  //     "[table-sync] scores repaired". A roster read already in flight is
+  //     waited for instead, and the screen checked again after it. The "+2"
+  //     flash and the pegs follow the roster read as they follow any read.
+  // Never a computer move, a game or plays change. A Muggins table records
+  // no scores: a no-op there.
+  const scoresTableRef = useRef<string | null>(null);
+  useEffect(() => {
+    scoresTableRef.current = table?.id ?? null;
+  }, [table?.id]);
   const handleScoresEvent = useCallback(
     (event: ScoresEvent) => {
       if (!table || isMuggins) return;
       const tableId = table.id;
-      clearScoresRepair();
-      const timer = window.setTimeout(() => {
-        scoresRepairRef.current = { timer: null, event: null };
+      const zero = zeroFromScoresEvent(event, {
+        gameId: activeGameIdRef.current,
+        status: activeGameRef.current?.status,
+        handNo: activeGameRef.current?.hand_no,
+      });
+      if (zero) playZero(zero);
+      void (async () => {
+        const pending = membersPendingRef.current;
+        if (pending) await pending.catch(() => null);
+        // Another table since: nothing to do here.
+        if (scoresTableRef.current !== tableId) return;
         const behind = scoresScreenBehind({
           event,
           screenGameId: activeGameIdRef.current ?? finishedGameRef.current?.id ?? null,
@@ -3376,20 +3508,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         });
         if (!behind) return;
         console.info("[table-sync] scores repaired", { gameId: event.gameId, awardMs: event.awardMs });
-        void loadMembers(tableId);
-      }, SCORES_REPAIR_DELAY_MS);
-      scoresRepairRef.current = { timer, event };
+        await loadMembers(tableId);
+      })();
     },
-    [table, isMuggins, clearScoresRepair, loadMembers]
+    [table, isMuggins, loadMembers, playZero]
   );
-  // A pending repair never outlives this table or the screen. It DOES
-  // outlive a game change on purpose: a winning award ends the game in the
-  // same transaction, and a new game's reset arrives with the game itself --
-  // exactly the awards a repair is for. The timer checks the CURRENT screen
-  // when it fires, so a repair that outlives a game costs at most one
-  // roster read.
-  const scoresRepairTableId = table?.id ?? null;
-  useEffect(() => clearScoresRepair, [scoresRepairTableId, clearScoresRepair]);
   const handleTableEvent = useCallback(
     (event: TableEvent) => {
       if (!table || event.tableId !== table.id.toLowerCase()) return;
