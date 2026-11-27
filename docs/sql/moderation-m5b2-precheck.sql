@@ -269,7 +269,7 @@ from (
   union all
   select 5, 2, 'realtime', 'publication supabase_realtime: table_members',
          (exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename = 'table_members'))::text,
-         'INFO: it STAYS in the publication (the old listener is the live score path; the scores event only repairs)'
+         'INFO: it STAYED in the publication in this slice; the M5 final cleanup (moderation-m5-cleanup-part1.sql) takes it out (false is then expected)'
 
   union all
   -- ==== grants ===================================================================

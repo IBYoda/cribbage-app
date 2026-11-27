@@ -25,6 +25,10 @@
 -- expects exactly 2 policies (M3's kicks, M5a's table events) and shows an
 -- INFO row for c2; section 02 marks chat_topic_allows INFO (removed) instead
 -- of STOP; section 10 expects 60 names (the 61 without chat_topic_allows).
+-- UPDATED FOR THE M5 FINAL CLEANUP (moderation-m5-cleanup-part1.sql): the
+-- app listens to no table (App B, PR #144), and part 1 takes game_plays,
+-- games, profiles, table_members and tables out of supabase_realtime. Section
+-- 01's publication row then expects it empty, and an INFO row says so.
 --
 -- WHY: the moderation slices (kept chat messages for 3 days, reports, a
 -- table-wide mute and a kick by the host, a personal hide, a Block List that
@@ -316,7 +320,9 @@ from (
   select 1, 5, '', 0, 'realtime', 'publication supabase_realtime: tables',
          coalesce((select string_agg(pt.schemaname || '.' || pt.tablename, ', ' order by pt.schemaname, pt.tablename)
                    from pg_publication_tables pt where pt.pubname = 'supabase_realtime'), '(none)'),
-         'INFO: postgres_changes reach clients only for these'
+         case when (select count(*) from pg_publication_tables pt where pt.pubname = 'supabase_realtime') = 0
+              then 'INFO: empty, as the M5 final cleanup left it (moderation-m5-cleanup-part1.sql): the app listens to no table'
+              else 'INFO: postgres_changes reach clients only for these; the app listens to none since App B (the M5 final cleanup takes them out)' end
 
   union all
   select 1, 6, '', 0, 'realtime', 'table_members replica identity',

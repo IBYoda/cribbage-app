@@ -283,7 +283,7 @@ from (
   select 5, 2, 'realtime', 'publication supabase_realtime: games / game_plays',
          (exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename = 'games'))::text
            || ' / ' || (exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename = 'game_plays'))::text,
-         'INFO: they STAY in the publication in this slice (the old postgres_changes listeners are the fallback for one more release)'
+         'INFO: they STAYED in the publication in this slice; the M5 final cleanup (moderation-m5-cleanup-part1.sql) takes both out (false / false is then expected)'
 
   union all
   -- ==== grants ===================================================================

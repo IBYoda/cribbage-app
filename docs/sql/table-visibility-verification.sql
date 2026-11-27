@@ -151,10 +151,13 @@ begin
   end if;
   v_checks := v_checks + 1;
 
-  -- [S5] tables is still in the supabase_realtime publication (untouched).
+  -- [S5] tables is still in the supabase_realtime publication (untouched) --
+  -- UNTIL the M5 final cleanup (moderation-m5-cleanup-part1.sql) takes all
+  -- five old tables out on purpose: then none of them may be there.
   if not exists (select 1 from pg_publication_tables
-                 where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tables') then
-    raise exception 'FAIL [S5] tables is NOT in the supabase_realtime publication any more.';
+                 where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tables')
+     and not not exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename in ('game_plays', 'games', 'profiles', 'table_members', 'tables')) then
+    raise exception 'FAIL [S5] tables is NOT in the supabase_realtime publication any more (and the M5 cleanup did not take all five out).';
   end if;
   v_checks := v_checks + 1;
 
