@@ -97,6 +97,9 @@ import { isGodLevel } from "@/lib/splashPhrases";
 import {
   leftBannerClears,
   mergePlays,
+  readFailed,
+  recoveryCatchUp,
+  tableReadFailure,
   nextPollDelayMs,
   tableChannelStatus,
   playsCatchUpApplies,
@@ -696,6 +699,14 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // dealLiveKey: the hand this screen saw dealt live; dealDoneKey: the hand
   // whose deal has finished or been skipped.
   const [tableRead, setTableRead] = useState(false);
+  // THE OFFLINE FIX. tableLoadedRef: the table's first full read has landed
+  // (until then a failed read may show the error screen; after it, never).
+  // readsFailing: the latest table read failed (an error, not an empty
+  // answer) -- the screen is kept, "Reconnecting..." shows and the poll backs
+  // off until a read succeeds again (noteRead).
+  const tableLoadedRef = useRef(false);
+  const [readsFailing, setReadsFailing] = useState(false);
+  const readsFailingRef = useRef(false);
   const [dealSeenKey, setDealSeenKey] = useState<string | null | undefined>(undefined);
   const [dealLiveKey, setDealLiveKey] = useState<string | null>(null);
   const [dealDoneKey, setDealDoneKey] = useState<string | null>(null);
@@ -999,19 +1010,22 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const fetchMyHand = useCallback(async (gameId: string) => {
     const { data: auth } = await supabase.auth.getSession();
     const myId = auth.session?.user.id;
-    if (!myId) return;
+    if (!myId) return true;
 
     const ticket = ++handReadSeqRef.current;
-    const { data } = await supabase
+    const result = await supabase
       .from("game_hands")
       .select("cards")
       .eq("game_id", gameId)
       .eq("user_id", myId)
       .maybeSingle();
+    // A FAILED read keeps the hand on screen (the offline fix).
+    if (readFailed(result)) return false;
+    const { data } = result;
 
     // A later-issued read (or a clear) has already been applied: this one is
     // older, so it must not replace it.
-    if (ticket < handAppliedSeqRef.current) return;
+    if (ticket < handAppliedSeqRef.current) return true;
     handAppliedSeqRef.current = ticket;
 
     // NOTE: from the discard onwards this array is IMMUTABLE -- it is the four
@@ -1024,14 +1038,16 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     // remaining 4 cards the moment you discarded. It's reset when a genuinely
     // new hand is dealt instead.
     setSelectedCards([]);
+    return true;
   }, []);
 
   // THE ONLY WAY the page reads "my hand": never for a spectator, who has
   // none (and must never ask for one).
+  // Returns false when the read failed (the hand on screen was kept).
   const readOwnHand = useCallback(
-    async (gameId: string) => {
-      if (spectating) return;
-      await fetchMyHand(gameId);
+    async (gameId: string): Promise<boolean> => {
+      if (spectating) return true;
+      return fetchMyHand(gameId);
     },
     [spectating, fetchMyHand]
   );
@@ -1043,14 +1059,18 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // can never replace the log once the screen is in hand N+1.
   const playsReadSeqRef = useRef(0);
   const playsAppliedSeqRef = useRef(0);
-  const fetchPlays = useCallback(async (gameId: string) => {
+  // Returns false when the read failed (the plays on screen were kept).
+  const fetchPlays = useCallback(async (gameId: string): Promise<boolean> => {
     const ticket = ++playsReadSeqRef.current;
     const issuedHandKey = handKeyRef.current;
-    const { data } = await supabase
+    const result = await supabase
       .from("game_plays")
       .select("seq, segment, user_id, kind, card, count_after, created_at")
       .eq("game_id", gameId)
       .order("seq", { ascending: true });
+    // A FAILED read keeps the play log on screen (the offline fix).
+    if (readFailed(result)) return false;
+    const { data } = result;
 
     if (
       !playsReadApplies({
@@ -1061,10 +1081,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         appliedTicket: playsAppliedSeqRef.current,
       })
     ) {
-      return;
+      return true;
     }
     playsAppliedSeqRef.current = ticket;
     setPlays((data as PlayEvent[]) ?? []);
+    return true;
   }, []);
 
   // THE PLAYS CATCH-UP READ (THE PLAY LOG, LIVE): after the game_plays
@@ -1093,23 +1114,29 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // shown at this table, and the crib only once it's been shown. Neither
   // table is in the Realtime publication -- the games broadcast (revealed_by,
   // crib_revealed) is what says when to call this.
-  const fetchRevealed = useCallback(async (gameId: string) => {
+  // Returns false when the read failed (what was shown is kept).
+  const fetchRevealed = useCallback(async (gameId: string): Promise<boolean> => {
     // A SPECTATOR reads hands and the crib ONLY through
     // get_spectator_reveals (lib/spectatorData.ts): hands from the start of
-    // counting, the crib from its step, nothing before.
+    // counting, the crib from its step, nothing before. null: the call
+    // failed -- keep what is shown (the offline fix).
     if (spectating) {
       const shown = await readSpectatorReveals(gameId);
-      setRevealedHands(shown?.hands ?? {});
-      setCribCards(shown?.crib ?? null);
-      return;
+      if (!shown) return false;
+      setRevealedHands(shown.hands);
+      setCribCards(shown.crib);
+      return true;
     }
-    const [{ data: handRows }, { data: cribRow }] = await Promise.all([
+    const [hands, crib] = await Promise.all([
       supabase.from("game_hands").select("user_id, cards").eq("game_id", gameId),
       supabase.from("game_cribs").select("cards").eq("game_id", gameId).maybeSingle(),
     ]);
+    // A FAILED read keeps the shown hands and the crib (the offline fix).
+    if (readFailed(hands) || readFailed(crib)) return false;
 
-    setRevealedHands(Object.fromEntries((handRows ?? []).map((r) => [r.user_id, r.cards])));
-    setCribCards(cribRow?.cards ?? null);
+    setRevealedHands(Object.fromEntries((hands.data ?? []).map((r) => [r.user_id, r.cards])));
+    setCribCards(crib.data?.cards ?? null);
+    return true;
   }, [spectating]);
 
   const clearRevealed = useCallback(() => {
@@ -1364,20 +1391,50 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     [readMembers]
   );
 
+  // READS FAILING (the offline fix): set by a failed table read (a refresh's,
+  // the poll's), cleared by the next successful one. Logged once each way.
+  const noteRead = useCallback((ok: boolean) => {
+    const failing = !ok;
+    if (readsFailingRef.current === failing) return;
+    readsFailingRef.current = failing;
+    setReadsFailing(failing);
+    if (failing) console.warn("[table-sync] reads failing: keeping the screen, reconnecting");
+    else console.info("[table-sync] reads back");
+  }, []);
+
   // Fetches the current active game + full roster for a table. Used both for
   // the initial load and to "catch up" after the table channel drops and
   // rejoins, since its events only reach a joined channel -- anything missed
   // while it was down has to be re-fetched.
-  const readTableState = useCallback(async (tableId: string) => {
+  //
+  // A FAILED READ CHANGES NOTHING (the offline fix): the game read failing is
+  // NOT "no game" -- nothing below is applied, the screen stays, the reads
+  // are marked failing (noteRead) and "Reconnecting..." shows; the hand, the
+  // plays, the shown hands and the result keep what they show when their own
+  // read fails; the roster failing never sets the page's error once the table
+  // has loaded (tableReadFailure). Only the FIRST read of a table may end on
+  // the error screen: there is nothing to keep yet. Returns whether every
+  // read succeeded.
+  const readTableState = useCallback(async (tableId: string): Promise<boolean> => {
     // Must find cutting games too, or a game mid-cut reads as "no game" and
     // the client would offer "New Game" for a table that already has one.
     const ticket = ++gameReadSeqRef.current;
-    const { data: existingGame } = await supabase
+    const gameResult = await supabase
       .from("games")
       .select(GAME_COLUMNS)
       .eq("table_id", tableId)
       .in("status", LIVE_GAME_STATUSES)
       .maybeSingle();
+    if (readFailed(gameResult)) {
+      if (tableReadFailure({ loaded: tableLoadedRef.current }) === "error-screen") {
+        logUnexpectedError("games read", gameResult.error?.message ?? "unknown");
+        setError(GENERIC_ERROR_TEXT);
+      }
+      noteRead(false);
+      return false;
+    }
+    const existingGame = gameResult.data;
+    let readsOk = true;
 
     // THE SOUNDS' CATCH-UP (see soundCatchUpRef). Not behind the read guard
     // below: an older read still only names things that have happened.
@@ -1426,8 +1483,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (isLatestRead) {
       // No hand exists during 'cutting' -- that is the entire point of the phase.
       if (existingGame && existingGame.status === "active") {
-        await readOwnHand(existingGame.id);
-        await fetchPlays(existingGame.id);
+        if (!(await readOwnHand(existingGame.id))) readsOk = false;
+        if (!(await fetchPlays(existingGame.id))) readsOk = false;
       } else {
         handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
         setMyHand([]);
@@ -1442,7 +1499,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         (existingGame.phase === "counting" || existingGame.phase === "done")
       ) {
         revealKeyRef.current = revealKey(existingGame);
-        await fetchRevealed(existingGame.id);
+        if (!(await fetchRevealed(existingGame.id))) readsOk = false;
       } else {
         clearRevealed();
       }
@@ -1453,7 +1510,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       if (existingGame) {
         showFinishedGame(null);
       } else {
-        const { data: lastGame } = await supabase
+        const lastResult = await supabase
           .from("games")
           .select(
             "id, created_at, ended_reason, winner_id, players, ready_by, starter_card, dealer_id, play_segment"
@@ -1462,6 +1519,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
+        // A FAILED read keeps the result on screen (the offline fix).
+        if (readFailed(lastResult)) readsOk = false;
+        const lastGame = readFailed(lastResult) ? undefined : lastResult.data;
 
         const finished: FinishedGame | null =
           lastGame && lastGame.ended_reason === "won"
@@ -1484,18 +1544,27 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
 
         // Still the newest read? The board read above is one more wait, and a
         // later read (a New Game starting, say) must not be undone by this.
-        if (gameAppliedSeqRef.current === ticket) showFinishedGame(finished);
+        if (lastGame !== undefined && gameAppliedSeqRef.current === ticket) showFinishedGame(finished);
       }
     }
 
-    // The roster, through the members read guard (loadMembers).
+    // The roster, through the members read guard (loadMembers). Failing: the
+    // error screen only for the table's first read; afterwards it keeps the
+    // roster on screen (loadMembers changed nothing) and reconnects.
     const membersError = await loadMembers(tableId);
     if (membersError) {
-      logUnexpectedError("table_members read", membersError);
-      setError(GENERIC_ERROR_TEXT);
+      readsOk = false;
+      if (tableReadFailure({ loaded: tableLoadedRef.current }) === "error-screen") {
+        logUnexpectedError("table_members read", membersError);
+        setError(GENERIC_ERROR_TEXT);
+        return false;
+      }
     }
+    tableLoadedRef.current = true;
     setTableRead(true);
-  }, [readOwnHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers, tableSound]);
+    noteRead(readsOk);
+    return readsOk;
+  }, [readOwnHand, fetchPlays, fetchRevealed, clearRevealed, resetHandState, showFinishedGame, loadMembers, tableSound, noteRead]);
 
   // WHO IS WATCHING, read (get_table_spectators). A failed read keeps the
   // list as it was; a table that doesn't allow spectators is never asked.
@@ -1519,10 +1588,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
 
   // A full refresh, counted while in flight, so the safety poll waits for it.
   const refreshTableState = useCallback(
-    async (tableId: string) => {
+    async (tableId: string): Promise<boolean> => {
+      let ok = false;
       refreshesInFlightRef.current++;
       try {
-        await readTableState(tableId);
+        ok = await readTableState(tableId);
       } finally {
         refreshesInFlightRef.current--;
       }
@@ -1530,6 +1600,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       // spectators too (not counted as a refresh in flight: the safety poll
       // must not wait on it).
       void loadSpectators(tableId);
+      return ok;
     },
     [readTableState, loadSpectators]
   );
@@ -1614,6 +1685,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
 
     async function setup() {
       setError(null);
+      // A new start (another code, Retry): the next read is a FIRST read
+      // again (it may show the error screen), and nothing is failing yet.
+      tableLoadedRef.current = false;
+      readsFailingRef.current = false;
+      setReadsFailing(false);
       setClosedComputerTable(false);
       setClosedHumanTable(false);
       setGoToCode(null);
@@ -2899,6 +2975,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     on: !!channelKey,
     joined: tableChannelJoined,
     everJoined: !!channelKey && everJoinedKey === channelKey,
+    readsFailing,
   });
   const catchUpTableId = table?.id ?? null;
   useEffect(() => {
@@ -2906,6 +2983,18 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     soundCatchUpRef.current = true;
     void refreshTableState(catchUpTableId);
   }, [tableChannelJoined, catchUpTableId, refreshTableState]);
+  // RECOVERY (the offline fix): the first successful read after failures
+  // runs ONE full catch-up read -- silent (soundCatchUpRef: what happened
+  // meanwhile is marked heard, never played) -- so the table repairs itself
+  // with no Retry.
+  const wasFailingRef = useRef(false);
+  useEffect(() => {
+    const catchUp = recoveryCatchUp(wasFailingRef.current, readsFailing);
+    wasFailingRef.current = readsFailing;
+    if (!catchUp || !catchUpTableId) return;
+    soundCatchUpRef.current = true;
+    void refreshTableState(catchUpTableId);
+  }, [readsFailing, catchUpTableId, refreshTableState]);
 
   // TABLE SYNC: THE SAFETY POLL. While the tab is visible, every
   // SAFETY_POLL_CONNECTED_MS (30 s) while the table channel is joined, and
@@ -2938,12 +3027,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       await spectateRef.current?.heartbeat();
       const eventsAtIssue = gameEventSeqRef.current;
       const shown = activeGameRef.current;
-      const { data: fresh, error: gameError } = await supabase
+      const gameRead = await supabase
         .from("games")
         .select(GAME_COLUMNS)
         .eq("table_id", tableId)
         .in("status", LIVE_GAME_STATUSES)
         .maybeSingle();
+      const { data: fresh, error: gameError } = gameRead;
       // A games event arrived during the read: realtime is alive and the
       // screen may be newer than this read. Don't compare.
       if (!gameError && gameEventSeqRef.current === eventsAtIssue) {
@@ -2966,7 +3056,11 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
         }
       }
       pollCountRef.current++;
-      await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));
+      const membersError = await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));
+      // READS FAILING (the offline fix): the poll's own reads say whether the
+      // table is reachable -- an error sets the flag (backoff, the note), a
+      // success clears it (and the recovery catch-up follows).
+      noteRead(!readFailed(gameRead) && !membersError);
       // Who is watching: the eye, the list and the chat roster.
       await loadSpectators(tableId);
     }
@@ -3007,7 +3101,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     // realtimeConnected: a change of channel status starts the chain again
     // at the new pace -- 30 s once connected, the backoff's first step (12 s)
     // after a disconnect.
-  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);
+  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected, noteRead]);
   const popupOpen = usePersonPopupOpen();
   // The first queued notice for someone I don't block (yet), shown only
   // while no other question and no person popup is open.

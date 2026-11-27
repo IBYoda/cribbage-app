@@ -174,7 +174,17 @@ export function newestPlayTime(plays: readonly { created_at?: string | null }[])
 // leaving, my place changed): those are "connecting", which shows nothing.
 export type ChannelStatus = "connecting" | "connected" | "disconnected";
 
-export function tableChannelStatus(t: { on: boolean; joined: boolean; everJoined: boolean }): ChannelStatus {
+// READS FAILING (the offline fix): while the table's reads keep failing
+// (a network error, not an empty answer), it is "disconnected" too -- even
+// if the channel still looks joined (Chromium's DevTools Offline leaves an
+// open WebSocket alone, and a real outage can take a while to close it).
+export function tableChannelStatus(t: {
+  on: boolean;
+  joined: boolean;
+  everJoined: boolean;
+  readsFailing?: boolean;
+}): ChannelStatus {
+  if (t.on && t.readsFailing) return "disconnected";
   if (t.on && t.joined) return "connected";
   if (t.on && t.everJoined) return "disconnected";
   return "connecting";
@@ -185,4 +195,27 @@ export function tableChannelStatus(t: { on: boolean; joined: boolean; everJoined
 // A re-read with no live game (the ended game still the latest) keeps it.
 export function leftBannerClears(bannerGameId: string | null, liveGameId: string | null): boolean {
   return bannerGameId !== null && liveGameId !== null && liveGameId !== bannerGameId;
+}
+
+// A FAILED READ (the offline fix) is one that came back with an ERROR: a
+// network failure ("Failed to fetch"), a timeout, a server error. An empty
+// answer is a successful read ("no live game", "not in the roster") and is
+// acted on as before. A failed read never changes what the table shows.
+export function readFailed(result: { error?: unknown } | null | undefined): boolean {
+  return !!result && result.error != null;
+}
+
+// WHEN A TABLE READ FAILS: before the table's first full read has landed
+// there is nothing on screen to keep, so the error screen (Retry, Try a
+// different code) is right; once the table is loaded, a failure keeps the
+// screen and the page reconnects on its own.
+export function tableReadFailure(t: { loaded: boolean }): "error-screen" | "keep" {
+  return t.loaded ? "keep" : "error-screen";
+}
+
+// RECOVERY: the first successful read after failures runs ONE full catch-up
+// read (silent: it marks what happened meanwhile as heard). A success after
+// a success runs none; a failure never does.
+export function recoveryCatchUp(wasFailing: boolean, nowFailing: boolean): boolean {
+  return wasFailing && !nowFailing;
 }
