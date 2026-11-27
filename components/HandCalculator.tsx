@@ -32,7 +32,10 @@ const CARD_WIDTH = 11;
 const CARD_STEP = (100 - CARD_WIDTH) / 12;
 const ROW_RATIO = 100 / (CARD_WIDTH * 1.4);
 
-export function HandCalculator() {
+// onUseScore: only when opened from the Travel Board (app/calculator reads
+// its ?from=travel-board): a "Use this score" button under the count, which
+// hands the total back. Left out (from Home): no button, as before.
+export function HandCalculator({ onUseScore }: { onUseScore?: (total: number) => void } = {}) {
   const [picked, setPicked] = useState<string[]>([]);
   const [crib, setCrib] = useState(false);
   const countEnd = useRef<HTMLDivElement>(null);
@@ -135,7 +138,18 @@ export function HandCalculator() {
 
         <div ref={countEnd} role="status" aria-live="polite" className="flex flex-col gap-1 scroll-mb-4">
           {result ? (
-            <Result total={result.total} lines={result.lines} crib={crib} starter={picked[4]} />
+            <>
+              <Result total={result.total} lines={result.lines} crib={crib} starter={picked[4]} />
+              {onUseScore && (
+                <button
+                  type="button"
+                  onClick={() => onUseScore(result.total)}
+                  className="peg-btn peg-btn--brass mt-1"
+                >
+                  Use this score ({result.total})
+                </button>
+              )}
+            </>
           ) : (
             <p className="text-sm">
               {picked.length < 4

@@ -110,6 +110,27 @@ import { mugginsPlateStates, type MugginsPlateState } from "../lib/mugginsPlates
 import { adminTableLabel, isStaleWaitingTable, seatedNames, STALE_WAITING_TABLE_MS } from "../lib/tableListing";
 import { godLossAlt, godLossSplash, hideRejoinedScores, lossTier, scoreFromThisGame } from "../lib/resultScores";
 import {
+  addToEntry,
+  clearEntry,
+  newGame,
+  newTravelBoard,
+  parseCalcTotal,
+  parseTravelBoard,
+  plateName,
+  pressOk,
+  redo as travelRedo,
+  renamePlate,
+  selectPlate,
+  serializeTravelBoard,
+  setPlayers,
+  travelBoardKey,
+  travelMessage,
+  undo as travelUndo,
+  winner as travelWinner,
+  winnerLines,
+  type TravelBoardState,
+} from "../lib/travelBoard";
+import {
   BURST_WINDOW_MS,
   CARD_FADE_IN_S,
   CARD_TICK_S,
@@ -8401,6 +8422,98 @@ check("test harness: every text read is CRLF-normalized, binary reads are not", 
   // No read in this file bypasses the helper: the helper's two raw reads and this check's two.
   const self = readFileSyncRaw("scripts/test-phase3.ts", "utf8");
   strictEqual((self.match(/readFileSyncRaw\(/g) ?? []).length, 4);
+});
+
+// THE TRAVEL BOARD (lib/travelBoard.ts): scorekeeping for a face-to-face game.
+// Score `points` onto `plate` with one OK.
+const tbScore = (s: TravelBoardState, plate: number, points: number) => pressOk(addToEntry(selectPlate(s, plate), points));
+check("travel board: keys do nothing until a plate is chosen", () => {
+  const s = newTravelBoard();
+  strictEqual(travelMessage(s), "Select the scoring plate before each score");
+  strictEqual(addToEntry(s, 5).entry, 0);
+  strictEqual(pressOk(s), s);
+  const picked = selectPlate(s, 1);
+  strictEqual(travelMessage(picked), "Scoring for Player/Team 2. Enter points, then OK.");
+  strictEqual(selectPlate(s, 2), s, "plate 3 is hidden with 2 players");
+});
+check("travel board: +1 +2 +5 add to the entry, OK scores it and clears it, C clears", () => {
+  let s = selectPlate(newTravelBoard(), 0);
+  s = addToEntry(addToEntry(addToEntry(s, 1), 2), 5);
+  strictEqual(s.entry, 8);
+  strictEqual(clearEntry(s).entry, 0);
+  s = pressOk(s);
+  deepStrictEqual([s.scores[0], s.entry, s.last[0], s.undo.length], [8, 0, 8, 1]);
+  strictEqual(s.selected, 0, "the plate stays selected");
+  strictEqual(pressOk(s), s, "an entry of 0 does nothing");
+});
+check("travel board: capped at 121, the winner banner, no more points after a win", () => {
+  let s = tbScore(newTravelBoard(), 0, 115);
+  s = tbScore(s, 0, 20);
+  strictEqual(s.scores[0], 121);
+  strictEqual(s.last[0], 6, "the back peg moved only as far as the peg did");
+  strictEqual(travelWinner(s), 0);
+  strictEqual(winnerLines(s)?.title, "Player/Team 1 wins");
+  strictEqual(addToEntry(selectPlate(s, 1), 5).entry, 0);
+  strictEqual(tbScore(s, 1, 5).scores[1], 0);
+  strictEqual(travelMessage(s), "Game over. Undo steps back; New Game starts again.");
+});
+check("travel board: skunk and double skunk lines (lossTier's 61 / 91)", () => {
+  let s = setPlayers(newTravelBoard(), 4);
+  s = renamePlate(s, 1, "Ann");
+  s = tbScore(tbScore(tbScore(s, 1, 90), 2, 61), 3, 60);
+  s = tbScore(s, 0, 121);
+  deepStrictEqual(winnerLines(s), { title: "Player/Team 1 wins", skunks: ["Ann was skunked", "Player 3 was skunked", "Player 4 was double skunked"] });
+  // 91 and 120 (God's "stinkhole") are no skunk.
+  let t = tbScore(tbScore(newTravelBoard(3), 1, 91), 2, 120);
+  t = tbScore(t, 0, 121);
+  deepStrictEqual(winnerLines(t)?.skunks, []);
+});
+check("travel board: undo and redo step through OKs, also after a win; a new OK clears redo", () => {
+  let s = tbScore(tbScore(newTravelBoard(), 0, 10), 1, 121);
+  strictEqual(travelWinner(s), 1);
+  s = travelUndo(s);
+  deepStrictEqual([s.scores[1], s.last[1], travelWinner(s)], [0, null, null]);
+  s = travelRedo(s);
+  deepStrictEqual([s.scores[1], s.last[1], travelWinner(s)], [121, 121, 1]);
+  s = travelUndo(travelUndo(s));
+  deepStrictEqual(s.scores, [0, 0, 0, 0]);
+  strictEqual(s.redo.length, 2);
+  s = tbScore(s, 0, 2);
+  deepStrictEqual([s.redo.length, s.undo.length, s.scores[0]], [0, 1, 2]);
+  strictEqual(travelRedo(s), s, "nothing to redo");
+});
+check("travel board: changing players keeps every score; New Game clears scores and history", () => {
+  let s = tbScore(setPlayers(newTravelBoard(), 4), 3, 30);
+  s = setPlayers(s, 2);
+  strictEqual(s.scores[3], 30, "a hidden plate keeps its score");
+  strictEqual(s.selected, null, "a hidden selected plate is let go");
+  strictEqual(setPlayers(s, 4).scores[3], 30);
+  strictEqual(setPlayers(s, 5), s);
+  const fresh = newGame(renamePlate(s, 0, "Walt"));
+  deepStrictEqual([fresh.scores, fresh.undo, fresh.redo, fresh.entry, fresh.players], [[0, 0, 0, 0], [], [], 0, 2]);
+  strictEqual(plateName(fresh, 0), "Walt", "names survive New Game");
+});
+check("travel board: names trim, cap at 14, and fall back to the defaults", () => {
+  let s = renamePlate(newTravelBoard(), 0, "   ");
+  strictEqual(plateName(s, 0), "Player/Team 1");
+  s = renamePlate(s, 2, "  Grandma Jo  ");
+  strictEqual(plateName(s, 2), "Grandma Jo");
+  s = renamePlate(s, 3, "Abcdefghijklmnopq");
+  strictEqual(plateName(s, 3), "Abcdefghijklmn");
+  deepStrictEqual([plateName(s, 1), plateName(newTravelBoard(), 3)], ["Player/Team 2", "Player 4"]);
+});
+check("travel board: saved data round-trips; corrupt or older data starts fresh", () => {
+  const s = travelRedo(travelUndo(tbScore(renamePlate(setPlayers(newTravelBoard(), 3), 2, "Sam"), 2, 12)));
+  deepStrictEqual(parseTravelBoard(serializeTravelBoard(s)), s);
+  const fresh = newTravelBoard();
+  for (const bad of [null, "", "{", "null", "[]", '{"v":0}', JSON.stringify({ ...s, v: 2 }), JSON.stringify({ ...s, players: 5 }),
+    JSON.stringify({ ...s, scores: [0, 0, 200, 0] }), JSON.stringify({ ...s, selected: 3 }), JSON.stringify({ ...s, undo: [{ plate: 9 }] })]) {
+    deepStrictEqual(parseTravelBoard(bad), fresh, String(bad));
+  }
+  strictEqual(travelBoardKey("u1"), "nobs:travel-board:v1:u1");
+});
+check("travel board: the calculator's total comes back only as 0-29", () => {
+  deepStrictEqual(["12", "0", "29", "30", "-1", "1.5", "abc", "", null].map(parseCalcTotal), [12, 0, 29, null, null, null, null, null, null]);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
