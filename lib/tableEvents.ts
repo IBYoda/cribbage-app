@@ -22,6 +22,8 @@
 // Pure rules here (no React, no Supabase); the channel is
 // components/table/useTableEvents.ts. Tested by scripts/test-phase3.ts.
 
+import { CHAT_MAX_LENGTH } from "./tableChat";
+
 export type TableEventKind = "members" | "spectators" | "table";
 
 export type TableEvent = { kind: TableEventKind; tableId: string; rosterVersion: number };
@@ -54,6 +56,14 @@ export function acceptTableEvent(lastSeen: number | null, event: TableEvent): { 
   if (lastSeen === null) return { accept: true, lastSeen: event.rosterVersion };
   const accept = event.kind === "table" ? event.rosterVersion >= lastSeen : event.rosterVersion > lastSeen;
   return { accept, lastSeen: Math.max(lastSeen, event.rosterVersion) };
+}
+
+// IS THE CHANNEL HEARING? Only while realtime-js reports it SUBSCRIBED;
+// CHANNEL_ERROR, TIMED_OUT and CLOSED (and anything unknown) are deaf.
+// Chat hides while deaf (moderation M5c1): you could send, but never hear
+// the replies.
+export function tableChannelJoined(status: string): boolean {
+  return status === "SUBSCRIBED";
 }
 
 // WHO LISTENS: only once my place is confirmed -- my seat in the roster
@@ -196,3 +206,41 @@ export function scoresScreenBehind(input: {
 
 // How long a scores event waits for the old listener before checking.
 export const SCORES_REPAIR_DELAY_MS = 1500;
+
+// CHAT EVENTS (moderation M5c1, docs/sql/moderation-m5c1-part1.sql): a chat
+// message, sent by send_table_message (never by a client directly) on the
+// same topic:
+//   { event: 'chat', id, sender_id, text, at }
+// (Realtime keeps the payload's own "id"; any other key is ignored). The
+// server set sender_id (the caller) and cleaned text (cleanChatText's rule,
+// at most CHAT_MAX_LENGTH characters); a payload that is anything else is
+// dropped whole. No version rule: each message is new, and only an id
+// already seen at this table is dropped (rememberChatId).
+export type ChatEvent = { id: string; senderId: string; text: string; at: number };
+
+export function parseChatEvent(payload: unknown): ChatEvent | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as { event?: unknown; id?: unknown; sender_id?: unknown; text?: unknown; at?: unknown };
+  if (p.event !== "chat") return null;
+  if (typeof p.id !== "string" || !UUID.test(p.id)) return null;
+  if (typeof p.sender_id !== "string" || !UUID.test(p.sender_id)) return null;
+  if (typeof p.text !== "string") return null;
+  const length = Array.from(p.text).length;
+  if (length < 1 || length > CHAT_MAX_LENGTH) return null;
+  if (typeof p.at !== "number" || !Number.isFinite(p.at)) return null;
+  return { id: p.id, senderId: p.sender_id, text: p.text, at: p.at };
+}
+
+// THE DUPLICATE RULE: the ids seen at this table, newest last, at most
+// CHAT_SEEN_MAX (the oldest forgotten first). fresh: not seen before.
+export const CHAT_SEEN_MAX = 200;
+
+export function rememberChatId(
+  seen: readonly string[],
+  id: string,
+  max = CHAT_SEEN_MAX
+): { fresh: boolean; seen: string[] } {
+  if (seen.includes(id)) return { fresh: false, seen: seen as string[] };
+  const next = [...seen, id];
+  return { fresh: true, seen: next.length > max ? next.slice(next.length - max) : next };
+}
