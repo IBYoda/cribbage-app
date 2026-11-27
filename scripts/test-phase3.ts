@@ -435,14 +435,18 @@ import {
   showNoteCounter,
 } from "../lib/reports";
 import {
+  CHAT_SEEN_MAX,
   SCORES_REPAIR_DELAY_MS,
   acceptGameEvent,
   acceptScoresEvent,
   acceptTableEvent,
   gameEventStep,
+  parseChatEvent,
   parseGameEvent,
   parseScoresEvent,
+  rememberChatId,
   scoresScreenBehind,
+  tableChannelJoined,
   parseTableEvent,
   tableEventRole,
   tableEventTopic,
@@ -492,14 +496,13 @@ import {
   OWN_CARD_FADE_MS,
   OWN_CARD_MS,
   addChatMessage,
-  chatSenderId,
+  chatEventIsMine,
+  chatSendOutcome,
   chatStackCounts,
   chatStackRoom,
   chatThrottleAllows,
-  chatTopic,
   cleanChatText,
   createChatThrottle,
-  createPerSenderThrottle,
   ownCardShowing,
   ownChatCard,
   mutedSenders,
@@ -2055,7 +2058,8 @@ check("Spectator chat: a spectator who leaves the list is dropped; the host's cl
   strictEqual(roster.some((r) => r.user_id === "s1"), false);
   const hook = readFileSync("components/table/useTableChat.ts", "utf8");
   strictEqual(/const member = rosterRef\.current\.find\(\(m\) => m\.user_id === senderId\);\s*\/\/[^\n]*\n\s*if \(!member\) return;/.test(hook), true);
-  strictEqual(hook.includes("const others = on ? roster.map((m) => m.user_id).filter((id) => id !== myUserId).sort() : [];"), true);
+  // No channel of its own to leave any more: the table's one channel carries chat (moderation M5c1).
+  strictEqual(hook.includes("supabase.channel("), false);
   // The host's Kick (moderation M3, the old Remove): the list loses them on success, before the next read.
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(/return;\s*\}\s*setSpectatorList\(\(list\) => withoutSpectator\(list, ask\.userId\)\);/.test(view), true);
@@ -7102,15 +7106,159 @@ check("calculator: 40,000 random deals -- the pieces add up to scoreHand, as a h
 });
 
 // TABLE CHAT (PRD item 39): lib/tableChat.ts, and the hook and UI around it.
-check("chat: the topic is chat:<table>:<sender>, both ids lowercased", () => {
-  const t = "1B4E28BA-2FA1-11D2-883F-0016D3CCA427";
-  const u = "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b";
-  strictEqual(chatTopic(t, u), "chat:1b4e28ba-2fa1-11d2-883f-0016d3cca427:6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b");
-  strictEqual(chatSenderId(chatTopic(t, u), t), u);
-  strictEqual(chatSenderId("realtime:" + chatTopic(t, u), t), u);
-  strictEqual(chatSenderId(chatTopic(t, u), u), null); // another table
-  strictEqual(chatSenderId(chatTopic(t, u) + "x", t), null);
-  strictEqual(chatSenderId("chat:not-a-uuid:" + u, t), null);
+check("chat (M5c1 hard cut): nothing in the app still joins or sends on the old chat:<table>:<sender> topics", () => {
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(ts|tsx)$/.test(entry.name)) files.push(path);
+    }
+  };
+  for (const dir of ["app", "components", "lib"]) walk(dir);
+  strictEqual(files.length > 20, true);
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    strictEqual(/[`"']chat:/.test(src), false, `${f} builds a chat: topic`);
+    strictEqual(/chatTopic|chatSenderId|CHAT_EVENT\b/.test(src), false, `${f} uses the old per-sender chat helpers`);
+  }
+  // The hook opens no channel: it sends through the RPC and receives from the table's channel.
+  const hook = m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"));
+  strictEqual(/supabase\.channel\(|removeChannel|\.subscribe\(|realtime\.setAuth/.test(hook), false);
+  strictEqual(hook.includes('supabase.rpc("send_table_message", { p_table_id: sentTo, p_text: text })'), true);
+  // The table's one channel hears 'chat' (and still only one channel).
+  const events = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
+  strictEqual((events.match(/supabase\.channel\(/g) ?? []).length, 1);
+  strictEqual(/channel\.on\("broadcast", \{ event: "chat" \}, \(\{ payload \}\) => \{/.test(events), true);
+  strictEqual(/const step = rememberChatId\(chatSeenRef\.current\.seen, event\.id\);\s*chatSeenRef\.current = \{ tableId, seen: step\.seen \};\s*if \(step\.fresh\) onChatEventRef\.current\(event\);/.test(events), true);
+  strictEqual(events.includes("if (chatSeenRef.current.tableId !== tableId) chatSeenRef.current = { tableId, seen: [] };"), true);
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("onChatEvent: receiveChatEvent,"), true);
+  strictEqual(view.includes("const receiveChatEvent = useCallback((event: ChatEvent) => chatReceiveRef.current(event), []);"), true);
+  strictEqual(/chatDropRef\.current = chat\.dropSender;\s*chatReceiveRef\.current = chat\.receive;/.test(view), true);
+});
+check("chat hides when it can't hear: joined only while SUBSCRIBED, per role and topic; no send while deaf", () => {
+  strictEqual(tableChannelJoined("SUBSCRIBED"), true);
+  for (const status of ["CHANNEL_ERROR", "TIMED_OUT", "CLOSED", "JOINING", "", "subscribed"]) {
+    strictEqual(tableChannelJoined(status), false, status);
+  }
+  const events = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
+  // Every status report sets it (a drop to CLOSED or an error turns it off).
+  strictEqual(/channel\.subscribe\(\(status\) => \{\s*if \(cancelled\) return;\s*setJoinedKey\(tableChannelJoined\(status\) \? key : null\);\s*\}\);/.test(events), true);
+  // Kept per role and topic: a role or table change is false at once, before any cleanup.
+  strictEqual(events.includes("const key = `${role}|${topic}`;"), true);
+  strictEqual(events.includes("const joined = !!role && !!tableId && joinedKey === `${role}|${tableEventTopic(tableId)}`;"), true);
+  // Leave, a change, unmount: cleared (only its own key).
+  strictEqual(/return \(\) => \{\s*cancelled = true;\s*setJoinedKey\(\(current\) => \(current === key \? null : current\)\);/.test(events), true);
+  strictEqual(events.includes("return { joined };"), true);
+  // The page hands it to chat; chat is available only while heard, and never sends while deaf.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("const { joined: tableChannelJoined } = useTableEvents({"), true);
+  strictEqual(view.includes("heard: tableChannelJoined,"), true);
+  strictEqual(view.indexOf("useTableEvents({") < view.indexOf("const chat = useTableChat({"), true);
+  strictEqual(view.includes("{chat.available && !leaveConfirming && ("), true, "the button follows available");
+  const hook = m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"));
+  strictEqual(hook.includes("available: on && heard };"), true);
+  strictEqual(hook.includes('if (text === null || !isOn || !sentTo || !hearing) return "failed";'), true);
+  const send = hook.slice(hook.indexOf("const send = useCallback("), hook.indexOf("const dismiss = useCallback("));
+  strictEqual(send.indexOf("!hearing") < send.indexOf("sendThrottle.current.take(") && send.indexOf("!hearing") < send.indexOf("supabase.rpc("), true, "checked before the throttle and the call");
+  // Receiving and the duplicate rule are unchanged by it.
+  const receive = hook.slice(hook.indexOf("const receive = useCallback("), hook.indexOf("const send = useCallback("));
+  strictEqual(/heard|hearing/.test(receive), false);
+});
+check("chat events: parseChatEvent takes exactly {event chat, id, sender_id, text 1-140, at}; unknown keys ignored", () => {
+  const I = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const U = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const ok = { event: "chat", id: I, sender_id: U, text: "gg", at: 1795717132152 };
+  deepStrictEqual(parseChatEvent(ok), { id: I, senderId: U, text: "gg", at: 1795717132152 });
+  deepStrictEqual(parseChatEvent({ ...ok, extra: "x", name: "Evil" }), { id: I, senderId: U, text: "gg", at: 1795717132152 });
+  const emoji = String.fromCodePoint(0x1f600);
+  strictEqual(parseChatEvent({ ...ok, text: "y".repeat(140) })?.text.length, 140);
+  strictEqual(parseChatEvent({ ...ok, text: emoji.repeat(140) })?.text, emoji.repeat(140), "140 characters, not UTF-16 units");
+  for (const bad of [
+    { ...ok, event: "msg" },
+    { ...ok, event: "game" },
+    { ...ok, id: "not-a-uuid" },
+    { ...ok, id: I.toUpperCase() },
+    { ...ok, id: 5 },
+    { ...ok, sender_id: "x" },
+    { ...ok, sender_id: null },
+    { ...ok, text: "" },
+    { ...ok, text: "y".repeat(141) },
+    { ...ok, text: emoji.repeat(141) },
+    { ...ok, text: 42 },
+    { ...ok, at: Number.NaN },
+    { ...ok, at: Number.POSITIVE_INFINITY },
+    { ...ok, at: "1795717132152" },
+    { event: "chat", sender_id: U, text: "gg", at: 1 },
+    { event: "chat", id: I, text: "gg", at: 1 },
+  ]) {
+    strictEqual(parseChatEvent(bad), null, JSON.stringify(bad));
+  }
+  strictEqual(parseChatEvent(null), null);
+  strictEqual(parseChatEvent("gg"), null);
+});
+check("chat events: a repeated id is dropped; the memory is bounded, oldest forgotten first", () => {
+  let seen: string[] = [];
+  const taken: string[] = [];
+  for (const id of ["a", "b", "a", "c", "b", "d"]) {
+    const step = rememberChatId(seen, id);
+    seen = step.seen;
+    if (step.fresh) taken.push(id);
+  }
+  deepStrictEqual(taken, ["a", "b", "c", "d"]);
+  strictEqual(CHAT_SEEN_MAX, 200);
+  let many: string[] = [];
+  for (let i = 0; i < CHAT_SEEN_MAX + 5; i++) many = rememberChatId(many, `m${i}`).seen;
+  strictEqual(many.length, CHAT_SEEN_MAX);
+  strictEqual(many[0], "m5");
+  strictEqual(rememberChatId(many, "m4").fresh, true, "forgotten: fresh again");
+  strictEqual(rememberChatId(many, "m6").fresh, false);
+  // The same list back when nothing changed.
+  strictEqual(rememberChatId(many, "m6").seen, many);
+});
+check("chat send: NBC04 is Slow down; every other failure is Couldn't send; OK carries the server's id", () => {
+  const I = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  deepStrictEqual(chatSendOutcome(null, { id: I, at: 1795717132152 }), { result: "ok", id: I });
+  deepStrictEqual(chatSendOutcome(null, null), { result: "ok", id: null }, "sent, without an id to match");
+  deepStrictEqual(chatSendOutcome(null, { id: "x" }), { result: "ok", id: null });
+  deepStrictEqual(chatSendOutcome({ code: "NBC04" }, null), { result: "throttled", id: null });
+  for (const code of ["NBC01", "NBC02", "NBC03", "NBC05", "42501", "PGRST202", "", null, undefined]) {
+    deepStrictEqual(chatSendOutcome({ code }, null), { result: "failed", id: null }, String(code));
+  }
+  // The composer's two notes, unchanged.
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  strictEqual(ui.includes(`{note === "throttled" ? "Slow down" : "Couldn't send"}`), true);
+  // The hook maps the RPC's answer with it, and a thrown call is "failed".
+  const hook = m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"));
+  strictEqual(/const \{ data, error \} = await supabase\.rpc\("send_table_message", \{ p_table_id: sentTo, p_text: text \}\);\s*outcome = chatSendOutcome\(error, data\);\s*\} catch \{\s*return "failed";/.test(hook), true);
+});
+check("chat: my own message comes back once -- matched by id, or by its sender being me -- never a second card", () => {
+  const me = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const them = "2b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const mine = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  strictEqual(chatEventIsMine({ id: mine, senderId: me }, me, [mine]), true, "the echo, matched by id");
+  strictEqual(chatEventIsMine({ id: mine, senderId: me }, me, []), true, "the echo beating the RPC's answer");
+  strictEqual(chatEventIsMine({ id: "other", senderId: them }, me, [mine]), false);
+  strictEqual(chatEventIsMine({ id: mine, senderId: them }, null, [mine]), true, "an own id, whoever it claims");
+  strictEqual(chatEventIsMine({ id: "x", senderId: them }, null, []), false);
+  // The hook: the card from the answer, with the server's id kept for the
+  // echo; the echo is dropped before anything is stored; a repeat id never
+  // stacks twice.
+  const hook = m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"));
+  const receive = hook.slice(hook.indexOf("const receive = useCallback("), hook.indexOf("const send = useCallback("));
+  strictEqual(receive.indexOf("if (!liveRef.current.on) return;") < receive.indexOf("chatEventIsMine(event, meRef.current, ownIdsRef.current)"), true);
+  strictEqual(receive.indexOf("chatEventIsMine(") < receive.indexOf("addChatMessage("), true);
+  strictEqual(receive.includes("list.some((m) => m.id === event.id)"), true);
+  strictEqual(receive.includes("id: event.id,"), true);
+  const send = hook.slice(hook.indexOf("const send = useCallback("), hook.indexOf("const dismiss = useCallback("));
+  strictEqual(send.includes("if (outcome.id) ownIdsRef.current = [...ownIdsRef.current, outcome.id].slice(-OWN_IDS_MAX);"), true);
+  strictEqual(send.indexOf("ownIdsRef.current = [") < send.indexOf("if (card) setOwn(card);"), true);
+  strictEqual(send.includes("setMessages"), false, "never one of the others' messages");
+  // Simulated: my send answered, then its echo and a stranger's message.
+  const ownIds = [mine];
+  const arrivals = [{ id: mine, senderId: me }, { id: "t1", senderId: them }].filter((e) => !chatEventIsMine(e, me, ownIds));
+  deepStrictEqual(arrivals.map((e) => e.id), ["t1"]);
 });
 check("chat: cleanChatText trims, folds line breaks, strips controls, cuts to 140", () => {
   const nl = String.fromCharCode(10);
@@ -7146,13 +7294,12 @@ check("chat: the throttle allows 1 per 2 s and 3 per 10 s", () => {
   strictEqual(chatThrottleAllows([0, 2500, 5000], 7600), false);
   strictEqual(chatThrottleAllows([0, 2500, 5000], 10001), true);
 });
-check("chat: the receiving throttle counts each sender apart and drops extras", () => {
-  const r = createPerSenderThrottle();
-  strictEqual(r.take("a", 0), true);
-  strictEqual(r.take("b", 0), true);
-  strictEqual(r.take("a", 500), false);
-  strictEqual(r.take("b", 2000), true);
-  strictEqual(r.take("a", 2000), true);
+check("chat: no receiving throttle any more (the server limits every sender); my own sends keep the first guard", () => {
+  const hook = m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"));
+  strictEqual(/receiveThrottle|PerSender/.test(hook), false);
+  strictEqual(/createPerSenderThrottle/.test(readFileSync("lib/tableChat.ts", "utf8")), false);
+  strictEqual(hook.includes("if (!sendThrottle.current.take(Date.now())) return \"throttled\";"), true);
+  strictEqual(hook.indexOf("sendThrottle.current.take(") < hook.indexOf("supabase.rpc("), true, "before the round trip");
 });
 check("chat: newest first, memory capped, at most CHAT_MAX_CARDS cards and +N more", () => {
   let list: ChatMessage[] = [];
@@ -7194,13 +7341,14 @@ check("chat: nothing reads a sender name or id from the message payload", () => 
       strictEqual(bad.test(src), false, `${bad} in chat code`);
     }
   }
-  // The only field read from a payload is text, and the sender is the
-  // channel's own player, looked up in the roster.
-  strictEqual(hook.includes("(payload as { text?: unknown }).text"), true);
+  // From a payload only the server-set sender_id, the id and the text are
+  // read (parseChatEvent); name and avatar come from the roster.
+  const parsed = parseChatEvent({ event: "chat", id: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", sender_id: "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", text: "hi", at: 1, name: "Evil", avatar_url: "x" });
+  deepStrictEqual(Object.keys(parsed ?? {}).sort(), ["at", "id", "senderId", "text"]);
   strictEqual(hook.includes("rosterRef.current.find((m) => m.user_id === senderId)"), true);
-  strictEqual(hook.includes("payload: { text }"), true); // what is sent
-  strictEqual(hook.includes("private: true, broadcast: { self: false, ack: true }"), true);
-  strictEqual(hook.includes("supabase.realtime.setAuth()"), true);
+  strictEqual(hook.includes("const senderId = event.senderId;"), true);
+  // What is sent: the cleaned text to the table, nothing else (the server sets the sender).
+  strictEqual(hook.includes('supabase.rpc("send_table_message", { p_table_id: sentTo, p_text: text })'), true);
   // The table page never passes a computer table or an unseated player.
   const page = readFileSync("components/table/TableView.tsx", "utf8");
   for (const needle of ['table.status === "open"', "!table.computer_level", "members.some((m) => m.user_id === session.user.id)", "messages={chat.messages}"]) {
@@ -7317,11 +7465,12 @@ check("chat: my own message becomes a card only after an OK ack", () => {
   strictEqual(ownChatCard({ result: "throttled", text: "gg", me, myUserId: "u1", now: 5000, id: "x" }), null);
   strictEqual(ownChatCard({ result: "ok", text: null, me, myUserId: "u1", now: 5000, id: "x" }), null);
   strictEqual(ownChatCard({ result: "ok", text: "hi", me: undefined, myUserId: "u1", now: 0, id: "x" })?.name, "Unnamed player");
-  // The hook makes the card from the ack's result, after the send.
+  // The hook makes the card from the RPC's answer, after the send.
   const hook = readFileSync("components/table/useTableChat.ts", "utf8").replace(/\r\n/g, "\n");
   const send = hook.slice(hook.indexOf("const send = useCallback"), hook.indexOf("const dismiss = useCallback"));
-  strictEqual(send.includes('const result: ChatSendResult = ack === "ok" ? "ok" : "failed";'), true);
-  strictEqual(send.indexOf("await channel.send(") < send.indexOf("ownChatCard({"), true);
+  strictEqual(send.includes("const result = outcome.result;"), true);
+  strictEqual(send.indexOf('await supabase.rpc("send_table_message"') < send.indexOf("ownChatCard({"), true);
+  strictEqual(send.includes('if (result === "ok" && myUserId && liveRef.current.on && liveRef.current.tableId === sentTo) {'), true, "not after chat went off or moved");
   strictEqual(send.includes("if (card) setOwn(card);"), true);
   strictEqual(send.includes("setMessages"), false); // never one of the others' messages
   const ui = readFileSync("components/table/TableChat.tsx", "utf8");
@@ -7604,8 +7753,8 @@ check("table events: joined only once my place is confirmed, again when it chang
   // The old listeners and the safety poll are untouched.
   strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
   strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
-  // Chat is untouched.
-  strictEqual(/table:|tableEvent/.test(readFileSync("components/table/useTableChat.ts", "utf8")), false);
+  // Chat opens no channel of its own (moderation M5c1: it rides this one).
+  strictEqual(/supabase\.channel\(|table:/.test(m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"))), false);
 });
 check("table events: overlapping spectator reads -- an older read that finishes last never overwrites a newer one", () => {
   const view = readFileSync("components/table/TableView.tsx", "utf8");

@@ -1,44 +1,27 @@
 // TABLE CHAT (PRD item 39): the pure rules, no React and no Supabase here.
-// The channels are components/table/useTableChat.ts; the server's rules are
-// docs/sql/table-chat.sql (chat_topic_allows).
+// The hook is components/table/useTableChat.ts.
 //
-// Each person at the table -- a seated player, or a CURRENT spectator
-// (spectator chat, docs/sql/spectator-chat.sql) -- sends on a private
-// Realtime Broadcast channel of their own, "chat:<table_id>:<sender_user_id>",
-// and listens to everyone else's. A message is just { text }: who sent it is
-// the channel it came on (the server lets only that person send there), and
-// their name, avatar and spectator mark come from the table's roster (the
-// players, then the current spectators) -- never from the message.
-// Nothing is stored anywhere; messages live in memory until closed.
+// THROUGH THE SERVER (moderation M5c1, docs/sql/moderation-m5c1-part1.sql):
+// each person at the table -- a seated player, or a CURRENT spectator
+// (spectator chat) -- sends with the RPC send_table_message, which checks
+// who may send, cleans the text, limits the rate, sets the sender itself and
+// broadcasts { event: 'chat', id, sender_id, text, at } on the table's
+// private topic table:<table_id> -- the channel the table, game and scores
+// events already use (components/table/useTableEvents.ts, parseChatEvent in
+// lib/tableEvents.ts). Everyone at the table hears it there. Name, avatar
+// and spectator mark come from the table's roster (the players, then the
+// current spectators) -- never from the message. The old per-sender
+// chat:<table>:<sender> channels are gone (Walt's HARD CUT, 2026-11-26).
+// Nothing is kept for history; messages live in memory until closed.
 
 // The longest message, in characters (code points, so an emoji is one).
 export const CHAT_MAX_LENGTH = 140;
-// The broadcast event every chat message uses.
-export const CHAT_EVENT = "msg";
 // How many messages a screen keeps in memory (closed ones are gone at once).
 export const CHAT_MEMORY = 50;
 // The most of the others' cards that stack at once (fewer when the room,
 // chatStackRoom, holds fewer); the rest are "+N more". My own echoed card is
 // extra and never counts.
 export const CHAT_MAX_CARDS = 5;
-
-// The topic for one sender at one table. Lowercase, as the server's rule
-// requires (it refuses an uppercase id rather than guess).
-export function chatTopic(tableId: string, senderId: string): string {
-  return `chat:${tableId.toLowerCase()}:${senderId.toLowerCase()}`;
-}
-
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const TOPIC = new RegExp(`^chat:(${UUID}):(${UUID})$`);
-
-// The sender id in a topic, if it is a chat topic for this table; else null.
-// (realtime-js may prefix "realtime:" to a channel's topic; that is allowed.)
-export function chatSenderId(topic: string, tableId: string): string | null {
-  const bare = topic.startsWith("realtime:") ? topic.slice("realtime:".length) : topic;
-  const match = TOPIC.exec(bare);
-  if (!match || match[1] !== tableId.toLowerCase()) return null;
-  return match[2];
-}
 
 // Text as it may be shown: a string, trimmed, every line break (and the
 // spaces around it) turned into one space, control characters and
@@ -56,9 +39,11 @@ export function cleanChatText(input: unknown): string | null {
   return cut === "" ? null : cut;
 }
 
-// THE THROTTLE: at most 1 message in any 2 seconds and 3 in any 10. The
-// same limit for my own sends and, on my screen, for each other player's
-// messages (anything over it is dropped).
+// THE THROTTLE: at most 1 message in any 2 seconds and 3 in any 10 -- the
+// server's own limit (send_table_message, NBC04), kept here as a first
+// guard on MY sends only ("Slow down" without a round trip). Others'
+// messages are not throttled on my screen any more: the server already
+// refused anything over the limit.
 export const CHAT_LIMITS: ReadonlyArray<{ count: number; windowMs: number }> = [
   { count: 1, windowMs: 2000 },
   { count: 3, windowMs: 10000 },
@@ -85,19 +70,31 @@ export function createChatThrottle() {
   };
 }
 
-// The receiving side: the same limit, kept for each sender apart.
-export function createPerSenderThrottle() {
-  const bySender = new Map<string, ReturnType<typeof createChatThrottle>>();
-  return {
-    take(senderId: string, now: number): boolean {
-      let throttle = bySender.get(senderId);
-      if (!throttle) {
-        throttle = createChatThrottle();
-        bySender.set(senderId, throttle);
-      }
-      return throttle.take(now);
-    },
-  };
+// WHAT A SEND ENDED AS (send_table_message's answer): "ok" with the
+// message's server id (null if the answer had none -- it was still sent);
+// "throttled" for NBC04, which shows "Slow down"; everything else --
+// NBC01, NBC02, NBC03, NBC05, a network error, anything unknown -- is
+// "failed", which shows "Couldn't send".
+export type ChatSendResult = "ok" | "throttled" | "failed";
+
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function chatSendOutcome(
+  error: { code?: string | null } | null | undefined,
+  data: unknown
+): { result: ChatSendResult; id: string | null } {
+  if (error) return { result: error.code === "NBC04" ? "throttled" : "failed", id: null };
+  const id = data && typeof data === "object" ? (data as { id?: unknown }).id : undefined;
+  return { result: "ok", id: typeof id === "string" && ID.test(id) ? id : null };
+}
+
+// MY OWN MESSAGE COMING BACK: the server's broadcast reaches me too. It is
+// mine -- never a card in the others' stack (my own card is `own`) -- when
+// its id is one of the ids my sends got back (the echo matched by id), or
+// when its sender is me at all (the echo beating the RPC's answer, or a
+// message from my other tab, which never showed here before either).
+export function chatEventIsMine(event: { id: string; senderId: string }, myUserId: string | null, ownIds: readonly string[]): boolean {
+  return ownIds.includes(event.id) || (myUserId !== null && event.senderId === myUserId);
 }
 
 export type ChatMessage = {
@@ -190,7 +187,7 @@ export function chatStackRoom({
   return { top, budget: Math.min(half, limit), limit };
 }
 
-// MY OWN MESSAGE, ECHOED: after a send the server ACKed as delivered, the
+// MY OWN MESSAGE, ECHOED: after send_table_message answered OK, the
 // sender sees it too, as a card like everyone else's -- but only briefly
 // (OWN_CARD_MS, fading out over the last OWN_CARD_FADE_MS) and apart from
 // the others' messages: at most one at a time (a new one replaces it), never

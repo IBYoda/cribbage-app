@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
@@ -8,10 +8,14 @@ import {
   acceptGameEvent,
   acceptScoresEvent,
   acceptTableEvent,
+  parseChatEvent,
   parseGameEvent,
   parseScoresEvent,
   parseTableEvent,
+  rememberChatId,
+  tableChannelJoined,
   tableEventTopic,
+  type ChatEvent,
   type GameEvent,
   type GameSeen,
   type ScoresEvent,
@@ -39,6 +43,17 @@ import {
 // each through the per-game version rule (acceptGameEvent), then onGameEvent.
 // SCORES EVENTS (moderation M5b2) too (event 'scores'), through
 // acceptScoresEvent, then onScoresEvent -- a repair hint only.
+// CHAT (moderation M5c1) too (event 'chat', sent by send_table_message):
+// parseChatEvent, an id already seen at this table dropped (rememberChatId),
+// then onChatEvent. Whether chat is on at all (an open HUMAN table) is
+// useTableChat's to decide: at a computer table nothing sends one, and the
+// chat hook ignores any that came.
+// JOINED (moderation M5c1): the hook returns { joined }, true only while
+// this role's channel for this table reports SUBSCRIBED (tableChannelJoined)
+// -- false after CHANNEL_ERROR, TIMED_OUT or CLOSED, before the first
+// join, on leave, and at once on a role or table change (it is kept per
+// role and topic, so a new table never inherits the old one's true). The
+// page hides chat while it is false.
 // The same private-channel setup as the kick channel (useTableKicks.ts):
 // supabase.realtime.setAuth() first, so the join never goes out with the
 // anon key, then a session check. Removed on leave, role change and unmount.
@@ -51,12 +66,14 @@ export function useTableEvents({
   onEvent,
   onGameEvent,
   onScoresEvent,
+  onChatEvent,
 }: {
   role: TableEventRole | null;
   tableId: string | null;
   onEvent: (event: TableEvent) => void;
   onGameEvent: (event: GameEvent) => void;
   onScoresEvent: (event: ScoresEvent) => void;
+  onChatEvent: (event: ChatEvent) => void;
 }) {
   // The latest handler, read when an event arrives (no rejoin when it
   // changes).
@@ -72,6 +89,10 @@ export function useTableEvents({
   useEffect(() => {
     onScoresEventRef.current = onScoresEvent;
   }, [onScoresEvent]);
+  const onChatEventRef = useRef(onChatEvent);
+  useEffect(() => {
+    onChatEventRef.current = onChatEvent;
+  }, [onChatEvent]);
 
   // The highest version seen, per table. Kept across a rejoin of the same
   // table (a role change), forgotten for another table.
@@ -80,13 +101,19 @@ export function useTableEvents({
   const gamesSeenRef = useRef<{ tableId: string | null; games: Map<string, GameSeen> }>({ tableId: null, games: new Map() });
   // The newest scores event seen, for this table.
   const scoresSeenRef = useRef<{ tableId: string | null; last: ScoresSeen | undefined }>({ tableId: null, last: undefined });
+  // Which channel (role + topic) last reported SUBSCRIBED, or null.
+  const [joinedKey, setJoinedKey] = useState<string | null>(null);
+  // The chat message ids seen, for this table (a bounded list).
+  const chatSeenRef = useRef<{ tableId: string | null; seen: string[] }>({ tableId: null, seen: [] });
 
   useEffect(() => {
     if (!role || !tableId) return;
     if (seenRef.current.tableId !== tableId) seenRef.current = { tableId, version: null };
     if (gamesSeenRef.current.tableId !== tableId) gamesSeenRef.current = { tableId, games: new Map() };
     if (scoresSeenRef.current.tableId !== tableId) scoresSeenRef.current = { tableId, last: undefined };
+    if (chatSeenRef.current.tableId !== tableId) chatSeenRef.current = { tableId, seen: [] };
     const topic = tableEventTopic(tableId);
+    const key = `${role}|${topic}`;
     let cancelled = false;
     let channel: RealtimeChannel | null = null;
     (async () => {
@@ -122,14 +149,29 @@ export function useTableEvents({
           scoresSeenRef.current = { tableId, last: step.last };
           if (step.accept) onScoresEventRef.current(event);
         });
-        channel.subscribe();
+        channel.on("broadcast", { event: "chat" }, ({ payload }) => {
+          if (cancelled) return;
+          const event = parseChatEvent(payload);
+          if (!event) return;
+          const step = rememberChatId(chatSeenRef.current.seen, event.id);
+          chatSeenRef.current = { tableId, seen: step.seen };
+          if (step.fresh) onChatEventRef.current(event);
+        });
+        channel.subscribe((status) => {
+          if (cancelled) return;
+          setJoinedKey(tableChannelJoined(status) ? key : null);
+        });
       } catch {
         // Quiet: the old listeners and the safety poll still keep the screen right.
       }
     })();
     return () => {
       cancelled = true;
+      setJoinedKey((current) => (current === key ? null : current));
       if (channel) void supabase.removeChannel(channel).catch(() => null);
     };
   }, [role, tableId]);
+
+  const joined = !!role && !!tableId && joinedKey === `${role}|${tableEventTopic(tableId)}`;
+  return { joined };
 }

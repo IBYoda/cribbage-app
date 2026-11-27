@@ -46,6 +46,7 @@ import {
   gameEventStep,
   scoresScreenBehind,
   tableEventRole,
+  type ChatEvent,
   type GameEvent,
   type ScoresEvent,
   type TableEvent,
@@ -3041,8 +3042,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // TABLE CHAT (PRD item 39): only at an OPEN, HUMAN table (never a
   // computer table) I am seated at, on the table screen (no error -- an
   // ended table shows one -- and not mid-leave). The server's rules
-  // (chat_topic_allows) say the same; this keeps the channels from even
-  // being tried elsewhere. Off removes every channel and message.
+  // (send_table_message, moderation M5c1) say the same; this keeps a send
+  // from even being tried elsewhere, and makes the hook ignore any chat
+  // event the table's channel carries while off. Off forgets every message.
   // A SPECTATOR chats too (spectator chat, docs/sql/spectator-chat.sql):
   // while they are a CURRENT spectator -- in the list get_table_spectators
   // gives -- exactly as a player while seated.
@@ -3123,20 +3125,19 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     return () => window.clearTimeout(t);
   }, [chatBlockNote]);
   const chatMuted = useMemo(() => mutedSenders(mutedIds, blockedIds), [mutedIds, blockedIds]);
-  const chat = useTableChat({
-    enabled: chatOn,
-    tableId: table?.id ?? null,
-    myUserId,
-    roster: chatRoster,
-    muted: chatMuted,
-  });
+  // The chat hook itself is called after the table's channel (below: it
+  // needs to know that channel is joined), so the Mute here and the
+  // channel's chat events reach it through these two (stable) forwarders.
+  const chatDropRef = useRef<(senderId: string) => void>(() => {});
+  const chatReceiveRef = useRef<(event: ChatEvent) => void>(() => {});
+  const dropChatSender = useCallback((senderId: string) => chatDropRef.current(senderId), []);
+  const receiveChatEvent = useCallback((event: ChatEvent) => chatReceiveRef.current(event), []);
   // "Also block <name>?" -- asked after a Mute (never after Unmute), unless
   // they are already blocked. Null: not asking. afterReport: the same
   // question after a sent report (moderation M6), titled "Report sent".
   const [blockAsk, setBlockAsk] = useState<{ userId: string; name: string; afterReport?: boolean } | null>(null);
   // "Mute <name>": at once, this table on this browser, no confirm; their
   // messages leave memory now. Then the question.
-  const { dropSender: dropChatSender } = chat;
   const muteInChat = useCallback(
     (userId: string, name: string) => {
       if (!myUserId || !chatTableId) return;
@@ -3421,13 +3422,29 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     (spectating
       ? !!spectatorList?.some((s) => s.userId === session.user.id)
       : members.some((m) => m.user_id === session.user.id));
-  useTableEvents({
+  const { joined: tableChannelJoined } = useTableEvents({
     role: tableEventRole({ available: tableEventsOn, spectating }),
     tableId: table?.id ?? null,
     onEvent: handleTableEvent,
     onGameEvent: handleGameEvent,
     onScoresEvent: handleScoresEvent,
+    // Chat (moderation M5c1): the same channel; the chat hook decides.
+    onChatEvent: receiveChatEvent,
   });
+  // TABLE CHAT's hook: available only while the table's channel is joined
+  // (heard), so chat hides when it can't hear.
+  const chat = useTableChat({
+    enabled: chatOn,
+    tableId: table?.id ?? null,
+    myUserId,
+    roster: chatRoster,
+    heard: tableChannelJoined,
+    muted: chatMuted,
+  });
+  useEffect(() => {
+    chatDropRef.current = chat.dropSender;
+    chatReceiveRef.current = chat.receive;
+  }, [chat.dropSender, chat.receive]);
   const popupOpen = usePersonPopupOpen();
   // The first queued notice for someone I don't block (yet), shown only
   // while no other question and no person popup is open.
