@@ -436,17 +436,21 @@ import {
 } from "../lib/reports";
 import {
   CHAT_SEEN_MAX,
-  SCORES_REPAIR_DELAY_MS,
   acceptGameEvent,
   acceptScoresEvent,
   acceptTableEvent,
   gameEventStep,
+  gameEventLiveEffects,
+  goSplashKey,
   parseChatEvent,
   parseGameEvent,
   parseScoresEvent,
+  playsToAnnounce,
   rememberChatId,
   scoresScreenBehind,
   tableChannelJoined,
+  zeroFromScoresEvent,
+  zeroSplashKey,
   parseTableEvent,
   tableEventRole,
   tableEventTopic,
@@ -2119,10 +2123,10 @@ check("Spectator chat: a spectator hears the table from Seat 1, no deal sound, n
   strictEqual(view.includes("silent: spectating"), false);
   strictEqual(view.includes("if (spectatorDealKey && phase === \"discard\") tableSound.dealStart(dealKey(spectatorDealKey));"), false);
   // The game-end sound asks whose seat: Seat 1 (the game's first player) for a spectator.
-  strictEqual(/const myId = soundSeatId\(\{\s*spectating,\s*viewerId: updatedGame\.players\?\.\[0\] \?\? NOBODY_SEATED,\s*myId: myHandRef\.current\?\.userId \?\? null,\s*\}\);/.test(view), true);
+  strictEqual(/const myId = soundSeatId\(\{\s*spectating,\s*viewerId: row\.players\?\.\[0\] \?\? NOBODY_SEATED,\s*myId: myHandRef\.current\?\.userId \?\? null,\s*\}\);/.test(view), true);
   // A player's own tap still plays their cut and discard once: the games row's key stays quiet after the tap.
   strictEqual(view.includes("tableSound.card(cutKey(activeGame.id, round, session.user.id));"), true);
-  strictEqual(view.includes("tableSound.card(discardKey(updatedGame.id, updatedGame.hand_no, id), cards, landIn);"), true);
+  strictEqual(view.includes("tableSound.card(discardKey(row.id, row.hand_no, id), cards, landIn);"), true);
 });
 
 // SPECTATOR SEAT, PART B: the watch page (app/watch/[code]) and the shared
@@ -3963,7 +3967,7 @@ check("realtime stopgap: game_plays is filtered by game, re-subscribed per game,
   strictEqual(catchUp.includes("setPlays((current) => mergePlays(current, data as PlayEvent[]));"), true);
   // The sound and the Go splash stay with the live event only.
   strictEqual(playsEffect.includes("tableSound.card(playKey("), true);
-  strictEqual(playsEffect.includes("showGo(`go:"), true);
+  strictEqual(playsEffect.includes("showGo(goSplashKey(event.game_id, activeGameRef.current?.hand_no, event.segment, event.user_id));"), true);
   strictEqual(catchUp.includes("tableSound"), false);
 });
 check("realtime stopgap: mergePlays adds each seq once, in order; the catch-up skips another hand", () => {
@@ -7894,7 +7898,7 @@ check("stale plays: a late read from hand N after Next Hand, and a late insert f
   strictEqual(listener.indexOf("playEventApplies({") < listener.indexOf("showGo("), true, "and before its Go splash");
   strictEqual(listener.includes("setPlays((current) => mergePlays(current, [event]));"), true, "the seq merge kept");
 });
-check("game events: the same channel, computer tables too; only the poll's own reads -- never a sound, splash, banner or computer move", () => {
+check("game events: the same channel, computer tables too; the poll's own reads plus ONE live read -- never a computer move", () => {
   const hook = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
   strictEqual((hook.match(/supabase\.channel\(/g) ?? []).length, 1, "one channel");
   strictEqual(/channel\.on\("broadcast", \{ event: "game" \}, \(\{ payload \}\) => \{/.test(hook), true);
@@ -7905,13 +7909,14 @@ check("game events: the same channel, computer tables too; only the poll's own r
   strictEqual(on.includes("computer_level"), false, "no computer-table exclusion");
   strictEqual(on.includes("members.some((m) => m.user_id === session.user.id)"), true, "still only once my seat is confirmed");
   strictEqual(view.includes("onGameEvent: handleGameEvent,"), true);
-  // The handler: the poll's reads only.
+  // The handler: the poll's reads, plus ONE live read of the event's game row (App A).
   const handler = m3CodeOnly(view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
-  strictEqual(handler.includes("void refreshTableState(tableId);"), true);
-  strictEqual(handler.includes("await reconcileGame(event.gameId);"), true);
+  strictEqual(handler.includes('const screenRead = step.kind === "refresh" ? refreshTableState(tableId) : reconcileGame(event.gameId);'), true);
   strictEqual(handler.includes("await catchUpPlays(event.gameId);"), true, "a MERGING plays read (never a replace)");
-  strictEqual(/tableSound|showGo|showZero|showWings|showGodLoss|setTossLanding|soundCatchUpRef|trackAction|supabase|\.rpc\(|\.from\(|fetchPlays|setFinishedGame|setActiveGame/.test(handler), false,
-    "no sound, splash, banner, computer action or read of its own");
+  strictEqual((handler.match(/\.from\(/g) ?? []).length, 1, "one read of its own");
+  strictEqual(handler.includes('supabase.from("games").select(LIVE_ROW_COLUMNS).eq("id", event.gameId).maybeSingle();'), true);
+  strictEqual(/setTossLanding|trackAction|\.rpc\(|fetchPlays|setFinishedGame|setActiveGame|showZero|showWings|showGodLoss/.test(handler), false,
+    "no computer action, no state of its own; God's splash only through playWonGameEffects");
   // The reads it calls never play a sound or splash: sounds come from the
   // old listeners and keyed effects only (the file's rule), and a read never
   // sets the sound catch-up (so it can't silence or replay one).
@@ -7996,7 +8001,6 @@ check("scores events: is the screen behind? whole-ms rounding, a reset, another 
   strictEqual(scoresScreenBehind({ event: ev(0), screenGameId: G, members: shown }), true);
   strictEqual(scoresScreenBehind({ event: ev(0), screenGameId: G, members: [{ score: 0, last_awarded_at: null }, { score: 0, last_awarded_at: null }] }), false, "already reset -> no read");
   strictEqual(scoresScreenBehind({ event: ev(0), screenGameId: G, members: [{ score: 0, last_awarded_at: at }] }), true);
-  strictEqual(SCORES_REPAIR_DELAY_MS, 1500);
   // AT FIRE TIME, after a game change (the timer outlives it): the screen's
   // game is the live one, else the finished one (activeGameIdRef ??
   // finishedGameRef).
@@ -8013,30 +8017,233 @@ check("scores events: is the screen behind? whole-ms rounding, a reset, another 
   strictEqual(scoresScreenBehind({ event: { gameId: G, awardMs: winMs, userId: null, points: 3, reason: "fifteen one" }, screenGameId: G, members: won }), false);
   strictEqual(scoresScreenBehind({ event: { gameId: NEW, awardMs: 0, userId: null, points: null, reason: null }, screenGameId: NEW, members: [{ score: 0, last_awarded_at: null }, { score: 0, last_awarded_at: null }] }), false, "the new game already on screen, reset");
 });
-check("scores events: repair only -- one timer, the current screen, then nothing but the poll's roster read", () => {
+check("scores events, the LIVE path: the roster at once when behind (or after the read in flight), the 19 from the event", () => {
   const hook = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
   strictEqual((hook.match(/supabase\.channel\(/g) ?? []).length, 1, "the same one channel");
   strictEqual(/channel\.on\("broadcast", \{ event: "scores" \}, \(\{ payload \}\) => \{/.test(hook), true);
   strictEqual(/const step = acceptScoresEvent\(scoresSeenRef\.current\.last, event\);\s*scoresSeenRef\.current = \{ tableId, last: step\.last \};\s*if \(step\.accept\) onScoresEventRef\.current\(event\);/.test(hook), true);
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(view.includes("onScoresEvent: handleScoresEvent,"), true);
-  const handler = m3CodeOnly(view.slice(view.indexOf("const scoresRepairRef = useRef<"), view.indexOf("const handleTableEvent = useCallback(")));
-  // A Muggins table: a no-op. One pending timer, a newer event replacing it.
-  strictEqual(handler.includes("if (!table || isMuggins) return;"), true);
-  strictEqual(/clearScoresRepair\(\);\s*const timer = window\.setTimeout\(/.test(handler), true);
-  strictEqual(handler.includes("}, SCORES_REPAIR_DELAY_MS);"), true);
-  // When it fires: the CURRENT screen (refs), and only if behind, the roster read.
-  strictEqual(/const behind = scoresScreenBehind\(\{\s*event,\s*screenGameId: activeGameIdRef\.current \?\? finishedGameRef\.current\?\.id \?\? null,\s*members: membersRef\.current,\s*\}\);\s*if \(!behind\) return;\s*console\.info\("\[table-sync\] scores repaired", [^;]*\);\s*void loadMembers\(tableId\);/.test(handler), true);
+  const handler = m3CodeOnly(view.slice(view.indexOf("const handleScoresEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  strictEqual(handler.includes("if (!table || isMuggins) return;"), true, "a Muggins table: a no-op");
+  // No wait any more: no timer at all.
+  strictEqual(/setTimeout/.test(handler), false);
+  strictEqual(/SCORES_REPAIR_DELAY_MS|clearScoresRepair|scoresRepairRef/.test(view), false);
+  strictEqual(/SCORES_REPAIR_DELAY_MS/.test(readFileSync("lib/tableEvents.ts", "utf8")), false);
+  // A read in flight is waited for, then the CURRENT screen checked; only if behind, the poll's roster read.
+  strictEqual(/const pending = membersPendingRef\.current;\s*if \(pending\) await pending\.catch\(\(\) => null\);\s*if \(scoresTableRef\.current !== tableId\) return;\s*const behind = scoresScreenBehind\(\{\s*event,\s*screenGameId: activeGameIdRef\.current \?\? finishedGameRef\.current\?\.id \?\? null,\s*members: membersRef\.current,\s*\}\);\s*if \(!behind\) return;\s*console\.info\("\[table-sync\] scores repaired", [^;]*\);\s*await loadMembers\(tableId\);/.test(handler), true);
   strictEqual((handler.match(/loadMembers\(/g) ?? []).length, 1, "the poll's own roster read, once");
-  strictEqual(/tableSound|showGo|showZero|showWings|showGodLoss|soundCatchUpRef|setMembers|setActiveGame|setPlays|reconcileGame|catchUpPlays|fetchPlays|refreshTableState|trackAction|supabase|\.rpc\(|\.from\(/.test(handler), false,
-    "no sound, flash, splash, game or plays change, computer action or read of its own");
-  // Cleared on unmount and when the table or the game changes.
-  strictEqual(view.includes("useEffect(() => clearScoresRepair, [scoresRepairTableId, clearScoresRepair]);"), true, "cleared on a table change or unmount only");
-  strictEqual(view.includes("scoresRepairGameId"), false, "never on a game change: the win and a new game's reset are exactly the awards to repair");
+  // Every roster read is tracked, so the one in flight is known.
+  strictEqual(/const loadMembers = useCallback\(\s*\(tableId: string, poll = false, refreshProfiles = false\): Promise<string \| null> => \{\s*const pending = readMembers\(tableId, poll, refreshProfiles\);\s*membersPendingRef\.current = pending;/.test(view), true);
+  // The 19, through the shared playZero, from the screen's game, status and hand.
+  strictEqual(/const zero = zeroFromScoresEvent\(event, \{\s*gameId: activeGameIdRef\.current,\s*status: activeGameRef\.current\?\.status,\s*handNo: activeGameRef\.current\?\.hand_no,\s*\}\);\s*if \(zero\) playZero\(zero\);/.test(handler), true);
+  strictEqual(/setMembers|setActiveGame|setPlays|reconcileGame|catchUpPlays|fetchPlays|refreshTableState|trackAction|\.rpc\(|\.from\(|tableSound|showZero/.test(handler), false,
+    "no game or plays change, computer action or read of its own; sounds only through playZero");
   // The old score listener and the poll are as they were.
   strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
   strictEqual(view.includes("await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));"), true);
   strictEqual(/useTableEvents|scoresScreenBehind|handleScoresEvent/.test(readFileSync("components/table/useComputerDriver.ts", "utf8")), false);
+});
+
+// ---- M5 final cleanup, App A: the new events are the LIVE path ----
+// A claim set, as useTableSounds / useSplash / claimLive keep one: true the
+// first time a key is seen.
+function claims() {
+  const seen = new Set<string>();
+  return (key: string) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
+}
+// Both orders: the old path's key and the new path's key are the same
+// string, so whichever claims first plays and the other is a no-op.
+function bothOrders(label: string, oldKey: string, newKey: string) {
+  strictEqual(oldKey, newKey, `${label}: one key for both paths`);
+  const a = claims();
+  strictEqual(a(oldKey), true, `${label}: old listener first plays`);
+  strictEqual(a(newKey), false, `${label}: then the event is a no-op`);
+  const b = claims();
+  strictEqual(b(newKey), true, `${label}: event first plays`);
+  strictEqual(b(oldKey), false, `${label}: then the old listener is a no-op`);
+}
+check("App A: the 19 from a scores event -- the old listener's splash and sound keys, exactly; both orders", () => {
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const U = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const screen = { gameId: G, status: "active", handNo: 3 };
+  // The award at 12:00:10.123456: the listener reads Date.parse of the row's time,
+  // the event carries award_ms rounded DOWN -- the same ms.
+  const rowTime = "2026-11-26T12:00:10.123456+00:00";
+  const awardMs = Date.parse("2026-11-26T12:00:10.123Z");
+  strictEqual(Date.parse(rowTime), awardMs);
+  const ev = (points: number | null, reason: string | null, over: Partial<ScoresEvent> = {}): ScoresEvent => ({ gameId: G, awardMs, userId: U, points, reason, ...over });
+  const hand = zeroFromScoresEvent(ev(0, "hand: nothing"), screen);
+  deepStrictEqual(hand, { userId: U, crib: false, splashKey: `zero:${U}:${awardMs}`, soundKey: zeroKey(G, 3, U, "hand: nothing") });
+  strictEqual(zeroFromScoresEvent(ev(0, "crib: nothing"), screen)?.crib, true);
+  strictEqual(zeroFromScoresEvent(ev(0, "crib: nothing"), screen)?.soundKey, zeroKey(G, 3, U, "crib: nothing"));
+  // Not a 19: points, a pegging reason, another game, not live, a reset, no scorer.
+  strictEqual(zeroFromScoresEvent(ev(2, "hand: fifteen two"), screen), null);
+  strictEqual(zeroFromScoresEvent(ev(0, "go"), screen), null);
+  strictEqual(zeroFromScoresEvent(ev(0, "hand: nothing", { gameId: "2b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d" }), screen), null);
+  strictEqual(zeroFromScoresEvent(ev(0, "hand: nothing"), { ...screen, status: "cutting" }), null);
+  strictEqual(zeroFromScoresEvent(ev(0, "hand: nothing"), { ...screen, gameId: null }), null);
+  strictEqual(zeroFromScoresEvent(ev(null, null, { awardMs: 0 }), screen), null);
+  strictEqual(zeroFromScoresEvent(ev(0, "hand: nothing", { userId: null }), screen), null);
+  // The old listener's keys, built as it builds them, against the event's.
+  bothOrders("the 19 splash", zeroSplashKey(U, Date.parse(rowTime)), hand!.splashKey);
+  bothOrders("the 19 sound", zeroKey(G, screen.handNo, U, "hand: nothing"), hand!.soundKey);
+  // Both paths call the one playZero with those keys.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("splashKey: zeroSplashKey(updated.user_id, Date.parse(updated.last_awarded_at)),"), true);
+  strictEqual(view.includes("soundKey: zeroGameId ? zeroKey(zeroGameId, activeGameRef.current?.hand_no, updated.user_id, updated.last_reason!) : null,"), true);
+  const playZero = m3CodeOnly(view.slice(view.indexOf("const playZero = useCallback("), view.indexOf("// Live updates: append anyone who joins")));
+  strictEqual(playZero.includes("showZero(\n        zero.splashKey,"), true);
+  strictEqual(playZero.includes("if (zero.soundKey && !soundCatchUpRef.current && !zeroCatchUpRef.current) tableSound.zeroHand(zero.soundKey);"), true, "its sound gated as before");
+  strictEqual((view.match(/showZero\(/g) ?? []).length, 1, "the one place that shows it");
+  strictEqual((view.match(/tableSound\.zeroHand\(/g) ?? []).length, 1);
+});
+check("App A: a game event's live read -- what each transition plays (gameEventLiveEffects)", () => {
+  const A = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const B = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const row = (over: Partial<{ id: string; status: string; ended_reason: string | null; ready_by: string[] | null; deal_cut: { user_id: string }[][] | null }>) =>
+    ({ id: A, status: "active", ended_reason: null, ready_by: [], deal_cut: null, ...over });
+  const none = { rowSounds: false, shuffle: false, won: false, playerLeft: false, ended: false };
+  // Live, on screen: the row's cut and discard sounds -- not while a catch-up is pending.
+  deepStrictEqual(gameEventLiveEffects({ row: row({}), onScreenAtArrival: A, onScreenNow: A, catchingUp: false }), { ...none, rowSounds: true });
+  deepStrictEqual(gameEventLiveEffects({ row: row({}), onScreenAtArrival: A, onScreenNow: A, catchingUp: true }), none);
+  deepStrictEqual(gameEventLiveEffects({ row: row({}), onScreenAtArrival: B, onScreenNow: B, catchingUp: false }), none, "not the game on screen");
+  // The cut just opened (no card cut yet): the shuffle; once a card is cut, not again.
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "cutting", deal_cut: [] }), onScreenAtArrival: null, onScreenNow: null, catchingUp: false }), { ...none, shuffle: true });
+  strictEqual(gameEventLiveEffects({ row: row({ status: "cutting", deal_cut: [[{ user_id: B }]] }), onScreenAtArrival: A, onScreenNow: A, catchingUp: false }).shuffle, false);
+  // Won, nobody has tapped New Game: the won effects (wherever the screen is); a New Game tap later: not again.
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "ended", ended_reason: "won" }), onScreenAtArrival: A, onScreenNow: A, catchingUp: false }), { ...none, won: true, ended: true });
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "ended", ended_reason: "won" }), onScreenAtArrival: null, onScreenNow: null, catchingUp: false }), { ...none, won: true });
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "ended", ended_reason: "won", ready_by: [B] }), onScreenAtArrival: null, onScreenNow: null, catchingUp: false }), none);
+  // A player left the game on screen: the banner and the refresh; a game not on screen at arrival: nothing.
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "ended", ended_reason: "player_left" }), onScreenAtArrival: A, onScreenNow: A, catchingUp: false }), { ...none, playerLeft: true, ended: true });
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "ended", ended_reason: "player_left" }), onScreenAtArrival: null, onScreenNow: null, catchingUp: false }), none);
+  deepStrictEqual(gameEventLiveEffects({ row: row({ status: "ended", ended_reason: "admin" }), onScreenAtArrival: A, onScreenNow: A, catchingUp: false }), { ...none, ended: true });
+  deepStrictEqual(gameEventLiveEffects({ row: null, onScreenAtArrival: A, onScreenNow: A, catchingUp: false }), none);
+});
+check("App A: cut, discard, shuffle, end, God's splash, the banner -- one shared function per effect, both paths, the same keys; both orders", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const code = m3CodeOnly(view);
+  // The old games UPDATE calls the shared functions (no inline copy left).
+  strictEqual(code.includes("playWonGameEffects(updatedGame);"), true);
+  strictEqual(code.includes("playRowSounds(updatedGame);"), true);
+  strictEqual(code.includes("notePlayerLeft(updatedGame.id);"), true);
+  strictEqual((code.match(/tableSound\.end\(/g) ?? []).length, 2, "the win and the loss, inside playWonGameEffects only");
+  strictEqual((code.match(/showGodLoss\(/g) ?? []).length, 1);
+  strictEqual((code.match(/setGameEndedNotice\("A player left the table/g) ?? []).length, 1);
+  strictEqual((code.match(/discardKey\(row\.id, row\.hand_no, id\)/g) ?? []).length, 1);
+  // The live read calls the same ones, with the same key builders.
+  const handler = m3CodeOnly(view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  for (const call of ["tableSound.shuffle(cutOpenKey(row.id));", "playRowSounds(row);", "playWonGameEffects(row);", "notePlayerLeft(row.id);", "catchingUp: soundCatchUpRef.current,"]) {
+    strictEqual(handler.includes(call), true, call);
+  }
+  strictEqual(code.includes('if (newGame.status === "cutting") tableSound.shuffle(cutOpenKey(newGame.id));'), true, "the old INSERT's shuffle, same key");
+  // The claimed effects: the won game (before its reads) and the banner.
+  const won = m3CodeOnly(view.slice(view.indexOf("const playWonGameEffects = useCallback("), view.indexOf("const notePlayerLeft = useCallback(")));
+  strictEqual(won.includes("if (!table || !claimLive(`won:${row.id}`)) return;"), true);
+  strictEqual(won.indexOf("claimLive(") < won.indexOf('.from("table_members")'), true, "claimed before any read");
+  strictEqual(view.includes('if (claimLive(`left:${gameId}`)) setGameEndedNotice("A player left the table — the game was ended.");'), true);
+  const rowSounds = m3CodeOnly(view.slice(view.indexOf("const playRowSounds = useCallback("), view.indexOf("const playWonGameEffects = useCallback(")));
+  strictEqual(rowSounds.includes("if (soundCatchUpRef.current) return;"), true, "quiet during a catch-up, as before");
+  // Both orders, each key.
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const P = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  bothOrders("a cut card", cutKey(G, 0, P), cutKeys(G, [[{ user_id: P }]])[0]);
+  bothOrders("a discard", discardKey(G, 2, P), discardKey(G, 2, P));
+  bothOrders("the shuffle", cutOpenKey(G), cutOpenKey(G));
+  bothOrders("the game-end sound", endKey(G), endKey(G));
+  bothOrders("the won game's effects", `won:${G}`, `won:${G}`);
+  bothOrders("God's splash", `godloss:${G}`, `godloss:${G}`);
+  // The banner: shown by the first path; dismissed; the second path never brings it back.
+  const claimLive = claims();
+  let notice: string | null = null;
+  const notePlayerLeft = (id: string) => {
+    if (claimLive(`left:${id}`)) notice = "A player left the table — the game was ended.";
+  };
+  notePlayerLeft(G); // the old listener
+  strictEqual(notice !== null, true);
+  notice = null; // Dismiss
+  notePlayerLeft(G); // the event, later
+  strictEqual(notice, null, "dismissed stays dismissed");
+});
+check("App A follow-up: the cut-open shuffle of a NEW game -- the refresh branch too, once; never for a game already under way", () => {
+  const OLD = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"; // the finished game still on screen
+  const NEW = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const P = "2b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const cutting = (deal_cut: { user_id: string }[][] | null) => ({ id: NEW, status: "cutting", ended_reason: null, ready_by: [], deal_cut });
+  // (1) Another player's New Game starts a cut-for-deal game while this screen
+  // shows the previous, finished game (nothing live on screen): the new
+  // game's first event plays the shuffle -- start_game_with_deal_as writes
+  // deal_cut '[[]]' (one empty round), and the other player has drawn nothing yet.
+  const fresh = gameEventLiveEffects({ row: cutting([[]]), onScreenAtArrival: null, onScreenNow: null, catchingUp: false });
+  strictEqual(fresh.shuffle, true, "the finished game on screen: still the shuffle");
+  strictEqual(gameEventLiveEffects({ row: cutting(null), onScreenAtArrival: OLD, onScreenNow: OLD, catchingUp: false }).shuffle, true, "another game on screen");
+  strictEqual(gameEventLiveEffects({ row: cutting([[]]), onScreenAtArrival: NEW, onScreenNow: NEW, catchingUp: false }).shuffle, true, "my own click already put it on screen");
+  strictEqual(gameEventLiveEffects({ row: cutting([[]]), onScreenAtArrival: null, onScreenNow: null, catchingUp: true }).shuffle, true, "a catch-up pending doesn't silence it (the old INSERT never gated it either)");
+  // Once: every later event of that game finds the same key claimed.
+  const claim = claims();
+  strictEqual(claim(cutOpenKey(NEW)), true);
+  strictEqual(claim(cutOpenKey(NEW)), false);
+  // The handler reads the row for EVERY game event, before it branches: the
+  // "another game -> full refresh" branch is not catch-up only for the shuffle.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const handler = m3CodeOnly(view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  const read = handler.indexOf('const rowRead = supabase.from("games")');
+  strictEqual(read > 0 && read < handler.indexOf('step.kind === "refresh" ? refreshTableState(tableId)'), true, "the live read starts before the branch, for both");
+  strictEqual(handler.indexOf("if (live.shuffle) tableSound.shuffle(cutOpenKey(row.id));") < handler.indexOf('if (step.kind === "refresh") return;'), true, "the shuffle before the refresh branch returns");
+  // (2) The first event after a reload or a rejoin, for a game well under way:
+  // no shuffle -- a card already cut, the cut resolved (active), or ended.
+  strictEqual(gameEventLiveEffects({ row: cutting([[{ user_id: P }]]), onScreenAtArrival: null, onScreenNow: null, catchingUp: true }).shuffle, false, "a card already cut");
+  strictEqual(gameEventLiveEffects({ row: cutting([[{ user_id: P }], []]), onScreenAtArrival: NEW, onScreenNow: NEW, catchingUp: false }).shuffle, false, "a tie re-cut round");
+  strictEqual(gameEventLiveEffects({ row: { ...cutting(null), status: "active" }, onScreenAtArrival: null, onScreenNow: null, catchingUp: true }).shuffle, false, "past the cut");
+  strictEqual(gameEventLiveEffects({ row: { ...cutting(null), status: "ended", ended_reason: "admin" }, onScreenAtArrival: null, onScreenNow: null, catchingUp: false }).shuffle, false, "ended");
+  // (3) A REMATCH after a won game between the same players has NO cut:
+  // start_game_with_deal_as deals at once and inserts it 'active'. No
+  // cut-open shuffle on any path; what is heard is the deal (shuffle, then
+  // deal) from the deal animation, which follows the screen's state
+  // (liveDealStep), whoever's click started the game.
+  strictEqual(gameEventLiveEffects({ row: { id: NEW, status: "active", ended_reason: null, ready_by: [], deal_cut: null }, onScreenAtArrival: null, onScreenNow: null, catchingUp: false }).shuffle, false);
+  const sql = readFileSync("docs/sql/slice-e-part2.sql", "utf8");
+  strictEqual(sql.includes("values (p_table_id, v_caller, v_dealer, v_players, 'active', null)"), true, "the rematch: active, no deal_cut");
+  strictEqual(sql.includes("values (p_table_id, v_caller, null, v_players, 'cutting', '[[]]'::jsonb)"), true, "the cut: one empty round");
+  // The finished game on screen (no hand: seen null), then the rematch's first hand arrives by a refresh: a live deal.
+  deepStrictEqual(
+    liveDealStep({ tableRead: true, seenKey: null, handKey: `${NEW}:1`, phase: "discard", iHaveDiscarded: false, animationOn: true }),
+    { seenKey: `${NEW}:1`, liveKey: `${NEW}:1` }
+  );
+  strictEqual(view.includes("onStart={() => tableSound.dealStart(dealKey(dealHandKey))}"), true);
+});
+check("App A: plays a live read adds -- the card sound and the Go splash, the old listener's keys; only plays newer than the screen's", () => {
+  const G = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const U = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const play = (seq: number, kind: "play" | "go" = "play") => ({ seq, segment: 1, user_id: U, kind, card: kind === "play" ? "5H" : null, count_after: seq });
+  deepStrictEqual(playsToAnnounce([play(3), play(1), play(2), play(4, "go")], 2).map((p) => p.seq), [3, 4], "newer than the screen's, in order");
+  deepStrictEqual(playsToAnnounce([play(1), play(2)], 2), [], "a refresh's plays are never played");
+  // The old listener's Go key, as it was written inline, and the shared builder.
+  strictEqual(goSplashKey(G, 2, 1, U), `go:${G}:2:1:${U}`);
+  bothOrders("a card played", playKey(G, 2, 5), playKey(G, 2, 5));
+  bothOrders("a go", goSplashKey(G, 2, 1, U), goSplashKey(G, 2, 1, U));
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const handler = m3CodeOnly(view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  // The floor is the screen's newest play just before the read; the hand must not have moved.
+  strictEqual(/const floorSeq = playsRef\.current\.reduce\(\(max, p\) => Math\.max\(max, p\.seq\), 0\);\s*const handNo = activeGameRef\.current\?\.hand_no;\s*const merged = await catchUpPlays\(event\.gameId\);\s*if \(!merged \|\| activeGameIdRef\.current !== event\.gameId \|\| activeGameRef\.current\?\.hand_no !== handNo\) return;/.test(handler), true);
+  strictEqual(handler.includes('if (play.kind === "play") tableSound.card(playKey(event.gameId, handNo, play.seq));'), true);
+  strictEqual(handler.includes('else if (play.kind === "go") showGo(goSplashKey(event.gameId, handNo, play.segment, play.user_id));'), true);
+  // The old listener: the same builders.
+  strictEqual(view.includes("tableSound.card(playKey(event.game_id, activeGameRef.current?.hand_no, event.seq));"), true);
+  strictEqual(view.includes("showGo(goSplashKey(event.game_id, activeGameRef.current?.hand_no, event.segment, event.user_id));"), true);
+  // The hand test's switch: development only, the two old channels only.
+  strictEqual(/function devOldListenersOff\(\): boolean \{\s*if \(process\.env\.NODE_ENV === "production"\) return false;/.test(view), true);
+  strictEqual((view.match(/if \(devOldListenersOff\(\)\) return;/g) ?? []).length, 2);
+  // Catch-up reads still never play: the poll, a visibility change and the subscribe catch-up.
+  const poll = m3CodeOnly(view.slice(view.indexOf("async function pollOnce() {"), view.indexOf("// One timeout at a time")));
+  strictEqual(/tableSound\.|show[A-Z]\w*\(|playRowSounds|playWonGameEffects|notePlayerLeft|playZero/.test(poll), false);
+  const catchUp = m3CodeOnly(view.slice(view.indexOf("const catchUpPlays = useCallback("), view.indexOf("// Fetches every hand and the crib this player")));
+  strictEqual(/tableSound\.|show[A-Z]\w*\(/.test(catchUp), false);
 });
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");
