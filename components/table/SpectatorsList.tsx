@@ -23,8 +23,10 @@ import type { TableSpectator } from "@/lib/spectatorData";
 // the name -- "Mute"/"Unmute" and "Report" for everyone (PersonMuteButton,
 // PersonReportButton), then the host's "Kick". Their avatar carries the
 // quiet mark when I muted or blocked them. No Mute or Report on my own row.
-// On a narrow phone the buttons wrap under the name (the name keeps at
-// least 5rem), so nothing overlaps.
+// At every width the buttons are a line of their own under the name,
+// right-aligned, so a name is never squeezed beside them (it once was, to
+// "Elsa An...", at 414 px); a name too long for the row ends in "..." and
+// its title shows it whole.
 
 export type SpectatorsListMode = { kind: "list" };
 
@@ -90,8 +92,13 @@ export function SpectatorsList({
                 <PersonMark userId={s.userId}>
                   <Avatar name={nameOf(s)} url={s.avatarUrl} size="sm" />
                 </PersonMark>
-                <span className="min-w-20 flex-1 truncate font-semibold">{nameOf(s)}</span>
-                <span className="ml-auto flex shrink-0 gap-1">
+                <span className="min-w-0 flex-1 truncate font-semibold" title={nameOf(s)}>
+                  {nameOf(s)}
+                </span>
+                {/* Always a line of their own, right-aligned (basis-full), so
+                    the name is never squeezed beside them. Empty on my own
+                    row and at a computer table: then no second line. */}
+                <span className="ml-auto flex shrink-0 basis-full justify-end gap-1 empty:hidden">
                   <PersonMuteButton userId={s.userId} name={nameOf(s)} />
                   <PersonReportButton userId={s.userId} name={nameOf(s)} />
                   {canKick && (

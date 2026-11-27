@@ -295,6 +295,11 @@ export function ChatStack({
       const controls: { top: number; bottom: number }[] = [];
       for (const control of middle.querySelectorAll<HTMLElement>("button, a[href], input, select")) {
         if (notices.some((n) => n.contains(control))) continue;
+        // A seat's avatar tap (PersonTap's invisible 44px button) is not in
+        // the way: the cards may cover a seat, as they cover avatars anywhere.
+        // At 3 and 4 players the side seats' tags sit at the very top of the
+        // middle, and counting them left the stack no room at all.
+        if (control.closest("[data-person-tap]")) continue;
         const r = visible(control);
         if (r) controls.push(r);
       }

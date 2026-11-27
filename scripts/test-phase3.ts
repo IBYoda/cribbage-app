@@ -7426,6 +7426,37 @@ check("chat: the banner never folds the stack; the cards go below it; the waitin
   strictEqual(ui.includes("if (notices.some((n) => n.contains(control))) continue;"), true);
 });
 
+// The fold bug at 3 and 4 players (Walt, Nov 27): since M2c the side seats'
+// name tags at the very top of the square middle carry PersonTap's invisible
+// 44px button. Counted as a control, it left the stack no room: every message
+// folded to "N new messages · Show" and my own card never showed. 2 players
+// were fine (the opponent's tag is above the middle). Seat taps are skipped.
+check("chat: a seat's avatar tap at the top of the middle never folds the stack", () => {
+  // 3P at 375 px, measured in the mock: the middle 335 tall, the left tag's
+  // 44px tap area centred on its 28px row (so it starts above the middle).
+  const middle = { top: 200, bottom: 535 };
+  const tagTap = { top: 192, bottom: 236 };
+  // Were it counted, there would be no room at all -- why it must be skipped.
+  let room = chatStackRoom({ middle, notices: [], controls: [tagTap], mode: "game", expanded: false });
+  strictEqual(room.limit, 0);
+  strictEqual(room.budget, 0);
+  // Skipped: half the middle, the newest card down to its bottom.
+  room = chatStackRoom({ middle, notices: [], controls: [], mode: "game", expanded: false });
+  deepStrictEqual(room, { top: 200, budget: 167.5, limit: 331 });
+  // A real control still counts (Count hands lower in the middle).
+  room = chatStackRoom({ middle, notices: [], controls: [{ top: 400, bottom: 440 }], mode: "game", expanded: false });
+  deepStrictEqual(room, { top: 200, budget: 167.5, limit: 196 });
+  // The measure loop skips seat taps, after the notices' controls, before measuring.
+  const ui = readFileSync("components/table/TableChat.tsx", "utf8");
+  const loop = ui.slice(ui.indexOf('middle.querySelectorAll<HTMLElement>("button, a[href], input, select")'), ui.indexOf("const place = chatStackRoom("));
+  const skip = loop.indexOf('if (control.closest("[data-person-tap]")) continue;');
+  strictEqual(skip > loop.indexOf("if (notices.some((n) => n.contains(control))) continue;"), true);
+  strictEqual(skip > 0 && skip < loop.indexOf("const r = visible(control);"), true);
+  // And PersonTap's wrapper still carries the mark the loop looks for.
+  const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
+  strictEqual(menu.includes('<span className="person-tap" data-person-tap={surface}>'), true);
+});
+
 // Stacking (same test): the cards were drawn behind the crib and the starter
 // that hang over the top of the middle (.sq-opponent-row, z 5, over the
 // middle's z 4). Now they are a layer on <body>, above every table z-index.
@@ -7563,16 +7594,19 @@ check("reports: the popup's buttons are Mute/Unmute, Report, then the host's Kic
   // Computer tables: the store is off there, so no Report at all.
   strictEqual(view.includes("enabled: !!myUserId && !!table && !table.computer_level,"), true);
 });
-check("reports: the eye list's row buttons are Mute/Unmute, Report, then the host's Kick, wrapping on a narrow phone", () => {
+check("reports: the eye list's row buttons are Mute/Unmute, Report, then the host's Kick, on a line under the name", () => {
   deepStrictEqual(spectatorRowButtons({ muted: false, isHost: false }), ["mute", "report"]);
   deepStrictEqual(spectatorRowButtons({ muted: true, isHost: true }), ["unmute", "report", "kick"]);
   const list = readFileSync("components/table/SpectatorsList.tsx", "utf8");
   const row = list.slice(list.indexOf("{spectators.map((s) => ("), list.indexOf("</ul>"));
-  const at = ["{nameOf(s)}</span>", "<PersonMuteButton", "<PersonReportButton userId={s.userId} name={nameOf(s)} />", "{canKick && ("].map((s) => row.indexOf(s));
+  const at = ["title={nameOf(s)}>", "<PersonMuteButton", "<PersonReportButton userId={s.userId} name={nameOf(s)} />", "{canKick && ("].map((s) => row.indexOf(s));
   strictEqual(at.every((i, k) => i > 0 && (k === 0 || i > at[k - 1])), true, "name, Mute, Report, Kick");
   strictEqual(row.includes('className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1"'), true);
-  strictEqual(row.includes('className="min-w-20 flex-1 truncate font-semibold"'), true, "the name keeps 5rem; the buttons wrap below");
-  strictEqual(row.includes('<span className="ml-auto flex shrink-0 gap-1">'), true);
+  // At every width the buttons are a right-aligned line of their own
+  // (basis-full), so the name is never squeezed beside them ("Elsa An..."
+  // at 414 px, Nov 27); a clipped name's title shows it whole.
+  strictEqual(row.includes('<span className="min-w-0 flex-1 truncate font-semibold" title={nameOf(s)}>'), true, "the name: the whole first line, its title the whole name");
+  strictEqual(row.includes('<span className="ml-auto flex shrink-0 basis-full justify-end gap-1 empty:hidden">'), true, "the buttons: a line of their own");
   const menu = readFileSync("components/table/PersonMenu.tsx", "utf8");
   const btn = menu.slice(menu.indexOf("export function PersonReportButton"), menu.indexOf("export function PersonMark"));
   strictEqual(btn.includes("if (!mod || !canOfferPersonMenu({ userId, myUserId: mod.myUserId, enabled: mod.enabled })) return null;"), true, "never my own row, never a computer table");
