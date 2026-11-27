@@ -63,6 +63,14 @@ export function newGame(s: TravelBoardState): TravelBoardState {
   return { ...newTravelBoard(s.players, s.names), selected: s.selected };
 }
 
+// Whether New Game asks first ("Start a new game?"): only when there is
+// something to lose -- any score (shown or hidden) or the entry above 0 -- and
+// nobody has won. An empty board, or a won game, starts again at once.
+export function newGameAsks(s: TravelBoardState): boolean {
+  if (winner(s) !== null) return false;
+  return s.entry > 0 || s.scores.some((score) => score > 0);
+}
+
 export function plateName(s: TravelBoardState, plate: number): string {
   return s.names[plate]?.trim() || TRAVEL_DEFAULT_NAMES[plate];
 }
