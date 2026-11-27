@@ -2881,6 +2881,205 @@ section.felt-panel {
   outline: 3px solid var(--cream);
   outline-offset: 2px;
 }
+/* Home's Hand Calculator and Travel Board pills, side by side and equal
+   (one style, so they can't drift apart): tighter sides and 15px text, so
+   the pair fits a 320px phone on one line each. Still 32px tall. */
+.header-pill--pair {
+  justify-content: center;
+  padding-inline: 0.5rem;
+  font-size: 15px;
+}
+
+/* THE TRAVEL BOARD (components/TravelBoard.tsx). The board strip: the
+   page's width (max-w-md less its 16px sides), a little taller than the
+   table's strip; a board that's pictures of mugs (the Beer Board) gets the
+   extra 50px it takes at a table. */
+.tb-board {
+  min-width: 0;
+  overflow: hidden;
+  height: calc((min(100vw, 28rem) - 2rem) / 4.4);
+}
+.tb-board--tall {
+  height: calc((min(100vw, 28rem) - 2rem) / 4.4 + 50px);
+}
+.tb-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--brass);
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.25);
+  color: var(--cream);
+}
+.tb-menu-btn:focus-visible,
+.tb-plate:focus-visible,
+.tb-key:focus-visible,
+.tb-seg:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+/* A plate: lane dot and name on top, the score big at the bottom right.
+   Selected: a bright cream outline. Names wrap (after a slash first, then
+   anywhere) and are never cut off. */
+.tb-plate {
+  display: flex;
+  min-width: 0;
+  min-height: 64px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 2px solid rgb(226 193 125 / 0.45);
+  border-radius: 12px;
+  background: rgb(0 0 0 / 0.28);
+  color: var(--cream);
+  text-align: left;
+}
+.tb-plate[aria-pressed="true"] {
+  border-color: var(--cream);
+  box-shadow:
+    0 0 0 2px var(--cream),
+    0 0 14px rgb(243 234 211 / 0.45);
+}
+.tb-plate-name {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+/* Three across (91px each at 320): tighter sides and a smaller dot, so a
+   word like "Grandma" still fits whole on its line. */
+.tb-plate--three {
+  padding-inline: 6px;
+}
+.tb-plate--three > span:first-child {
+  gap: 4px;
+}
+.tb-plate--three .tb-dot {
+  width: 10px;
+  height: 10px;
+}
+.tb-plate--three .tb-plate-name {
+  font-size: 13px;
+}
+.tb-plate-score {
+  align-self: flex-end;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.tb-dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border: 1px solid rgb(255 255 255 / 0.7);
+  border-radius: 9999px;
+}
+.tb-banner {
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--brass);
+  border-radius: 14px;
+  background: linear-gradient(rgb(231 201 138 / 0.22), rgb(201 162 79 / 0.12));
+  text-align: center;
+}
+/* The keypad: a felt panel, the entry pill, then two rows of gold-ringed
+   56px keys; OK is the gold fill. A key that can't act yet is dimmed. */
+.tb-keypad {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgb(226 193 125 / 0.35);
+  border-radius: 16px;
+  background: rgb(0 0 0 / 0.28);
+}
+.tb-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  border: 2px solid var(--brass);
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.35);
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.tb-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border: 3px solid var(--brass);
+  border-radius: 9999px;
+  background: #1b5232;
+  box-shadow: 0 3px 0 rgb(0 0 0 / 0.35);
+  color: var(--cream);
+  font-size: 20px;
+  font-weight: 800;
+}
+.tb-key:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
+}
+.tb-key--ok {
+  background: linear-gradient(#e7c98a, #c9a24f);
+  color: #1f1608;
+}
+.tb-key[aria-disabled="true"] {
+  opacity: 0.5;
+}
+/* The cards key: two of the app's own cards, fanned. */
+.tb-cards-icon {
+  position: relative;
+  width: 30px;
+  height: 32px;
+}
+.tb-cards-icon__back,
+.tb-cards-icon__front {
+  position: absolute;
+  top: 1px;
+  width: 20px;
+  height: 28px;
+}
+.tb-cards-icon__back {
+  left: 0;
+  transform: rotate(-12deg);
+}
+.tb-cards-icon__front {
+  right: 0;
+  transform: rotate(10deg);
+}
+.tb-cards-icon .rounded-lg {
+  border-radius: 3px;
+}
+.tb-message {
+  min-height: 2.5rem;
+  text-align: center;
+  font-weight: 600;
+}
+.tb-dialog {
+  width: min(22rem, calc(100vw - 2rem));
+}
+.tb-seg {
+  min-height: 44px;
+  border: 2px solid rgb(226 193 125 / 0.5);
+  border-radius: 12px;
+  background: rgb(0 0 0 / 0.25);
+  font-size: 18px;
+  font-weight: 700;
+}
+.tb-seg[aria-pressed="true"] {
+  border-color: var(--brass);
+  background: linear-gradient(#e7c98a, #c9a24f);
+  color: #1f1608;
+}
 
 /* Reduced motion: no deal-in, no peg drop, no fade. */
 @media (prefers-reduced-motion: reduce) {
