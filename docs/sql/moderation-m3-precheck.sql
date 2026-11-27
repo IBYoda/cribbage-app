@@ -39,7 +39,9 @@
 --             59 once moderation M6 part 1 is in (plus report_player,
 --             admin_list_reports, admin_delete_report), 60 once moderation
 --             M5a part 1 is in (plus table_topic_allows), 61 once moderation
---             M5c1 part 1 is in (plus send_table_message).
+--             M5c1 part 1 is in (plus send_table_message), 60 again once
+--             moderation M5c1 c2 is in (chat_topic_allows removed). The
+--             realtime count accepts the 2 policies c2 leaves.
 --   names     anything already named like M3's objects ("kick" in a
 --             function, table or policy name).
 --   count     table_kicks rows and attempt_log kick rows (after part 1).
@@ -168,10 +170,14 @@ from (
   -- ==== fp =======================================================================
   select 1, k.o, 'fp', k.fn || ': md5 of the live body',
          coalesce((select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure(k.sig)), '(missing)'),
+         case when k.fn = 'chat_topic_allows' and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                then 'removed by moderation M5c1 c2 (moderation-m5c1c2-part1.sql): expected'
+              else
          case (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure(k.sig))
               when k.lf then k.src || ', LF: as expected'
               when k.crlf then k.src || ', CRLF: as expected'
               else 'STOP: not ' || k.src || '''s text (or missing). Capture it first: select pg_get_functiondef(''' || k.sig || '''::regprocedure); and paste the result back' end
+         end
   from fp_known k
 
   union all
@@ -267,7 +273,11 @@ from (
                 and (select count(*) from rt_pol r where r.name in ('table chat: members receive', 'table chat: members send', 'table kicks: people at the table receive', 'table events: people at the table receive')) = 4
                 and to_regprocedure('public.table_topic_allows(text)') is not null
              then 'after part 1 and moderation M5a part 1: plus the table events policy'
-           else 'STOP: expected the two table-chat policies (plus the kicks policy after part 1, and the table events policy after M5a part 1)' end
+           when (select count(*) from rt_pol) = 2
+                and (select count(*) from rt_pol r where r.name in ('table kicks: people at the table receive', 'table events: people at the table receive')) = 2
+                and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+             then 'after moderation M5c1 c2: the table-chat policies removed; the kicks and table events policies remain'
+           else 'STOP: expected the two table-chat policies (plus the kicks policy after part 1, and the table events policy after M5a part 1; only those two after moderation M5c1 c2)' end
 
   union all
   select 3, 3, 'realtime', 'realtime.send(jsonb, text, text, boolean): exists / ' || current_user || ' may execute',
@@ -299,6 +309,10 @@ from (
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
              then 'after part 1 and moderation M6 part 1: the 56 plus report_player, admin_list_reports, admin_delete_report'
+           when (select count(*) from client_fns) = 60
+                and not exists (select 1 from client_fns cf where cf.name = 'chat_topic_allows')
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+             then 'after moderation M5c1 c2: the 61 without chat_topic_allows (60)'
            when (select count(*) from client_fns) = 60
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3

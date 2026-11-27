@@ -340,6 +340,11 @@ begin
     ) as t(fn, lf, crlf)
   loop
     select md5(p.prosrc) into v_txt from pg_proc p where p.oid = to_regprocedure(v_rec.fn);
+    -- Moderation M5c1 c2 removed chat_topic_allows on purpose.
+    if v_rec.fn = 'public.chat_topic_allows(text, boolean)' and v_txt is null
+       and to_regprocedure('public.send_table_message(uuid, text)') is not null then
+      continue;
+    end if;
     if v_txt is null or v_txt not in (v_rec.lf, v_rec.crlf) then
       raise exception 'FAIL [K3] % has body md5 %; expected % (LF) or % (CRLF).', v_rec.fn, coalesce(v_txt, 'missing'), v_rec.lf, v_rec.crlf;
     end if;

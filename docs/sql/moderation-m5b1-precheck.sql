@@ -275,7 +275,9 @@ from (
          (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages')::text,
          case when (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages') = 4
                 then 'as expected before and after part 1: the chat pair, M3''s kicks policy, M5a''s table events policy (M5b1 adds none)'
-              else 'STOP: expected 4' end
+              when (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages') = 2 and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                then 'as expected after moderation M5c1 c2: the table-chat pair removed; kicks and table events remain (M5b1 adds none)'
+              else 'STOP: expected 4 (2 after moderation M5c1 c2)' end
 
   union all
   select 5, 2, 'realtime', 'publication supabase_realtime: games / game_plays',
@@ -291,7 +293,10 @@ from (
                 then 'as expected before and after part 1 (M5b1 grants nothing to clients)'
               when (select count(*) from client_fns) = 61 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
                 then 'as expected before and after part 1 (M5b1 grants nothing to clients): the 60 plus moderation M5c1''s send_table_message'
-              else 'STOP: expected 60 (61 once moderation M5c1 part 1 is in; slice-e-grants-verification.sql X1 would fail)' end
+              when (select count(*) from client_fns) = 60 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                   and not exists (select 1 from client_fns cf where cf.name = 'chat_topic_allows')
+                then 'as expected before and after part 1 (M5b1 grants nothing to clients): after moderation M5c1 c2, without chat_topic_allows'
+              else 'STOP: expected 60 (61 once moderation M5c1 part 1 is in, 60 again after c2; slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== load =====================================================================

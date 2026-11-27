@@ -6,6 +6,11 @@
 --
 -- STATUS: written, NOT RUN yet.
 --
+-- SUPERSEDED once moderation M5c1 c2 is in (moderation-m5c1c2-part1.sql):
+-- K3, K4 and C1 compare with chat_topic_allows and the two table-chat
+-- policies, which c2 removed. It then stops at SETUP; the proof is
+-- moderation-m5c1c2-verification.sql.
+--
 -- It WRITES -- temporary functions and tables in pg_temp, a temporary
 -- REPLACEMENT of _broadcast_table_message (C9: first one that stores
 -- nothing, then one that raises), temporary accounts in auth.users and
@@ -164,6 +169,9 @@ declare
   v_m int[];
   v_default text;
 begin
+  if (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null) then
+    raise exception 'SETUP: SUPERSEDED -- moderation M5c1 c2 removed chat_topic_allows and the table-chat policies this file compares with. Run docs/sql/moderation-m5c1c2-verification.sql instead.';
+  end if;
   perform set_config('TimeZone', 'UTC', true);
 
   -- ==== MODE ======================================================================

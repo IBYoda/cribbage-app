@@ -355,6 +355,11 @@ begin
     ) as t(fn, lf, crlf)
   loop
     select md5(p.prosrc) into v_txt from pg_proc p where p.oid = to_regprocedure(v_rec.fn);
+    -- Moderation M5c1 c2 removed chat_topic_allows on purpose.
+    if v_rec.fn = 'public.chat_topic_allows(text, boolean)' and v_txt is null
+       and to_regprocedure('public.send_table_message(uuid, text)') is not null then
+      continue;
+    end if;
     if v_txt is null or v_txt not in (v_rec.lf, v_rec.crlf) then
       v_bad := v_bad || v_rec.fn || ' md5 ' || coalesce(v_txt, 'missing') || ' (want ' || v_rec.crlf || ' / ' || v_rec.lf || '); ';
     end if;
@@ -385,13 +390,14 @@ begin
   from pg_policies p
   where p.schemaname = 'realtime' and p.tablename = 'messages'
     and p.policyname in ('table chat: members receive', 'table chat: members send');
-  if v_n <> 1 or v_txt is not null or v_n2 <> 2
+  -- The table-chat policies: 2, or 0 once moderation M5c1 c2 removed them.
+  if v_n <> 1 or v_txt is not null or v_n2 <> (case when (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null) then 0 else 2 end)
      or exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'
                   and p.cmd in ('INSERT', 'ALL', 'UPDATE') and p.policyname <> 'table chat: members send')
      or exists (select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
                   where ns.nspname = 'public' and p.proname ilike '%chat%'
                     and p.proname in ('_is_kicked_from_table', '_send_kick_notice', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks')) then
-    raise exception 'FAIL [K4] realtime.messages: the kicks policy found % time(s) as part 1 wrote it (want 1); the table-chat policies % (want 2); unknown policies: %; or a write policy other than the chat send.',
+    raise exception 'FAIL [K4] realtime.messages: the kicks policy found % time(s) as part 1 wrote it (want 1); the table-chat policies % (want 2, or 0 after moderation M5c1 c2); unknown policies: %; or a write policy other than the chat send.',
       v_n, v_n2, coalesce(v_txt, '(none)');
   end if;
   v_checks := v_checks + 1;

@@ -20,6 +20,11 @@
 -- INFO row for send_table_message (chat through the server) and its helper
 -- _broadcast_table_message; section 10 expects 61 names once
 -- send_table_message exists (the 60 plus it; never the helper).
+-- UPDATED FOR MODERATION M5c1 c2 (moderation-m5c1c2-part1.sql): the
+-- table-chat policies and chat_topic_allows are removed. Section 01 then
+-- expects exactly 2 policies (M3's kicks, M5a's table events) and shows an
+-- INFO row for c2; section 02 marks chat_topic_allows INFO (removed) instead
+-- of STOP; section 10 expects 60 names (the 61 without chat_topic_allows).
 --
 -- WHY: the moderation slices (kept chat messages for 3 days, reports, a
 -- table-wide mute and a kick by the host, a personal hide, a Block List that
@@ -176,7 +181,9 @@ client_fns as (
     and has_function_privilege('authenticated', p.oid, 'EXECUTE')
 ),
 expected_fns(name) as (
-  select unnest(array[
+  -- Slice E's 49 (chat_topic_allows only while it exists: moderation M5c1
+  -- c2 removed it).
+  select e from unnest(array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
     'computer_draw_cut_card', 'computer_hand', 'computer_next_hand', 'computer_play_card', 'computer_show_crib',
@@ -186,7 +193,8 @@ expected_fns(name) as (
     'get_table_spectators', 'is_admin', 'is_current_spectator', 'is_game_player', 'is_public_table',
     'is_table_member', 'join_table_by_code', 'leave_computer_table', 'leave_table', 'next_hand', 'play_card',
     'remove_spectator', 'set_seat', 'show_crib', 'show_hand', 'spectator_heartbeat', 'start_game_with_deal',
-    'stop_watching', 'unfollow_user', 'watch_table'])
+    'stop_watching', 'unfollow_user', 'watch_table']) as e
+  where e <> 'chat_topic_allows' or to_regprocedure('public.chat_topic_allows(text, boolean)') is not null
   union all
   -- Moderation M1 part 1's three RPCs, once its table exists.
   select unnest(array['block_player', 'get_my_blocks', 'unblock_player'])
@@ -261,7 +269,14 @@ from (
                    and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
                                  and pol.policyname = 'table events: people at the table receive')
               then 'as the chat prechecks expect (the two plus moderation M3''s kicks policy and M5a''s table events policy)'
-              else 'STOP: the chat prechecks expect exactly the two table-chat policies (plus M3''s kicks policy and M5a''s table events policy)' end
+              when (select count(*) from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages') = 2
+                   and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                   and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
+                                 and pol.policyname = 'table kicks: people at the table receive')
+                   and exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
+                                 and pol.policyname = 'table events: people at the table receive')
+              then 'as moderation M5c1 c2 left it: exactly M3''s kicks policy and M5a''s table events policy (both receive only)'
+              else 'STOP: the chat prechecks expect exactly the two table-chat policies (plus M3''s kicks policy and M5a''s table events policy; only those two after moderation M5c1 c2)' end
 
   union all
   select 1, 2, '', 0, 'realtime', 'realtime.messages: kind / leaf partitions / estimated rows / total size',
@@ -289,6 +304,13 @@ from (
          (to_regprocedure('public.send_table_message(uuid, text)') is not null)::text || ' / '
            || (to_regprocedure('public._broadcast_table_message(text, jsonb)') is not null)::text,
          'INFO: moderation M5c1''s chat through the server (moderation-m5c1-part1.sql): checks the sender, cleans the text, limits 1 in 2 s and 3 in 10 s per sender per table (counted in realtime.messages), broadcasts {event chat, id, sender_id, text, at} on table:<id> through the helper, and reads the stored row back. No table, no policy; the old chat policies stay until the c2 hard cut'
+
+  union all
+  select 1, 4, '', 2, 'realtime', 'moderation M5c1 c2: the table-chat policies / chat_topic_allows removed',
+         (not exists (select 1 from pg_policies pol where pol.schemaname = 'realtime' and pol.tablename = 'messages'
+                        and pol.policyname in ('table chat: members receive', 'table chat: members send')))::text || ' / '
+           || (to_regprocedure('public.chat_topic_allows(text, boolean)') is null)::text,
+         'INFO: moderation-m5c1c2-part1.sql drops the old per-sender chat path (chat:<table>:<sender>): no client may send on any private topic afterwards; the rollback restores both policies and the function exactly'
 
   union all
   select 1, 5, '', 0, 'realtime', 'publication supabase_realtime: tables',
@@ -333,7 +355,9 @@ from (
   select 2, fl.o, fl.fn, 0, 'fp',
          fl.fn || ' (' || coalesce(fl.sig, 'missing') || ')',
          coalesce(fl.m, '(missing)') || ' | overloads ' || fl.n::text || coalesce(' | ' || fl.info, ''),
-         case when fl.n = 0 then 'STOP: missing. Paste back: select proname, pg_get_function_identity_arguments(oid) from pg_proc where proname ilike ''%' || fl.fn || '%'';'
+         case when fl.n = 0 and fl.fn = 'chat_topic_allows' and to_regprocedure('public.send_table_message(uuid, text)') is not null
+                then 'INFO: removed by moderation M5c1 c2 (moderation-m5c1c2-part1.sql), as planned'
+              when fl.n = 0 then 'STOP: missing. Paste back: select proname, pg_get_function_identity_arguments(oid) from pg_proc where proname ilike ''%' || fl.fn || '%'';'
               when fl.n > 1 then 'STOP: ' || fl.n::text || ' overloads. Paste back: select pg_get_functiondef(oid) from pg_proc where proname = ''' || fl.fn || ''';'
               when fl.m in (fl.lf, fl.crlf) then
                 case fl.kind
@@ -552,7 +576,9 @@ from (
                 then 'as moderation M5a part 1 left it (60)'
               when (select count(*) from client_fns) = 61 and to_regprocedure('public.send_table_message(uuid, text)') is not null
                 then 'as moderation M5c1 part 1 left it (61)'
-              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a, 61 after M5c1); see the next two rows' end
+              when (select count(*) from client_fns) = 60 and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                then 'as moderation M5c1 c2 left it (60: chat_topic_allows removed)'
+              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a, 61 after M5c1, 60 after M5c1 c2); see the next two rows' end
 
   union all
   select 10, 1, '', 0, 'client fn', 'executable by authenticated but not in slice E''s 49 (plus M1''s 3 once public.blocks exists)',

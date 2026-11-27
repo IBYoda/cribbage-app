@@ -1,3 +1,9 @@
+-- RETIRED (moderation M5c1 c2, docs/sql/moderation-m5c1c2-part1.sql): the
+-- policies and chat_topic_allows this file tests were removed on purpose;
+-- chat goes through send_table_message on the table's topic now
+-- (moderation-m5c1-*.sql; proof: moderation-m5c1c2-verification.sql). Kept
+-- for history only. Do not run it after c2 (it stops at SETUP).
+--
 -- Table chat, slice 1: VERIFICATION of docs/sql/table-chat.sql.
 --
 -- Run in the Supabase Dashboard -> SQL Editor after docs/sql/table-chat.sql.
@@ -142,6 +148,10 @@ declare
   v_others int;
   v_expect int;
 begin
+  -- RETIRED by moderation M5c1 c2: the path this file tests is gone.
+  if (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null) then
+    raise exception 'SETUP: RETIRED -- moderation M5c1 c2 removed the table-chat policies and chat_topic_allows this file tests. Run docs/sql/moderation-m5c1c2-verification.sql instead.';
+  end if;
   -- ==== CATALOG ===============================================================
   if to_regprocedure(v_fn) is null then
     raise exception 'SETUP: % does not exist. Run docs/sql/table-chat.sql first.', v_fn;
