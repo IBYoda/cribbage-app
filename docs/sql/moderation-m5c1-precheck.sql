@@ -37,6 +37,9 @@
 --   computer-c1-verification.sql, computer-c2-verification.sql,
 --   end-empty-tables-verification.sql (no body they fingerprint changed).
 --   Not phase3-e1 / phase3-e4 (known stale, by design).
+--   After moderation M5c1 c2 (moderation-m5c1c2-*.sql) this file still runs
+--   green: it accepts chat_topic_allows and the table-chat pair as removed,
+--   2 policies and 60 functions.
 --
 -- SECTIONS
 --   state     the summary above.
@@ -175,7 +178,9 @@ from (
   -- ==== fp =======================================================================
   select 1, k.o, 'fp', k.fn || ': md5 of the live body (carriage returns removed)',
          coalesce((select md5(replace(p.prosrc, E'\r', '')) from pg_proc p where p.oid = to_regprocedure(k.sig)), '(missing)'),
-         case when (select md5(replace(p.prosrc, E'\r', '')) from pg_proc p where p.oid = to_regprocedure(k.sig)) = k.lf
+         case when k.fn = 'chat_topic_allows' and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                then 'removed by moderation M5c1 c2 (moderation-m5c1c2-part1.sql): expected'
+              when (select md5(replace(p.prosrc, E'\r', '')) from pg_proc p where p.oid = to_regprocedure(k.sig)) = k.lf
                 then k.src || ': as expected (unchanged by M5c1)'
               else 'STOP: not ' || k.src || '''s fingerprint (or missing): that suite would fail. Capture it first: select pg_get_functiondef(''' || k.sig || '''::regprocedure);' end
   from fp_lf k
@@ -210,7 +215,10 @@ from (
          (to_regclass('public.computer_accounts') is not null)::text || ' / '
            || (to_regprocedure('public.chat_topic_allows(text, boolean)') is not null)::text,
          case when to_regclass('public.computer_accounts') is not null and to_regprocedure('public.chat_topic_allows(text, boolean)') is not null
-                then 'as expected' else 'STOP: part 1''s guard needs both' end
+                then 'as expected'
+              when to_regclass('public.computer_accounts') is not null and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                then 'as expected after moderation M5c1 c2 (chat_topic_allows removed; part 1 already ran)'
+              else 'STOP: part 1''s guard needs both' end
 
   union all
   select 2, 3, 'needs', 'realtime.send(jsonb, text, text, boolean): exists / ' || current_user || ' may execute',
@@ -305,7 +313,9 @@ from (
          (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages')::text,
          case when (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages') = 4
                 then 'as expected before and after part 1 (M5c1 adds none: nobody may insert on table: topics)'
-              else 'STOP: expected 4' end
+              when (select count(*) from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages') = 2 and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                then 'as expected after moderation M5c1 c2: the table-chat pair removed; kicks and table events remain'
+              else 'STOP: expected 4 (2 after moderation M5c1 c2)' end
 
   union all
   select 5, 2, 'realtime', 'the old chat policies ("table chat: members receive" / "table chat: members send")',
@@ -314,6 +324,10 @@ from (
          case when exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages' and p.policyname = 'table chat: members receive')
                    and exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages' and p.policyname = 'table chat: members send')
                 then 'as expected: they STAY until the c2 hard cut'
+              when (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
+                and not exists (select 1 from pg_policies p where p.schemaname = 'realtime' and p.tablename = 'messages'
+                                  and p.policyname in ('table chat: members receive', 'table chat: members send'))
+                then 'gone: removed by moderation M5c1 c2, as planned'
               else 'STOP: an old chat policy is missing' end
 
   union all
@@ -331,6 +345,9 @@ from (
              then 'before part 1: 60 (slice E''s 49, M1''s 3, M2''s 1, M3''s 3, M6''s 3, M5a''s 1)'
            when (select count(*) from client_fns) = 61 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
              then 'after part 1: the 60 plus send_table_message'
+           when (select count(*) from client_fns) = 60 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                and not exists (select 1 from client_fns cf where cf.name = 'chat_topic_allows')
+             then 'after part 1 and moderation M5c1 c2: 60 (send_table_message in, chat_topic_allows removed)'
            else 'STOP: neither 60 nor 61 (slice-e-grants-verification.sql X1 would fail)' end
 ) z
 order by z.s, z.o, z.item;

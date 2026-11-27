@@ -1,3 +1,9 @@
+-- RETIRED (moderation M5c1 c2, docs/sql/moderation-m5c1c2-part1.sql): the
+-- policies and chat_topic_allows this file tests were removed on purpose;
+-- chat goes through send_table_message on the table's topic now
+-- (moderation-m5c1-*.sql; proof: moderation-m5c1c2-verification.sql). Kept
+-- for history only. Do not run it after c2: it describes the path c2 removed.
+--
 -- Table chat, slice 1: the PRE-CHECK (read-only)
 -- Run in the Supabase Dashboard -> SQL Editor before table-chat.sql. It
 -- reads only; it changes nothing.

@@ -187,6 +187,11 @@ begin
     ) as t(fn, lf, crlf)
   loop
     select md5(p.prosrc) into v_txt from pg_proc p where p.oid = to_regprocedure(v_rec.fn);
+    -- Moderation M5c1 c2 removed chat_topic_allows on purpose.
+    if v_rec.fn = 'public.chat_topic_allows(text, boolean)' and v_txt is null
+       and to_regprocedure('public.send_table_message(uuid, text)') is not null then
+      continue;
+    end if;
     -- join_table_by_code / watch_table may also be moderation M3 part 2's
     -- bodies (M1's plus the kick refusal).
     if v_txt is null
