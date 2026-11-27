@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { SiteFooter } from "@/components/brand/SiteFooter";
+import { AskDialog } from "@/components/brand/AskDialog";
 import { PlayingCard } from "@/components/PlayingCard";
 import {
   CribbageBoard,
@@ -22,6 +23,7 @@ import {
   clearEntry,
   keysLive,
   newGame,
+  newGameAsks,
   parseCalcTotal,
   parseTravelBoard,
   plateName,
@@ -72,6 +74,7 @@ export function TravelBoard({ userId }: { userId: string }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [menuView, setMenuView] = useState<"menu" | "names" | "help">("menu");
   const [drafts, setDrafts] = useState<string[]>(["", "", "", ""]);
+  const [confirmingNewGame, setConfirmingNewGame] = useState(false);
 
   if (!state) {
     return (
@@ -256,10 +259,16 @@ export function TravelBoard({ userId }: { userId: string }) {
           >
             Redo
           </button>
+          {/* The one confirmation on this screen (newGameAsks): only with
+              scores or an entry to lose and no winner yet. */}
           <button
             type="button"
             className="peg-btn peg-btn--ghost peg-btn--small peg-btn--pair whitespace-nowrap"
-            onClick={() => setState((s) => (s ? newGame(s) : s))}
+            aria-haspopup={newGameAsks(state) ? "dialog" : undefined}
+            onClick={() => {
+              if (newGameAsks(state)) setConfirmingNewGame(true);
+              else setState((s) => (s ? newGame(s) : s));
+            }}
           >
             New Game
           </button>
@@ -274,6 +283,19 @@ export function TravelBoard({ userId }: { userId: string }) {
         </Link>
       </main>
       <SiteFooter />
+
+      <AskDialog
+        open={confirmingNewGame}
+        title="Start a new game?"
+        body="This clears all scores."
+        yesLabel="New game"
+        noLabel="Cancel"
+        onYes={() => {
+          setConfirmingNewGame(false);
+          setState((s) => (s ? newGame(s) : s));
+        }}
+        onNo={() => setConfirmingNewGame(false)}
+      />
 
       <dialog
         ref={dialogRef}

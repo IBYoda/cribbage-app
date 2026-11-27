@@ -113,6 +113,7 @@ import {
   addToEntry,
   clearEntry,
   newGame,
+  newGameAsks,
   newTravelBoard,
   parseCalcTotal,
   parseTravelBoard,
@@ -8511,6 +8512,18 @@ check("travel board: saved data round-trips; corrupt or older data starts fresh"
     deepStrictEqual(parseTravelBoard(bad), fresh, String(bad));
   }
   strictEqual(travelBoardKey("u1"), "nobs:travel-board:v1:u1");
+});
+check("travel board: New Game asks first only with something to lose and no winner", () => {
+  const empty = newTravelBoard();
+  strictEqual(newGameAsks(empty), false, "an empty board");
+  strictEqual(newGameAsks(selectPlate(empty, 0)), false, "a selected plate alone is nothing to lose");
+  strictEqual(newGameAsks(addToEntry(selectPlate(empty, 0), 2)), true, "an entry above 0");
+  strictEqual(newGameAsks(tbScore(empty, 1, 5)), true, "a score above 0");
+  strictEqual(newGameAsks(setPlayers(tbScore(setPlayers(empty, 4), 3, 5), 2)), true, "a hidden plate's score counts");
+  const won = tbScore(tbScore(empty, 1, 40), 0, 121);
+  strictEqual(newGameAsks(won), false, "after a win");
+  strictEqual(newGameAsks(travelUndo(won)), true, "undo the win: asks again");
+  strictEqual(newGameAsks(newGame(tbScore(empty, 1, 5))), false, "after New Game");
 });
 check("travel board: the calculator's total comes back only as 0-29", () => {
   deepStrictEqual(["12", "0", "29", "30", "-1", "1.5", "abc", "", null].map(parseCalcTotal), [12, 0, 29, null, null, null, null, null, null]);
