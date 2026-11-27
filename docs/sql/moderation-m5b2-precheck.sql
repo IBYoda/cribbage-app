@@ -52,7 +52,8 @@
 --             IMMEDIATE AFTER trigger sorts after M5a's (it must not).
 --   realtime  the policy count (4 before and after); table_members in the
 --             supabase_realtime publication (it STAYS).
---   grants    functions authenticated may execute (60 before and after).
+--   grants    functions authenticated may execute (60 before and after;
+--             61 once moderation M5c1 part 1 is in: send_table_message).
 
 with new_fns(o, name, sig, lf) as (
   values
@@ -272,7 +273,10 @@ from (
   -- ==== grants ===================================================================
   select 6, 1, 'grants', 'functions authenticated may execute in public (distinct names)',
          (select count(*) from client_fns)::text,
-         case when (select count(*) from client_fns) = 60 then 'as expected before and after part 1 (M5b2 grants nothing to clients)'
-              else 'STOP: expected 60 (slice-e-grants-verification.sql X1 would fail)' end
+         case when (select count(*) from client_fns) = 60 and not exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                then 'as expected before and after part 1 (M5b2 grants nothing to clients)'
+              when (select count(*) from client_fns) = 61 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                then 'as expected before and after part 1 (M5b2 grants nothing to clients): the 60 plus moderation M5c1''s send_table_message'
+              else 'STOP: expected 60 (61 once moderation M5c1 part 1 is in; slice-e-grants-verification.sql X1 would fail)' end
 ) z
 order by z.s, z.o, z.item;

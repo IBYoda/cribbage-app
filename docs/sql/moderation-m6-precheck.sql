@@ -40,7 +40,8 @@
 --             before part 1 (slice E's 49, M1's 3, M2's 1, M3's 3), 59
 --             after (plus report_player, admin_list_reports,
 --             admin_delete_report), 60 once moderation M5a part 1 is in
---             (plus table_topic_allows).
+--             (plus table_topic_allows), 61 once moderation M5c1 part 1 is
+--             in (plus send_table_message).
 --   names     anything already named like M6's objects ("report" in a
 --             function, table, policy or cron job name).
 --   count     player_reports rows and attempt_log report_filed rows (after
@@ -279,7 +280,12 @@ from (
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
                 and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
              then 'after part 1 and moderation M5a part 1: the 59 plus table_topic_allows'
-           else 'STOP: neither 56, 59 nor 60 (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 61
+                and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
+                and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+             then 'after part 1, moderation M5a part 1 and M5c1 part 1: the 60 plus send_table_message'
+           else 'STOP: neither 56, 59, 60 nor 61 (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== names ====================================================================

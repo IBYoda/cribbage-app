@@ -52,7 +52,7 @@
 --            whose name contains "block" (expected none).
 --   grants   the client-executable functions (49 before part 1, 52 after;
 --            53 after moderation M2 part 1, 56 after M3 part 1, 59 after
---            M6 part 1, 60 after M5a part 1);
+--            M6 part 1, 60 after M5a part 1, 61 after M5c1 part 1);
 --            postgres's global default ACL for new functions (INFO).
 --   count    blocks rows, blockers, the longest list; attempt_log
 --            block_change rows; profiles that cannot be blocked by nickname
@@ -421,7 +421,22 @@ from (
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
              then 'after moderation M5a part 1: the 59 plus table_topic_allows'
-           else 'STOP: neither 49, 52, 53, 56, 59 nor 60; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 61
+                and to_regprocedure('public.block_player_by_id(uuid)') is not null
+                and to_regclass('public.table_kicks') is not null
+                and to_regclass('public.player_reports') is not null
+                and to_regprocedure('public.table_topic_allows(text)') is not null
+                and to_regprocedure('public.send_table_message(uuid, text)') is not null
+                and not exists (select 1 from client_fns cf
+                                where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
+                                  and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks',
+                                                      'report_player', 'admin_list_reports', 'admin_delete_report', 'table_topic_allows',
+                                                      'send_table_message'))
+                and (select count(*) from client_fns cf where cf.name in (select m.name from m1_fns m)) = 3
+                and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
+                and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
+             then 'after moderation M5c1 part 1: the 60 plus send_table_message'
+           else 'STOP: neither 49, 52, 53, 56, 59, 60 nor 61; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id, M3''s three, M6''s three and M5a''s one aside)',

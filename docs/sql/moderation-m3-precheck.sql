@@ -38,7 +38,8 @@
 --             (plus kick_player, kick_topic_allows, admin_recent_kicks),
 --             59 once moderation M6 part 1 is in (plus report_player,
 --             admin_list_reports, admin_delete_report), 60 once moderation
---             M5a part 1 is in (plus table_topic_allows).
+--             M5a part 1 is in (plus table_topic_allows), 61 once moderation
+--             M5c1 part 1 is in (plus send_table_message).
 --   names     anything already named like M3's objects ("kick" in a
 --             function, table or policy name).
 --   count     table_kicks rows and attempt_log kick rows (after part 1).
@@ -303,7 +304,13 @@ from (
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
                 and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
              then 'after part 1, M6 part 1 and M5a part 1: the 59 plus table_topic_allows'
-           else 'STOP: neither 53, 56, 59 nor 60 (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 61
+                and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
+                and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
+                and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+             then 'after part 1, M6 part 1, M5a part 1 and M5c1 part 1: the 60 plus send_table_message'
+           else 'STOP: neither 53, 56, 59, 60 nor 61 (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== names ====================================================================

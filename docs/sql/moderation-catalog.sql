@@ -16,6 +16,10 @@
 -- UPDATED FOR MODERATION M2 (moderation-m2-part1.sql): block_player_by_id
 -- is INFO (M2's own) in section 09, and section 10 expects 53 names once it
 -- exists.
+-- UPDATED FOR MODERATION M5c1 (moderation-m5c1-part1.sql): section 01 has an
+-- INFO row for send_table_message (chat through the server) and its helper
+-- _broadcast_table_message; section 10 expects 61 names once
+-- send_table_message exists (the 60 plus it; never the helper).
 --
 -- WHY: the moderation slices (kept chat messages for 3 days, reports, a
 -- table-wide mute and a kick by the host, a personal hide, a Block List that
@@ -199,6 +203,10 @@ expected_fns(name) as (
   select 'table_topic_allows'
   where to_regprocedure('public.table_topic_allows(text)') is not null
   union all
+  -- Moderation M5c1 part 1's chat RPC, once it exists.
+  select 'send_table_message'
+  where to_regprocedure('public.send_table_message(uuid, text)') is not null
+  union all
   -- Moderation M2 part 1's block by account id, once it exists.
   select 'block_player_by_id'
   where to_regprocedure('public.block_player_by_id(uuid)') is not null
@@ -275,6 +283,12 @@ from (
          case when to_regprocedure('realtime.send(jsonb, text, text, boolean)') is null
               then 'STOP: no realtime.send; an RPC cannot broadcast from the server'
               else 'INFO: what a send-through-RPC chat would call after storing the row' end
+
+  union all
+  select 1, 4, '', 1, 'realtime', 'moderation M5c1: send_table_message(uuid, text) / _broadcast_table_message(text, jsonb) exist',
+         (to_regprocedure('public.send_table_message(uuid, text)') is not null)::text || ' / '
+           || (to_regprocedure('public._broadcast_table_message(text, jsonb)') is not null)::text,
+         'INFO: moderation M5c1''s chat through the server (moderation-m5c1-part1.sql): checks the sender, cleans the text, limits 1 in 2 s and 3 in 10 s per sender per table (counted in realtime.messages), broadcasts {event chat, id, sender_id, text, at} on table:<id> through the helper, and reads the stored row back. No table, no policy; the old chat policies stay until the c2 hard cut'
 
   union all
   select 1, 5, '', 0, 'realtime', 'publication supabase_realtime: tables',
@@ -534,8 +548,11 @@ from (
               when (select count(*) from client_fns) = 59 and to_regclass('public.player_reports') is not null
                    and to_regprocedure('public.table_topic_allows(text)') is null then 'as moderation M6 part 1 left it (59)'
               when (select count(*) from client_fns) = 60 and to_regprocedure('public.table_topic_allows(text)') is not null
+                   and to_regprocedure('public.send_table_message(uuid, text)') is null
                 then 'as moderation M5a part 1 left it (60)'
-              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a); see the next two rows' end
+              when (select count(*) from client_fns) = 61 and to_regprocedure('public.send_table_message(uuid, text)') is not null
+                then 'as moderation M5c1 part 1 left it (61)'
+              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a, 61 after M5c1); see the next two rows' end
 
   union all
   select 10, 1, '', 0, 'client fn', 'executable by authenticated but not in slice E''s 49 (plus M1''s 3 once public.blocks exists)',
