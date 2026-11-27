@@ -460,7 +460,7 @@ import {
   type ScoresSeen,
   type TableEvent,
 } from "../lib/tableEvents";
-import { newestPlayTime, playEventApplies, playsReadApplies } from "../lib/tableSync";
+import { leftBannerClears, newestPlayTime, playEventApplies, playsReadApplies, tableChannelStatus } from "../lib/tableSync";
 import { tableToStopWatching } from "../lib/spectators";
 import {
   CHAT_MUTE_KEEP_MS,
@@ -1441,10 +1441,9 @@ check("Ended tables: each tables.ended_reason has its own message, 'empty' inclu
   strictEqual(tableEndedMessage("something-new", null), "This table has been ended by an admin.");
   strictEqual(tableEndedMessage(null, null), "This table has been ended by an admin.");
   strictEqual(tableEndedMessage(undefined, undefined), "This table has been ended by an admin.");
-  // Every screen that shows a reason goes through it: the realtime UPDATE, the stale-tab check, a reloaded URL.
+  // Every screen that shows a reason goes through it: the table check (a 'table' event or my seat gone), a reloaded URL.
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual((view.match(/setError\(tableEndedMessage\(/g) ?? []).length, 3);
-  strictEqual(view.includes("setError(tableEndedMessage(updatedTable.ended_reason, level));"), true);
+  strictEqual((view.match(/setError\(tableEndedMessage\(/g) ?? []).length, 2);
   strictEqual(view.includes("setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));"), true);
   strictEqual(/function tableEndedMessage\(/.test(view), false, "one definition, in lib/oneTable.ts");
   // The "table must be open" trigger's refusal reads plainly.
@@ -1680,9 +1679,9 @@ check("Join: takeSeat seats through join_table_by_code and maps every outcome; a
 });
 check("Stale tab: losing my own seat reads the table's status once; an ended single-player game shows its ended screen", () => {
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  // Both signs: the roster read without me, and the realtime DELETE of my row.
+  // The sign: a roster read without me -- a 'members' event's read, the poll's, a refresh's (App B: the old DELETE listener is gone).
   strictEqual(/if \(me && membersRef\.current\.some\(\(m\) => m\.user_id === me\) && !fresh\.some\(\(m\) => m\.user_id === me\)\) \{\s*checkTableEndedRef\.current\(tableId\);/.test(view), true);
-  strictEqual(view.includes("if (goneRow.user_id === myUserIdRef.current) checkTableEndedRef.current(table.id);"), true);
+  strictEqual(view.includes("goneRow"), false);
   // The check: never a spectator or my own Leave; an ended table gets its message.
   strictEqual(/checkTableEndedRef\.current = \(tableId: string\) => \{\s*if \(spectating \|\| leavingRef\.current\) return;/.test(view), true);
   strictEqual(/\.select\("status, ended_reason, computer_level"\)\s*\.eq\("id", tableId\)/.test(view), true);
@@ -3941,34 +3940,25 @@ check("table sync: the safety poll is 30 s connected and backs off 12 s, 24 s, 6
   strictEqual(view.slice(pollStart, pollStart + 4000).includes("setInterval"), false);
   strictEqual(view.includes("}, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);"), true);
 });
-check("realtime stopgap: game_plays is filtered by game, re-subscribed per game, caught up, never doubled", () => {
+check("App B: plays come only by reads -- a game event's merging read (live) and the full refresh on every join (catch-up)", () => {
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  // No unfiltered game_plays listener anywhere: exactly one, with the filter.
-  strictEqual((view.match(/table: "game_plays"/g) ?? []).length, 1);
-  strictEqual(view.includes('{ event: "INSERT", schema: "public", table: "game_plays", filter: `game_id=eq.${gameId}` }'), true);
-  strictEqual(view.includes('{ event: "INSERT", schema: "public", table: "game_plays" }'), false);
-  // Its own channel, keyed to the game on screen: a new game (or none) is a
-  // new subscription; the old one is removed.
-  strictEqual(view.includes("const playsGameId = activeGame?.id ?? null;"), true);
-  strictEqual(view.includes(".channel(`table-plays-${table.id}-${gameId}`)"), true);
-  strictEqual(view.includes("if (!table || !playsGameId) return;"), true);
-  const effectEnd = "}, [table, playsGameId, tableSound, showGo, catchUpPlays]);";
-  strictEqual(view.includes(effectEnd), true);
-  const playsEffect = view.slice(view.indexOf("const playsGameId = activeGame?.id ?? null;"), view.indexOf(effectEnd));
-  strictEqual(playsEffect.includes("supabase.removeChannel(channel);"), true);
-  // A catch-up read on every SUBSCRIBED (the first and each reconnect).
-  strictEqual(/\.subscribe\(\(status\) => \{\s*if \(status === "SUBSCRIBED" && !cancelled\) void catchUpPlays\(gameId\);/.test(playsEffect), true);
-  // Both paths merge by seq; the catch-up applies only to its game and hand.
-  strictEqual(playsEffect.includes("setPlays((current) => mergePlays(current, [event]));"), true);
+  // No game_plays channel any more.
+  strictEqual(view.includes('table: "game_plays"'), false);
+  strictEqual(view.includes("table-plays-"), false);
+  strictEqual(view.includes("playsGameId"), false);
+  // The merging read: its game and hand only, never a sound of its own.
   const catchUpStart = view.indexOf("const catchUpPlays = useCallback(");
-  const catchUp = view.slice(catchUpStart, catchUpStart + 900);
+  const catchUp = view.slice(catchUpStart, catchUpStart + 1100);
   strictEqual(catchUp.includes('.eq("game_id", gameId)'), true);
   strictEqual(catchUp.includes("playsCatchUpApplies(issued, { gameId: activeGameIdRef.current, handNo: activeGameRef.current?.hand_no })"), true);
   strictEqual(catchUp.includes("setPlays((current) => mergePlays(current, data as PlayEvent[]));"), true);
-  // The sound and the Go splash stay with the live event only.
-  strictEqual(playsEffect.includes("tableSound.card(playKey("), true);
-  strictEqual(playsEffect.includes("showGo(goSplashKey(event.game_id, activeGameRef.current?.hand_no, event.segment, event.user_id));"), true);
   strictEqual(catchUp.includes("tableSound"), false);
+  // A game event ahead of the plays shown reads them (and announces only the new ones).
+  const handler = (view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  strictEqual(handler.includes("const merged = await catchUpPlays(event.gameId);"), true);
+  // The full refresh on every join reads the plays of a live game (fetchPlays, replacing).
+  const read = view.slice(view.indexOf("const readTableState = useCallback("), view.indexOf("// WHO IS WATCHING, read"));
+  strictEqual(read.includes("await fetchPlays(existingGame.id);"), true);
 });
 check("realtime stopgap: mergePlays adds each seq once, in order; the catch-up skips another hand", () => {
   const p = (seq: number, card: string | null = `c${seq}`) => ({ seq, segment: 1, user_id: "a", kind: "play" as const, card, count_after: seq });
@@ -4010,17 +4000,19 @@ check("realtime stopgap: no profiles listener; the poll re-reads every profile e
   // A changed name or avatar is a difference the poll applies.
   strictEqual(view.includes("if (s && (s.nickname !== m.nickname || s.avatar_url !== m.avatar_url)) out.push(`profile ${m.user_id}`);"), true);
 });
-check("realtime stopgap: a table_members delete from another table is ignored; leavers have two fallbacks", () => {
+check("App B: a leaver reaches the screen by the 'members' event's roster read, the poll's, and (mid-game) the game event", () => {
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  // Still listening (filtered), but the table is checked on the client too:
-  // Supabase only filters delete events under replica identity FULL.
-  strictEqual(/event: "DELETE",\s*schema: "public",\s*table: "table_members",\s*filter: `table_id=eq\.\$\{table\.id\}`/.test(view), true);
-  strictEqual(view.includes("if (goneRow.table_id !== undefined && goneRow.table_id !== table.id) return;"), true);
-  // Fallback 1: the poll's roster read notices a leaver.
+  // No table_members listener (and so no delete from another table to filter out).
+  strictEqual(view.includes('table: "table_members"'), false);
+  // The 'members' event: the roster read (it also notices my own seat gone).
+  const handler = (view.slice(view.indexOf("const handleTableEvent = useCallback("), view.indexOf("// Who listens: chat's rule")));
+  strictEqual(/if \(event\.kind === "members"\) \{\s*membersEventSeqRef\.current\+\+;[^\n]*\n\s*void loadMembers\(tableId\);/.test(handler) || /if \(event\.kind === "members"\) \{\s*membersEventSeqRef\.current\+\+;\s*void loadMembers\(tableId\);/.test(handler), true);
+  // The poll's roster read notices a leaver too.
   strictEqual(view.includes("for (const s of shown) if (!fresh.some((m) => m.user_id === s.user_id)) out.push(`left ${s.user_id}`);"), true);
-  // Fallback 2 (mid-game): leave_table ends the game, which the filtered
-  // games UPDATE listener brings at once.
-  strictEqual(/event: "UPDATE",\s*schema: "public",\s*table: "games",\s*filter: `table_id=eq\.\$\{table\.id\}`/.test(view), true);
+  // Mid-game, leave_table ends the game: its game event's live read (ended, on screen) -> the banner and the refresh.
+  const game = (view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  strictEqual(game.includes("if (live.playerLeft) notePlayerLeft(row.id);"), true);
+  strictEqual(/if \(live\.ended\) \{\s*await screenRead;\s*await refreshTableState\(tableId\);/.test(game), true);
 });
 check("table sync: profiles read for new seats, moved seats and missing names; never for the rest", () => {
   const shown = [
@@ -7748,14 +7740,14 @@ check("table events: joined only once my place is confirmed, again when it chang
   strictEqual(/\.send\(|\.rpc\(|\.from\(/.test(code), false, "it only listens");
   strictEqual(/catch \{\s*\}/.test(code) || code.includes("} catch {"), true, "a refused join stays quiet");
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(view.includes("role: tableEventRole({ available: tableEventsOn, spectating }),"), true, "chat's rule: the seat or spectator row is confirmed (computer tables too, M5b1)");
+  strictEqual(view.includes("const tableEventsRole = tableEventRole({ available: tableEventsOn, spectating });") && view.includes("    role: tableEventsRole,"), true, "chat's rule: the seat or spectator row is confirmed (computer tables too, M5b1)");
   const handler = m3CodeOnly(view.slice(view.indexOf("const handleTableEvent = useCallback("), view.indexOf("useTableEvents({")));
   strictEqual(handler.includes("void loadMembers(tableId);"), true);
   strictEqual(handler.includes("await loadSpectators(tableId);"), true);
   strictEqual(handler.includes("checkTableEndedRef.current(tableId);"), true);
   strictEqual(/supabase|\.from\(|\.rpc\(/.test(handler), false, "no second data path: only the poll's own reads");
-  // The old listeners and the safety poll are untouched.
-  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
+  // App B: no old listener left; the safety poll stays.
+  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 0);
   strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
   // Chat opens no channel of its own (moderation M5c1: it rides this one).
   strictEqual(/supabase\.channel\(|table:/.test(m3CodeOnly(readFileSync("components/table/useTableChat.ts", "utf8"))), false);
@@ -7891,12 +7883,9 @@ check("stale plays: a late read from hand N after Next Hand, and a late insert f
   strictEqual(/const ticket = \+\+playsReadSeqRef\.current;\s*const issuedHandKey = handKeyRef\.current;/.test(fetch), true, "the hand and ticket taken BEFORE the read");
   strictEqual(/if \(\s*!playsReadApplies\(\{[\s\S]*?nowHandKey: handKeyRef\.current,[\s\S]*?\}\)\s*\) \{\s*return;\s*\}\s*playsAppliedSeqRef\.current = ticket;\s*setPlays\(/.test(fetch), true);
   strictEqual(fetch.includes('.select("seq, segment, user_id, kind, card, count_after, created_at")'), true);
-  const reset = view.slice(view.indexOf("const resetHandState = useCallback("), view.indexOf("// What follows from the game row on screen changing"));
-  strictEqual(reset.indexOf("newestPlayTime(playsRef.current)") < reset.indexOf("setPlays([]);"), true, "the floor is taken from the hand being left, before it is cleared");
-  const listener = view.slice(view.indexOf('.channel(`table-plays-${table.id}-${gameId}`)'), view.indexOf("// TABLE SYNC: CATCH UP when the tab"));
-  strictEqual(listener.indexOf("playEventApplies({") > 0 && listener.indexOf("playEventApplies({") < listener.indexOf("tableSound.card(playKey("), true, "checked before its sound");
-  strictEqual(listener.indexOf("playEventApplies({") < listener.indexOf("showGo("), true, "and before its Go splash");
-  strictEqual(listener.includes("setPlays((current) => mergePlays(current, [event]));"), true, "the seq merge kept");
+  // App B: the play insert listener (and with it the hand floor it used) is gone; plays come only by these hand-tied reads.
+  strictEqual(view.includes("playsFloorRef"), false);
+  strictEqual(view.includes("playEventApplies"), false);
 });
 check("game events: the same channel, computer tables too; the poll's own reads plus ONE live read -- never a computer move", () => {
   const hook = m3CodeOnly(readFileSync("components/table/useTableEvents.ts", "utf8"));
@@ -7928,8 +7917,8 @@ check("game events: the same channel, computer tables too; the poll's own reads 
   strictEqual(/tableSound\.|show[A-Z]\w*\(|soundCatchUpRef/.test(catchUp), false);
   const refresh = m3CodeOnly(view.slice(view.indexOf("const refreshTableState = useCallback("), view.indexOf("const refreshTableState = useCallback(") + 900));
   strictEqual(refresh.includes("soundCatchUpRef"), false, "the refresh (like the poll's) never sets the catch-up");
-  // The old listeners, the poll and the computer driver are as they were.
-  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
+  // App B: no old listener left; the poll and the computer driver are as they were.
+  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 0);
   strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
   strictEqual(/useTableEvents|tableEvents|handleGameEvent/.test(readFileSync("components/table/useComputerDriver.ts", "utf8")), false);
   // A computer move is keyed (one per key), so an earlier re-read can't make it move twice.
@@ -8039,8 +8028,8 @@ check("scores events, the LIVE path: the roster at once when behind (or after th
   strictEqual(/const zero = zeroFromScoresEvent\(event, \{\s*gameId: activeGameIdRef\.current,\s*status: activeGameRef\.current\?\.status,\s*handNo: activeGameRef\.current\?\.hand_no,\s*\}\);\s*if \(zero\) playZero\(zero\);/.test(handler), true);
   strictEqual(/setMembers|setActiveGame|setPlays|reconcileGame|catchUpPlays|fetchPlays|refreshTableState|trackAction|\.rpc\(|\.from\(|tableSound|showZero/.test(handler), false,
     "no game or plays change, computer action or read of its own; sounds only through playZero");
-  // The old score listener and the poll are as they were.
-  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 7);
+  // App B: the old score listener is gone; the poll is as it was.
+  strictEqual((view.match(/"postgres_changes"/g) ?? []).length, 0);
   strictEqual(view.includes("await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));"), true);
   strictEqual(/useTableEvents|scoresScreenBehind|handleScoresEvent/.test(readFileSync("components/table/useComputerDriver.ts", "utf8")), false);
 });
@@ -8092,10 +8081,9 @@ check("App A: the 19 from a scores event -- the old listener's splash and sound 
   // The old listener's keys, built as it builds them, against the event's.
   bothOrders("the 19 splash", zeroSplashKey(U, Date.parse(rowTime)), hand!.splashKey);
   bothOrders("the 19 sound", zeroKey(G, screen.handNo, U, "hand: nothing"), hand!.soundKey);
-  // Both paths call the one playZero with those keys.
+  // App B: the scores event is the only caller of playZero (the old listener is gone).
   const view = readFileSync("components/table/TableView.tsx", "utf8");
-  strictEqual(view.includes("splashKey: zeroSplashKey(updated.user_id, Date.parse(updated.last_awarded_at)),"), true);
-  strictEqual(view.includes("soundKey: zeroGameId ? zeroKey(zeroGameId, activeGameRef.current?.hand_no, updated.user_id, updated.last_reason!) : null,"), true);
+  strictEqual((m3CodeOnly(view).match(/playZero\(/g) ?? []).length, 1);
   const playZero = m3CodeOnly(view.slice(view.indexOf("const playZero = useCallback("), view.indexOf("// Live updates: append anyone who joins")));
   strictEqual(playZero.includes("showZero(\n        zero.splashKey,"), true);
   strictEqual(playZero.includes("if (zero.soundKey && !soundCatchUpRef.current && !zeroCatchUpRef.current) tableSound.zeroHand(zero.soundKey);"), true, "its sound gated as before");
@@ -8128,10 +8116,9 @@ check("App A: a game event's live read -- what each transition plays (gameEventL
 check("App A: cut, discard, shuffle, end, God's splash, the banner -- one shared function per effect, both paths, the same keys; both orders", () => {
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   const code = m3CodeOnly(view);
-  // The old games UPDATE calls the shared functions (no inline copy left).
-  strictEqual(code.includes("playWonGameEffects(updatedGame);"), true);
-  strictEqual(code.includes("playRowSounds(updatedGame);"), true);
-  strictEqual(code.includes("notePlayerLeft(updatedGame.id);"), true);
+  // App B: the old games listeners are gone; the live read is the one caller.
+  strictEqual(code.includes("updatedGame"), false);
+  strictEqual(code.includes("newGame."), false);
   strictEqual((code.match(/tableSound\.end\(/g) ?? []).length, 2, "the win and the loss, inside playWonGameEffects only");
   strictEqual((code.match(/showGodLoss\(/g) ?? []).length, 1);
   strictEqual((code.match(/setGameEndedNotice\("A player left the table/g) ?? []).length, 1);
@@ -8141,12 +8128,12 @@ check("App A: cut, discard, shuffle, end, God's splash, the banner -- one shared
   for (const call of ["tableSound.shuffle(cutOpenKey(row.id));", "playRowSounds(row);", "playWonGameEffects(row);", "notePlayerLeft(row.id);", "catchingUp: soundCatchUpRef.current,"]) {
     strictEqual(handler.includes(call), true, call);
   }
-  strictEqual(code.includes('if (newGame.status === "cutting") tableSound.shuffle(cutOpenKey(newGame.id));'), true, "the old INSERT's shuffle, same key");
+  strictEqual((code.match(/tableSound\.shuffle\(/g) ?? []).length, 1, "the cut-open shuffle: the live read only");
   // The claimed effects: the won game (before its reads) and the banner.
   const won = m3CodeOnly(view.slice(view.indexOf("const playWonGameEffects = useCallback("), view.indexOf("const notePlayerLeft = useCallback(")));
   strictEqual(won.includes("if (!table || !claimLive(`won:${row.id}`)) return;"), true);
   strictEqual(won.indexOf("claimLive(") < won.indexOf('.from("table_members")'), true, "claimed before any read");
-  strictEqual(view.includes('if (claimLive(`left:${gameId}`)) setGameEndedNotice("A player left the table — the game was ended.");'), true);
+  strictEqual(/if \(!claimLive\(`left:\$\{gameId\}`\)\) return;\s*gameEndedNoticeGameRef\.current = gameId;\s*setGameEndedNotice\("A player left the table — the game was ended\."\);/.test(view), true);
   const rowSounds = m3CodeOnly(view.slice(view.indexOf("const playRowSounds = useCallback("), view.indexOf("const playWonGameEffects = useCallback(")));
   strictEqual(rowSounds.includes("if (soundCatchUpRef.current) return;"), true, "quiet during a catch-up, as before");
   // Both orders, each key.
@@ -8233,17 +8220,94 @@ check("App A: plays a live read adds -- the card sound and the Go splash, the ol
   strictEqual(/const floorSeq = playsRef\.current\.reduce\(\(max, p\) => Math\.max\(max, p\.seq\), 0\);\s*const handNo = activeGameRef\.current\?\.hand_no;\s*const merged = await catchUpPlays\(event\.gameId\);\s*if \(!merged \|\| activeGameIdRef\.current !== event\.gameId \|\| activeGameRef\.current\?\.hand_no !== handNo\) return;/.test(handler), true);
   strictEqual(handler.includes('if (play.kind === "play") tableSound.card(playKey(event.gameId, handNo, play.seq));'), true);
   strictEqual(handler.includes('else if (play.kind === "go") showGo(goSplashKey(event.gameId, handNo, play.segment, play.user_id));'), true);
-  // The old listener: the same builders.
-  strictEqual(view.includes("tableSound.card(playKey(event.game_id, activeGameRef.current?.hand_no, event.seq));"), true);
-  strictEqual(view.includes("showGo(goSplashKey(event.game_id, activeGameRef.current?.hand_no, event.segment, event.user_id));"), true);
-  // The hand test's switch: development only, the two old channels only.
-  strictEqual(/function devOldListenersOff\(\): boolean \{\s*if \(process\.env\.NODE_ENV === "production"\) return false;/.test(view), true);
-  strictEqual((view.match(/if \(devOldListenersOff\(\)\) return;/g) ?? []).length, 2);
+  // App B: the old plays listener and the hand test's dev switch are gone.
+  strictEqual(view.includes("event.game_id"), false);
+  strictEqual(/devOldListenersOff|nobs-dev-old-listeners-off/.test(view), false);
   // Catch-up reads still never play: the poll, a visibility change and the subscribe catch-up.
   const poll = m3CodeOnly(view.slice(view.indexOf("async function pollOnce() {"), view.indexOf("// One timeout at a time")));
   strictEqual(/tableSound\.|show[A-Z]\w*\(|playRowSounds|playWonGameEffects|notePlayerLeft|playZero/.test(poll), false);
   const catchUp = m3CodeOnly(view.slice(view.indexOf("const catchUpPlays = useCallback("), view.indexOf("// Fetches every hand and the crib this player")));
   strictEqual(/tableSound\.|show[A-Z]\w*\(/.test(catchUp), false);
+});
+check("App B: no postgres_changes listener anywhere in the app; no old channel", () => {
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(ts|tsx)$/.test(entry.name)) files.push(path);
+    }
+  };
+  for (const dir of ["app", "components", "lib"]) walk(dir);
+  for (const f of files) {
+    const code = m3CodeOnly(readFileSync(f, "utf8"));
+    strictEqual(code.includes("postgres_changes"), false, `${f} still listens with postgres_changes`);
+  }
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("table-members-"), false);
+  strictEqual(view.includes("setRealtimeStatus"), false, "the status is derived from the table channel now");
+  // The kicks channel and chat are untouched (their own hooks).
+  strictEqual(view.includes("useTableKicks({ enabled: chatOn, tableId: table?.id ?? null, onKick: handleKickNotice });"), true);
+});
+check("App B: the poll's pace and the Reconnecting note follow the table channel (joined once, then dropped)", () => {
+  // tableChannelStatus: connected while joined; disconnected only after a join, while it should be on.
+  strictEqual(tableChannelStatus({ on: true, joined: true, everJoined: true }), "connected");
+  strictEqual(tableChannelStatus({ on: true, joined: false, everJoined: false }), "connecting", "before the first join: no note");
+  strictEqual(tableChannelStatus({ on: true, joined: false, everJoined: true }), "disconnected", "joined once, then dropped");
+  strictEqual(tableChannelStatus({ on: false, joined: false, everJoined: true }), "connecting", "closed on purpose (ended, leaving): no note");
+  strictEqual(tableChannelStatus({ on: false, joined: true, everJoined: true }), "connecting");
+  // The page: per role and table (a watch -> seat change is a new channel, not a drop).
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(view.includes("const channelKey = tableEventsRole && table ? `${tableEventsRole}|${table.id}` : null;"), true);
+  strictEqual(view.includes("if (tableChannelJoined && channelKey && everJoinedKey !== channelKey) setEverJoinedKey(channelKey);"), true);
+  strictEqual(/const realtimeStatus = tableChannelStatus\(\{\s*on: !!channelKey,\s*joined: tableChannelJoined,\s*everJoined: !!channelKey && everJoinedKey === channelKey,\s*\}\);/.test(view), true);
+  strictEqual(view.includes('const realtimeConnected = realtimeStatus === "connected";'), true);
+  strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
+  strictEqual(view.includes('realtimeStatus === "disconnected" && <ReconnectingNote beside={leaveConfirming} />'), true);
+  // The poll comes after the table channel (it reads its status).
+  strictEqual(view.indexOf("useTableEvents({") < view.indexOf("async function pollOnce()"), true);
+  // The pace itself is unchanged: 30 s connected, 12/24/60 s otherwise.
+  strictEqual(nextPollDelayMs({ connected: true, disconnectedPolls: 0, random: 0.5 }), 30_000);
+  strictEqual(nextPollDelayMs({ connected: false, disconnectedPolls: 0, random: 0.5 }), 12_000);
+});
+check("App B: a catch-up read on EVERY join of the table channel, the first included -- never a sound, splash or banner", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(/useEffect\(\(\) => \{\s*if \(!tableChannelJoined \|\| !catchUpTableId\) return;\s*soundCatchUpRef\.current = true;\s*void refreshTableState\(catchUpTableId\);\s*\}, \[tableChannelJoined, catchUpTableId, refreshTableState\]\);/.test(view), true);
+  // The refresh it runs is a catch-up: no sound, splash or banner inside it.
+  const read = m3CodeOnly(view.slice(view.indexOf("const readTableState = useCallback("), view.indexOf("// WHO IS WATCHING, read")));
+  strictEqual(/tableSound\.(card|shuffle|end|zeroHand|dealStart)|show(Zero|Go|GodLoss|Wings)\(|notePlayerLeft|playWonGameEffects|playRowSounds|playZero/.test(read), false);
+  strictEqual(read.includes("tableSound.heard(heardKeys(existingGame));"), true, "it marks what already happened as heard");
+  // The event handlers keep the poll's guards.
+  const game = m3CodeOnly(view.slice(view.indexOf("const handleGameEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  strictEqual(game.includes("gameEventSeqRef.current++;"), true);
+  const scores = m3CodeOnly(view.slice(view.indexOf("const handleScoresEvent = useCallback("), view.indexOf("const handleTableEvent = useCallback(")));
+  strictEqual(scores.includes("membersEventSeqRef.current++;"), true);
+});
+check("App B: the 'player left' banner goes with the next game, never on a re-read of the ended one", () => {
+  const ENDED = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  const NEXT = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+  strictEqual(leftBannerClears(ENDED, NEXT), true, "a new game clears it");
+  strictEqual(leftBannerClears(ENDED, null), false, "a poll / refresh re-read with no live game keeps it");
+  strictEqual(leftBannerClears(ENDED, ENDED), false, "the same game never clears it");
+  strictEqual(leftBannerClears(null, NEXT), false, "no banner: nothing to clear");
+  // Simulated: the banner for ENDED; a re-read (no live game) keeps it; the next game's read clears it.
+  let bannerGame: string | null = ENDED;
+  let notice: string | null = "A player left the table — the game was ended.";
+  const read = (liveId: string | null) => {
+    if (leftBannerClears(bannerGame, liveId)) {
+      bannerGame = null;
+      notice = null;
+    }
+  };
+  read(null);
+  strictEqual(notice !== null, true);
+  read(NEXT);
+  strictEqual(notice, null);
+  // The page: remembered when shown, checked on every applied table read.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  strictEqual(/if \(leftBannerClears\(gameEndedNoticeGameRef\.current, existingGame\?\.id \?\? null\)\) \{\s*gameEndedNoticeGameRef\.current = null;\s*setGameEndedNotice\(null\);/.test(view), true);
+  const read2 = view.slice(view.indexOf("const readTableState = useCallback("), view.indexOf("// WHO IS WATCHING, read"));
+  strictEqual(read2.indexOf("if (isLatestRead) {") < read2.indexOf("leftBannerClears("), true, "only the newest read decides");
 });
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");

@@ -164,3 +164,25 @@ export function newestPlayTime(plays: readonly { created_at?: string | null }[])
   }
   return newest;
 }
+
+// THE TABLE CHANNEL'S STATUS (M5 final cleanup, App B): the old members
+// channel is gone, so "connected" is the table channel (useTableEvents)
+// being joined. "disconnected" -- the "Reconnecting..." note and the poll's
+// backoff -- only after it has been joined once (for this role at this
+// table) and then dropped while it should be on; never before the first
+// join, and never once it was closed on purpose (the table ended, I'm
+// leaving, my place changed): those are "connecting", which shows nothing.
+export type ChannelStatus = "connecting" | "connected" | "disconnected";
+
+export function tableChannelStatus(t: { on: boolean; joined: boolean; everJoined: boolean }): ChannelStatus {
+  if (t.on && t.joined) return "connected";
+  if (t.on && t.everJoined) return "disconnected";
+  return "connecting";
+}
+
+// THE "A PLAYER LEFT" BANNER GOES with the next game: a table read that
+// finds a live game OTHER than the one the banner was shown for clears it.
+// A re-read with no live game (the ended game still the latest) keeps it.
+export function leftBannerClears(bannerGameId: string | null, liveGameId: string | null): boolean {
+  return bannerGameId !== null && liveGameId !== null && liveGameId !== bannerGameId;
+}
