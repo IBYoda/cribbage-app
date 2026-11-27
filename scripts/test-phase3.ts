@@ -460,7 +460,7 @@ import {
   type ScoresSeen,
   type TableEvent,
 } from "../lib/tableEvents";
-import { leftBannerClears, newestPlayTime, playEventApplies, playsReadApplies, tableChannelStatus } from "../lib/tableSync";
+import { leftBannerClears, newestPlayTime, playEventApplies, playsReadApplies, readFailed, recoveryCatchUp, tableChannelStatus, tableReadFailure } from "../lib/tableSync";
 import { tableToStopWatching } from "../lib/spectators";
 import {
   CHAT_MUTE_KEEP_MS,
@@ -2386,9 +2386,9 @@ check("Watching: nothing in the spectator path reads its own hand; hidden cards 
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   // fetchMyHand is called in exactly one place: readOwnHand, which returns first for a spectator.
   strictEqual((view.match(/fetchMyHand\(/g) ?? []).length, 1);
-  strictEqual(/const readOwnHand = useCallback\(\s*async \(gameId: string\) => \{\s*if \(spectating\) return;\s*await fetchMyHand\(gameId\);/.test(view), true);
+  strictEqual(/const readOwnHand = useCallback\(\s*async \(gameId: string\): Promise<boolean> => \{\s*if \(spectating\) return true;\s*return fetchMyHand\(gameId\);/.test(view), true);
   // Revealed hands and the crib: the spectator branch reads get_spectator_reveals only.
-  strictEqual(/const fetchRevealed = useCallback\(async \(gameId: string\) => \{[\s\S]{0,400}if \(spectating\) \{\s*const shown = await readSpectatorReveals\(gameId\);/.test(view), true);
+  strictEqual(/const fetchRevealed = useCallback\(async \(gameId: string\): Promise<boolean> => \{[\s\S]{0,500}if \(spectating\) \{\s*const shown = await readSpectatorReveals\(gameId\);/.test(view), true);
   strictEqual(readFileSync("lib/spectatorData.ts", "utf8").includes('supabase.rpc("get_spectator_reveals"'), true);
   // Seat 1's hand in play: card backs with the public count (opponentCardCount), never a face.
   strictEqual(view.includes("{Array.from({ length: opponentCardCount(viewerId) }, (_, i) => (\n        <FaceDownCard key={i} sizing={HAND_CARD} />"), true);
@@ -3938,7 +3938,7 @@ check("table sync: the safety poll is 30 s connected and backs off 12 s, 24 s, 6
   strictEqual(view.includes("if (!realtimeConnected) disconnectedPolls++;"), true);
   const pollStart = view.indexOf("async function pollOnce()");
   strictEqual(view.slice(pollStart, pollStart + 4000).includes("setInterval"), false);
-  strictEqual(view.includes("}, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);"), true);
+  strictEqual(view.includes("}, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected, noteRead]);"), true);
 });
 check("App B: plays come only by reads -- a game event's merging read (live) and the full refresh on every join (catch-up)", () => {
   const view = readFileSync("components/table/TableView.tsx", "utf8");
@@ -3958,7 +3958,7 @@ check("App B: plays come only by reads -- a game event's merging read (live) and
   strictEqual(handler.includes("const merged = await catchUpPlays(event.gameId);"), true);
   // The full refresh on every join reads the plays of a live game (fetchPlays, replacing).
   const read = view.slice(view.indexOf("const readTableState = useCallback("), view.indexOf("// WHO IS WATCHING, read"));
-  strictEqual(read.includes("await fetchPlays(existingGame.id);"), true);
+  strictEqual(read.includes("if (!(await fetchPlays(existingGame.id))) readsOk = false;"), true);
 });
 check("realtime stopgap: mergePlays adds each seq once, in order; the catch-up skips another hand", () => {
   const p = (seq: number, card: string | null = `c${seq}`) => ({ seq, segment: 1, user_id: "a", kind: "play" as const, card, count_after: seq });
@@ -7881,7 +7881,7 @@ check("stale plays: a late read from hand N after Next Hand, and a late insert f
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   const fetch = view.slice(view.indexOf("const fetchPlays = useCallback("), view.indexOf("// THE PLAYS CATCH-UP READ"));
   strictEqual(/const ticket = \+\+playsReadSeqRef\.current;\s*const issuedHandKey = handKeyRef\.current;/.test(fetch), true, "the hand and ticket taken BEFORE the read");
-  strictEqual(/if \(\s*!playsReadApplies\(\{[\s\S]*?nowHandKey: handKeyRef\.current,[\s\S]*?\}\)\s*\) \{\s*return;\s*\}\s*playsAppliedSeqRef\.current = ticket;\s*setPlays\(/.test(fetch), true);
+  strictEqual(/if \(\s*!playsReadApplies\(\{[\s\S]*?nowHandKey: handKeyRef\.current,[\s\S]*?\}\)\s*\) \{\s*return true;\s*\}\s*playsAppliedSeqRef\.current = ticket;\s*setPlays\(/.test(fetch), true);
   strictEqual(fetch.includes('.select("seq, segment, user_id, kind, card, count_after, created_at")'), true);
   // App B: the play insert listener (and with it the hand floor it used) is gone; plays come only by these hand-tied reads.
   strictEqual(view.includes("playsFloorRef"), false);
@@ -8260,7 +8260,7 @@ check("App B: the poll's pace and the Reconnecting note follow the table channel
   const view = readFileSync("components/table/TableView.tsx", "utf8");
   strictEqual(view.includes("const channelKey = tableEventsRole && table ? `${tableEventsRole}|${table.id}` : null;"), true);
   strictEqual(view.includes("if (tableChannelJoined && channelKey && everJoinedKey !== channelKey) setEverJoinedKey(channelKey);"), true);
-  strictEqual(/const realtimeStatus = tableChannelStatus\(\{\s*on: !!channelKey,\s*joined: tableChannelJoined,\s*everJoined: !!channelKey && everJoinedKey === channelKey,\s*\}\);/.test(view), true);
+  strictEqual(/const realtimeStatus = tableChannelStatus\(\{\s*on: !!channelKey,\s*joined: tableChannelJoined,\s*everJoined: !!channelKey && everJoinedKey === channelKey,\s*readsFailing,\s*\}\);/.test(view), true);
   strictEqual(view.includes('const realtimeConnected = realtimeStatus === "connected";'), true);
   strictEqual(view.includes("const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });"), true);
   strictEqual(view.includes('realtimeStatus === "disconnected" && <ReconnectingNote beside={leaveConfirming} />'), true);
@@ -8308,6 +8308,83 @@ check("App B: the 'player left' banner goes with the next game, never on a re-re
   strictEqual(/if \(leftBannerClears\(gameEndedNoticeGameRef\.current, existingGame\?\.id \?\? null\)\) \{\s*gameEndedNoticeGameRef\.current = null;\s*setGameEndedNotice\(null\);/.test(view), true);
   const read2 = view.slice(view.indexOf("const readTableState = useCallback("), view.indexOf("// WHO IS WATCHING, read"));
   strictEqual(read2.indexOf("if (isLatestRead) {") < read2.indexOf("leftBannerClears("), true, "only the newest read decides");
+});
+check("Offline fix: a failed read (an error, not an empty answer) never changes the table; first load may show the error screen", () => {
+  // What counts as failed: an error came back. An empty successful answer is a real answer.
+  strictEqual(readFailed({ error: { message: "TypeError: Failed to fetch" } }), true);
+  strictEqual(readFailed({ error: null }), false, "no live game: a real answer");
+  strictEqual(readFailed({ data: null, error: null } as { error: null }), false);
+  strictEqual(readFailed({}), false);
+  strictEqual(readFailed(null), false);
+  // Before the table's first full read: the error screen; after: keep the screen.
+  strictEqual(tableReadFailure({ loaded: false }), "error-screen");
+  strictEqual(tableReadFailure({ loaded: true }), "keep");
+  // Reads failing: "disconnected" (the note, the backoff) even while the channel looks joined.
+  strictEqual(tableChannelStatus({ on: true, joined: true, everJoined: true, readsFailing: true }), "disconnected");
+  strictEqual(tableChannelStatus({ on: true, joined: false, everJoined: false, readsFailing: true }), "disconnected");
+  strictEqual(tableChannelStatus({ on: true, joined: true, everJoined: true, readsFailing: false }), "connected", "back: connected again");
+  strictEqual(tableChannelStatus({ on: false, joined: false, everJoined: true, readsFailing: true }), "connecting", "the table ended / leaving: no note");
+  strictEqual(nextPollDelayMs({ connected: false, disconnectedPolls: 0, random: 0.5 }), 12_000, "the backoff while failing");
+  // Recovery: one catch-up on the first success after failures; none otherwise.
+  strictEqual(recoveryCatchUp(true, false), true);
+  strictEqual(recoveryCatchUp(false, false), false);
+  strictEqual(recoveryCatchUp(true, true), false);
+  strictEqual(recoveryCatchUp(false, true), false);
+  // Simulated: offline, offline, back, still fine -> exactly one catch-up.
+  let was = false;
+  let catchUps = 0;
+  for (const failing of [true, true, false, false]) {
+    if (recoveryCatchUp(was, failing)) catchUps++;
+    was = failing;
+  }
+  strictEqual(catchUps, 1);
+});
+check("Offline fix: readTableState applies nothing from a failed game read, and never sets the page error once loaded", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const read = m3CodeOnly(view.slice(view.indexOf("const readTableState = useCallback("), view.indexOf("// WHO IS WATCHING, read")));
+  // The game read failing: an early return, before anything is applied (no "no game", no New Game screen).
+  const fail = read.indexOf("if (readFailed(gameResult)) {");
+  strictEqual(fail > 0 && fail < read.indexOf("setActiveGame("), true);
+  strictEqual(fail < read.indexOf("soundCatchUpRef.current = false;"), true, "a pending catch-up stays pending for the next good read");
+  strictEqual(/if \(readFailed\(gameResult\)\) \{\s*if \(tableReadFailure\(\{ loaded: tableLoadedRef\.current \}\) === "error-screen"\) \{\s*logUnexpectedError\("games read", [^;]*\);\s*setError\(GENERIC_ERROR_TEXT\);\s*\}\s*noteRead\(false\);\s*return false;\s*\}/.test(read), true);
+  // The roster failing: the error screen only on the first read.
+  strictEqual(/if \(membersError\) \{\s*readsOk = false;\s*if \(tableReadFailure\(\{ loaded: tableLoadedRef\.current \}\) === "error-screen"\) \{\s*logUnexpectedError\("table_members read", membersError\);\s*setError\(GENERIC_ERROR_TEXT\);\s*return false;\s*\}\s*\}/.test(read), true);
+  strictEqual((read.match(/setError\(/g) ?? []).length, 2, "both behind tableReadFailure");
+  // The result: a failed read keeps the one on screen.
+  strictEqual(read.includes("if (lastGame !== undefined && gameAppliedSeqRef.current === ticket) showFinishedGame(finished);"), true);
+  strictEqual(read.includes("noteRead(readsOk);"), true);
+  strictEqual(read.includes("tableLoadedRef.current = true;"), true);
+  // A new start (a code, Retry) is a first read again.
+  strictEqual(/async function setup\(\) \{\s*setError\(null\);[\s\S]{0,300}tableLoadedRef\.current = false;\s*readsFailingRef\.current = false;\s*setReadsFailing\(false\);/.test(view), true);
+});
+check("Offline fix: the hand, the plays and the shown hands keep what is on screen when their read fails", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const hand = m3CodeOnly(view.slice(view.indexOf("const fetchMyHand = useCallback("), view.indexOf("const readOwnHand = useCallback(")));
+  strictEqual(hand.indexOf("if (readFailed(result)) return false;") > 0 && hand.indexOf("if (readFailed(result)) return false;") < hand.indexOf("setMyHand("), true);
+  const plays = m3CodeOnly(view.slice(view.indexOf("const fetchPlays = useCallback("), view.indexOf("const catchUpPlays = useCallback(")));
+  strictEqual(plays.indexOf("if (readFailed(result)) return false;") > 0 && plays.indexOf("if (readFailed(result)) return false;") < plays.indexOf("setPlays("), true);
+  const shown = m3CodeOnly(view.slice(view.indexOf("const fetchRevealed = useCallback("), view.indexOf("const clearRevealed = useCallback(")));
+  strictEqual(shown.indexOf("if (!shown) return false;") < shown.indexOf("setRevealedHands(shown.hands);"), true, "a spectator's failed reveals call keeps them");
+  strictEqual(shown.indexOf("if (readFailed(hands) || readFailed(crib)) return false;") < shown.indexOf("setRevealedHands(Object.fromEntries("), true);
+  // Already safe, pinned: a failed roster read returns before the lost-seat check; the table check and the kick preview return on errors.
+  const members = m3CodeOnly(view.slice(view.indexOf("const readMembers = useCallback("), view.indexOf("const membersPendingRef = useRef<")));
+  strictEqual(members.indexOf("if (membersError) return membersError.message;") < members.indexOf("checkTableEndedRef.current(tableId);"), true);
+  const check = m3CodeOnly(view.slice(view.indexOf("checkTableEndedRef.current = (tableId: string) => {"), view.indexOf("checkTableEndedRef.current = (tableId: string) => {") + 1800));
+  strictEqual(check.includes("if (previewError) return;"), true);
+  strictEqual(check.includes("if (!data || leavingRef.current) return;"), true);
+});
+check("Offline fix: the poll reports its reads; Reconnecting and the backoff follow; one silent catch-up on recovery", () => {
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const poll = m3CodeOnly(view.slice(view.indexOf("async function pollOnce() {"), view.indexOf("// One timeout at a time")));
+  strictEqual(poll.includes("noteRead(!readFailed(gameRead) && !membersError);"), true);
+  strictEqual(/const realtimeStatus = tableChannelStatus\(\{[\s\S]*?readsFailing,\s*\}\);/.test(view), true);
+  strictEqual(view.includes('const realtimeConnected = realtimeStatus === "connected";'), true, "the poll's pace follows it");
+  strictEqual(view.includes('realtimeStatus === "disconnected" && <ReconnectingNote beside={leaveConfirming} />'), true);
+  // noteRead: the flag, changed only on a change.
+  const note = m3CodeOnly(view.slice(view.indexOf("const noteRead = useCallback("), view.indexOf("const readTableState = useCallback(")));
+  strictEqual(/const failing = !ok;\s*if \(readsFailingRef\.current === failing\) return;\s*readsFailingRef\.current = failing;\s*setReadsFailing\(failing\);/.test(note), true);
+  // Recovery: silent (soundCatchUpRef first), once.
+  strictEqual(/const catchUp = recoveryCatchUp\(wasFailingRef\.current, readsFailing\);\s*wasFailingRef\.current = readsFailing;\s*if \(!catchUp \|\| !catchUpTableId\) return;\s*soundCatchUpRef\.current = true;\s*void refreshTableState\(catchUpTableId\);/.test(view), true);
 });
 check("test harness: every text read is CRLF-normalized, binary reads are not", () => {
   strictEqual(normalizeEol("a\r\nb\r\n"), "a\nb\n");
