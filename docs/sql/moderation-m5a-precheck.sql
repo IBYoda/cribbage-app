@@ -58,7 +58,8 @@
 --             else is a STOP); the three tables' place in the
 --             supabase_realtime publication (they STAY in it).
 --   grants    how many functions authenticated may execute in public: 59
---             before part 1, 60 after (plus table_topic_allows).
+--             before part 1, 60 after (plus table_topic_allows); 61 once
+--             moderation M5c1 part 1 is in (plus send_table_message).
 --   load      open tables, seats and spectator rows today, and how many
 --             spectator heartbeats a minute would reach the trigger (none of
 --             them send anything unless the spectator was stale).
@@ -291,7 +292,10 @@ from (
              then 'before part 1: 59 (slice E''s 49, M1''s 3, M2''s 1, M3''s 3, M6''s 3)'
            when (select count(*) from client_fns) = 60 and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
              then 'after part 1: the 59 plus table_topic_allows'
-           else 'STOP: neither 59 nor 60 (slice-e-grants-verification.sql X1 would fail)' end
+           when (select count(*) from client_fns) = 61 and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+             then 'after part 1 and moderation M5c1 part 1: the 60 plus send_table_message'
+           else 'STOP: neither 59, 60 nor 61 (slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== load =====================================================================
