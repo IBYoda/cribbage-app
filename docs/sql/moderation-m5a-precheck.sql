@@ -284,7 +284,7 @@ from (
          (exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename = 'table_members'))::text
            || ' / ' || (exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename = 'table_spectators'))::text
            || ' / ' || (exists (select 1 from pg_publication_tables pt where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public' and pt.tablename = 'tables'))::text,
-         'INFO: they STAY in the publication in this slice (old tabs keep their postgres_changes listeners). Note: each roster bump is also a tables UPDATE, which old tabs receive (they ignore it while the table is open)'
+         'INFO: they STAYED in the publication in this slice; the M5 final cleanup (moderation-m5-cleanup-part1.sql) takes table_members and tables out (false is then expected; table_spectators is never published)'
 
   union all
   -- ==== grants ===================================================================
