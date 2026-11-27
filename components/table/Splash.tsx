@@ -30,10 +30,10 @@ import { WINGS_SPLASH, placementFor, wingsSplashSub, type GodWinsTier } from "@/
 // called on the table page: a new SoundEvent in lib/sounds.ts, claimed with the
 // same wings:<gameId> key, played after the win clip.
 //
-// LIVE ONLY. The table page calls showZero / showGo / showGodLoss from its
-// realtime handlers, never from a read: postgres_changes streams only what
-// happens while subscribed, so a refresh, a reconnect's catch-up read or the
-// safety poll can never fire one. Each call carries a key for its event; a
+// LIVE ONLY. The table page calls showZero / showGo / showGodLoss only from
+// a table-channel event (a scores event, or a game event's live read), never
+// from a catch-up read: a refresh, a rejoin's catch-up read or the safety
+// poll can never fire one. Each call carries a key for its event; a
 // key seen before is ignored, so a re-delivered or repeated event never
 // fires twice.
 //

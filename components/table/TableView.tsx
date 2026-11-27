@@ -49,7 +49,6 @@ import {
   scoresScreenBehind,
   tableEventRole,
   zeroFromScoresEvent,
-  zeroSplashKey,
   type ChatEvent,
   type GameEvent,
   type ScoresEvent,
@@ -88,7 +87,7 @@ import { useTableSounds } from "@/components/table/useTableSounds";
 import { preloadFullWings, useWingsOn } from "@/components/Wings";
 import { getGodWins, type GodWins } from "@/lib/godWins";
 import { claimWingsMoment, displayTier, initSeenTier, type GodWinsTier } from "@/lib/wings";
-import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey, zeroKey } from "@/lib/sounds";
+import { cutKey, cutKeys, cutOpenKey, dealKey, discardKey, endKey, endSoundEvent, gameOutcome, heardKeys, heardZeroKeys, loserScore, playKey } from "@/lib/sounds";
 import { MugginsWinBar } from "@/components/table/MugginsWinBar";
 import { MugginsPlates } from "@/components/table/MugginsPlates";
 import { mugginsPlateStates } from "@/lib/mugginsPlates";
@@ -96,10 +95,10 @@ import { godLossSplash, hideRejoinedScores, scoreFromThisGame } from "@/lib/resu
 import { GAME_HOLE } from "@/lib/boardLayout";
 import { isGodLevel } from "@/lib/splashPhrases";
 import {
+  leftBannerClears,
   mergePlays,
-  newestPlayTime,
   nextPollDelayMs,
-  playEventApplies,
+  tableChannelStatus,
   playsCatchUpApplies,
   playsReadApplies,
   pollRefreshesProfiles,
@@ -437,20 +436,6 @@ const LIVE_GAME_STATUSES = ["cutting", "active"];
 // A game event's LIVE read (handleGameEvent): what gameEventLiveEffects and
 // the shared live effects need from the row.
 const LIVE_ROW_COLUMNS = "id, status, ended_reason, ready_by, deal_cut, discarded_by, hand_no, players, winner_id";
-// DEV ONLY (M5 final cleanup, App A hand test): with localStorage
-// "nobs-dev-old-listeners-off" set to "1", this window skips the two old
-// postgres_changes channels (members/games/tables, and the plays), so only
-// the new table-channel events can play a sound or a splash here. Never in
-// a production build (NODE_ENV), nothing shown; removed with App B.
-const DEV_OLD_LISTENERS_OFF_KEY = "nobs-dev-old-listeners-off";
-function devOldListenersOff(): boolean {
-  if (process.env.NODE_ENV === "production") return false;
-  try {
-    return window.localStorage.getItem(DEV_OLD_LISTENERS_OFF_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 
 // HAND SIZES come from handSizes() in lib/phase3.ts, by the number of
 // players: 6 dealt, 2 discarded and 4 kept with 2 players (as always); 5, 1
@@ -638,9 +623,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const [seatStatus, setSeatStatus] = useState<"idle" | "sending" | "error">("idle");
   const [seatMessage, setSeatMessage] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
-  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "disconnected">(
-    "connecting"
-  );
   const [myHand, setMyHand] = useState<string[]>([]);
   const [handSorted, setHandSorted] = useState(false);
   // Tracked as card codes, not indices, so hitting Sort mid-selection doesn't
@@ -680,6 +662,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // game silently evaporating is exactly the kind of mystery the PRD's UX
   // section objects to.
   const [gameEndedNotice, setGameEndedNotice] = useState<string | null>(null);
+  // The game the "player left" banner was shown for (leftBannerClears).
+  const gameEndedNoticeGameRef = useRef<string | null>(null);
   // Every hand this player may currently read, keyed by owner: always their
   // own, plus any shown at the table. RLS does the filtering; whatever comes
   // back is by definition allowed.
@@ -1140,13 +1124,10 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // status line. The old hand is cleared too, so its cards can't sit on
   // screen while the new ones load. Scores are NOT touched -- they live on
   // table_members, and next_hand doesn't change them.
-  // THE HAND FLOOR (moderation M5b1, lib/tableSync.ts playEventApplies): the
-  // newest play time of the hand being left. A play insert event at or
-  // before it is the old hand's and is dropped.
-  const playsFloorRef = useRef<number | null>(null);
+  // (No hand floor any more: it guarded the old game_plays listener, removed
+  // in the M5 final cleanup, App B. Plays now arrive only through reads,
+  // which playsReadApplies / playsCatchUpApplies tie to the hand on screen.)
   const resetHandState = useCallback(() => {
-    const floor = newestPlayTime(playsRef.current);
-    if (floor !== null && (playsFloorRef.current === null || floor > playsFloorRef.current)) playsFloorRef.current = floor;
     setPlays([]);
     handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
     setMyHand([]);
@@ -1384,9 +1365,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   );
 
   // Fetches the current active game + full roster for a table. Used both for
-  // the initial load and to "catch up" after the realtime connection drops
-  // and reconnects, since postgres_changes only streams events that happen
-  // while connected -- anything missed during a disconnect has to be re-fetched.
+  // the initial load and to "catch up" after the table channel drops and
+  // rejoins, since its events only reach a joined channel -- anything missed
+  // while it was down has to be re-fetched.
   const readTableState = useCallback(async (tableId: string) => {
     // Must find cutting games too, or a game mid-cut reads as "no game" and
     // the client would offer "New Game" for a table that already has one.
@@ -1415,6 +1396,13 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     if (isLatestRead) {
       gameAppliedSeqRef.current = ticket;
       setActiveGame(existingGame ?? null);
+      // THE "A PLAYER LEFT" BANNER goes with the next game (what the old
+      // games INSERT listener did on every screen): a live game other than
+      // the one it was shown for. A re-read with no live game keeps it.
+      if (leftBannerClears(gameEndedNoticeGameRef.current, existingGame?.id ?? null)) {
+        gameEndedNoticeGameRef.current = null;
+        setGameEndedNotice(null);
+      }
       // Set NOW, not one render later by the effect: realtime events for this
       // game may arrive before that render, and are matched against this.
       activeGameIdRef.current = existingGame?.id ?? null;
@@ -2331,7 +2319,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   // *who* left.
   const notePlayerLeft = useCallback(
     (gameId: string) => {
-      if (claimLive(`left:${gameId}`)) setGameEndedNotice("A player left the table — the game was ended.");
+      if (!claimLive(`left:${gameId}`)) return;
+      gameEndedNoticeGameRef.current = gameId;
+      setGameEndedNotice("A player left the table — the game was ended.");
     },
     [claimLive]
   );
@@ -2352,592 +2342,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     [table, showZero, tableSound]
   );
 
-  // Live updates: append anyone who joins after we've loaded the roster.
-  useEffect(() => {
-    if (!table) return;
-    if (devOldListenersOff()) return; // the App A hand test only (never in production)
 
-    const channel = supabase
-      .channel(`table-members-${table.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "table_members",
-          filter: `table_id=eq.${table.id}`,
-        },
-        async (payload) => {
-          membersEventSeqRef.current++; // see the members read guard
-          const newRow = payload.new as {
-            user_id: string;
-            joined_at: string;
-            seat: number | null;
-            score: number | null;
-          };
-
-          setMembers((current) => {
-            if (current.some((m) => m.user_id === newRow.user_id)) {
-              return current; // already have it (e.g. our own join)
-            }
-            return [
-              ...current,
-              {
-                user_id: newRow.user_id,
-                joined_at: newRow.joined_at,
-                seat: newRow.seat ?? null,
-                nickname: null,
-                avatar_url: null,
-                // A joining player starts at 0 with nothing to explain yet.
-                score: newRow.score ?? 0,
-                last_points: null,
-                last_reason: null,
-                last_awarded_at: null,
-              },
-            ];
-          });
-
-          const [{ data: profile }, wings] = await Promise.all([
-            supabase.from("profiles").select("nickname, avatar_url").eq("id", newRow.user_id).maybeSingle(),
-            getGodWins([newRow.user_id]),
-          ]);
-          applyWings(wings);
-
-          if (profile) {
-            setMembers((current) =>
-              current.map((m) =>
-                m.user_id === newRow.user_id
-                  ? { ...m, nickname: profile.nickname, avatar_url: profile.avatar_url }
-                  : m
-              )
-            );
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "table_members",
-          filter: `table_id=eq.${table.id}`,
-        },
-        (payload) => {
-          membersEventSeqRef.current++; // see the members read guard
-          // The score tracker's live channel. award_points() is the only thing
-          // that writes these columns, so in practice every event here is a
-          // score change -- the number moves on both screens at once, and the
-          // "+2 — pair" flash fires off last_awarded_at changing.
-          //
-          // table_members has been in the realtime publication since Slice 4
-          // with UPDATE already enabled, so this listener needed no SQL at all.
-          // A seat move (set_seat, before a game) arrives here too: the seat
-          // is merged, and the score columns come back unchanged.
-          const updated = payload.new as {
-            user_id: string;
-            seat?: number | null;
-            score: number | null;
-            last_points: number | null;
-            last_reason: string | null;
-            last_awarded_at: string | null;
-          };
-
-          // THE "19" SPLASH: a hand or crib just counted for 0 (confirm_count
-          // awards 0 as "hand: nothing" / "crib: nothing"). Only while a game
-          // is live, and only an award made by THIS change: its time (now()
-          // in the awarding transaction) within seconds of the commit. A
-          // seat move, or a Teams partner's row (award_points moves the
-          // partner's score but keeps their last award), re-sends an older
-          // one. NOT compared with the award on screen -- after a confirm
-          // (mine, or the computer's from this tab) the re-read can put this
-          // very award there before this event arrives. The key stops a
-          // repeat.
-          const awardAge = updated.last_awarded_at
-            ? Date.parse(payload.commit_timestamp) - Date.parse(updated.last_awarded_at)
-            : NaN;
-          if (
-            updated.last_points === 0 &&
-            isCountReason(updated.last_reason) &&
-            updated.last_awarded_at &&
-            activeGameRef.current?.status === "active" &&
-            // An unreadable commit time doesn't block the splash.
-            (Number.isNaN(awardAge) || Math.abs(awardAge) < 10_000)
-          ) {
-            // The splash and its sound, with the keys a scores event uses too
-            // (zeroFromScoresEvent): whichever arrives first plays.
-            const zeroGameId = activeGameIdRef.current;
-            playZero({
-              userId: updated.user_id,
-              crib: updated.last_reason!.startsWith("crib:"),
-              splashKey: zeroSplashKey(updated.user_id, Date.parse(updated.last_awarded_at)),
-              soundKey: zeroGameId ? zeroKey(zeroGameId, activeGameRef.current?.hand_no, updated.user_id, updated.last_reason!) : null,
-            });
-          }
-
-          setMembers((current) =>
-            current.map((m) =>
-              m.user_id === updated.user_id
-                ? {
-                    ...m,
-                    seat: updated.seat !== undefined ? updated.seat : m.seat,
-                    score: updated.score ?? m.score,
-                    last_points: updated.last_points,
-                    last_reason: updated.last_reason,
-                    last_awarded_at: updated.last_awarded_at,
-                  }
-                : m
-            )
-          );
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "table_members",
-          filter: `table_id=eq.${table.id}`,
-        },
-        (payload) => {
-          // DELETE payloads only carry the row's replica identity columns,
-          // which defaults to the primary key -- here (table_id, user_id).
-          // THE FILTER ABOVE MAY NOT HOLD: Supabase documents that delete
-          // events can only be filtered when the table's replica identity is
-          // FULL (table_members' is the default, as far as docs/sql shows), and
-          // that RLS is never applied to deletes. So a delete from ANOTHER
-          // table may arrive here: it is ignored by its table_id, which the
-          // primary key always carries. A leaver is also caught by the safety
-          // poll's roster read ("left" in membersDiff), and a leave mid-game
-          // ends the game (leave_table), which the filtered games UPDATE
-          // listener below brings at once.
-          const goneRow = payload.old as { user_id?: string; table_id?: string };
-          if (!goneRow?.user_id) return;
-          if (goneRow.table_id !== undefined && goneRow.table_id !== table.id) return;
-          membersEventSeqRef.current++; // see the members read guard
-
-          setMembers((current) => current.filter((m) => m.user_id !== goneRow.user_id));
-          // MY seat went (see A STALE TAB): is the table still open?
-          if (goneRow.user_id === myUserIdRef.current) checkTableEndedRef.current(table.id);
-        }
-      )
-      // No game_plays listener here (THE PLAY LOG, LIVE, below: its own
-      // channel, filtered to the game on screen) and no profiles listener
-      // (name and avatar edits come with the safety poll's profile refresh):
-      // both were unfiltered, so every play and every profile edit anywhere
-      // went to every open table.
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "games",
-          filter: `table_id=eq.${table.id}`,
-        },
-        (payload) => {
-          gameEventSeqRef.current++; // see the safety poll
-          const newGame = payload.new as {
-            id: string;
-            created_at: string;
-            status: string;
-            players: string[] | null;
-            dealer_id: string | null;
-            discarded_by: string[] | null;
-            deal_cut: DealCutRound[] | null;
-            deal_cut_ack_by: string[] | null;
-            starter_card: string | null;
-            phase: string | null;
-            current_player: string | null;
-            play_count: number | null;
-            play_segment: number | null;
-            count_step: number | null;
-            revealed_by: string[] | null;
-            crib_revealed: boolean | null;
-            winner_id: string | null;
-            hand_no: number | null;
-            ready_by: string[] | null;
-            win_claim_by: string | null;
-            win_confirmed_by?: string[] | null;
-          };
-          // A new game arrives as EITHER 'cutting' (no decisive previous
-          // result -- first game, a non-win ending, a changed roster: cut for
-          // deal, no cards yet) or 'active' (a rematch after a win: the loser
-          // deals, cards already dealt). Both are a brand-new game id, so the
-          // last game's result and every per-hand trace of it go.
-          //
-          // If both players tapped New Game, only ONE insert happens -- the
-          // slower call is handed the faster one's game -- so this fires once
-          // and both screens land in the same game.
-          if (LIVE_GAME_STATUSES.includes(newGame.status)) {
-            // THE SHUFFLE as the cut opens. Before the check below, which
-            // returns for the player who started it.
-            if (newGame.status === "cutting") tableSound.shuffle(cutOpenKey(newGame.id));
-            // The player who tapped New Game usually has this game already:
-            // handleStartNewGame re-reads it straight after the call. The
-            // INSERT payload is the row as first created, so applying it now
-            // could roll back anything that has happened since (a discard, a
-            // cut card). Keep what we have.
-            if (newGame.id === activeGameIdRef.current) {
-              setGameEndedNotice(null);
-              showFinishedGame(null);
-              return;
-            }
-            setActiveGame({
-              id: newGame.id,
-              created_at: newGame.created_at,
-              status: newGame.status,
-              players: newGame.players,
-              dealer_id: newGame.dealer_id,
-              discarded_by: newGame.discarded_by ?? [],
-              deal_cut: newGame.deal_cut,
-              deal_cut_ack_by: newGame.deal_cut_ack_by ?? [],
-              starter_card: newGame.starter_card,
-              phase: newGame.phase ?? "discard",
-              current_player: newGame.current_player,
-              play_count: newGame.play_count ?? 0,
-              play_segment: newGame.play_segment ?? 0,
-              count_step: newGame.count_step ?? 0,
-              revealed_by: newGame.revealed_by ?? [],
-              crib_revealed: newGame.crib_revealed ?? false,
-              winner_id: newGame.winner_id,
-              hand_no: newGame.hand_no ?? 1,
-              ready_by: newGame.ready_by ?? [],
-              win_claim_by: newGame.win_claim_by ?? null,
-              win_confirmed_by: newGame.win_confirmed_by ?? [],
-            });
-            // Set NOW, not one render later: the UPDATEs that follow (a
-            // discard, a cut card) are matched against this, and can arrive
-            // before that render.
-            activeGameIdRef.current = newGame.id;
-            lastGameStatusRef.current = newGame.status;
-            setGameEndedNotice(null); // stale once a fresh game is under way
-            showFinishedGame(null); // likewise the last game's result -- the win banner
-            // Plays, selection, sort, shown hands, crib, count status. Scores
-            // need nothing here: start_game_with_deal reset them, and those
-            // table_members UPDATEs arrive on their own -- with last_points
-            // null, so the plates move to 0 without a flash.
-            resetHandState();
-            handKeyRef.current = `${newGame.id}:${newGame.hand_no ?? 1}`;
-            // Only fetch a hand if one can exist. During 'cutting' there are no
-            // cards at all, which is the whole point of the phase.
-            if (newGame.status === "active") readOwnHand(newGame.id);
-            // The INSERT payload is the row as first created. If anything has
-            // already changed it, this brings the screen up to date.
-            reconcileGame(newGame.id);
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "games",
-          filter: `table_id=eq.${table.id}`,
-        },
-        (payload) => {
-          gameEventSeqRef.current++; // see the safety poll
-          const updatedGame = payload.new as {
-            id: string;
-            created_at?: string | null;
-            status: string;
-            ended_reason: string | null;
-            players: string[] | null;
-            dealer_id: string | null;
-            discarded_by: string[] | null;
-            deal_cut: DealCutRound[] | null;
-            deal_cut_ack_by: string[] | null;
-            starter_card: string | null;
-            phase: string | null;
-            current_player: string | null;
-            play_count: number | null;
-            play_segment: number | null;
-            count_step: number | null;
-            revealed_by: string[] | null;
-            crib_revealed: boolean | null;
-            winner_id: string | null;
-            hand_no: number | null;
-            ready_by: string[] | null;
-            win_claim_by: string | null;
-            win_confirmed_by?: string[] | null;
-          };
-          // THE WON GAME, LIVE (God's splash, the game-end sound): the moment
-          // the game becomes won. Before the checks below, because the read
-          // after my own winning tap can land first and make this game "not
-          // on screen". Live by nature: this event only arrives while
-          // subscribed. ready_by is empty only on the win itself -- later
-          // updates of the won game are New Game taps, so the computer's tap
-          // after a reload can't fire this. Shared with a game event's live
-          // read (playWonGameEffects, claimed won:<id>).
-          if (
-            updatedGame.ended_reason === "won" &&
-            !LIVE_GAME_STATUSES.includes(updatedGame.status) &&
-            (updatedGame.ready_by ?? []).length === 0
-          ) {
-            playWonGameEffects(updatedGame);
-          }
-          // THE WON GAME ON SCREEN: its only change after it ends is a New
-          // Game tap (ready_by). Merge that and nothing else -- a union, so an
-          // event and a re-read can land in either order. Everything else
-          // about ended games stays ignored, as below.
-          if (
-            updatedGame.id === finishedGameIdRef.current &&
-            !LIVE_GAME_STATUSES.includes(updatedGame.status)
-          ) {
-            const readyBy: string[] = updatedGame.ready_by ?? [];
-            setFinishedGame((current) =>
-              current && current.id === updatedGame.id
-                ? { ...current, ready_by: unionIds(current.ready_by, readyBy) }
-                : current
-            );
-            return;
-          }
-
-          // ONLY THE GAME ON SCREEN. This subscription is per TABLE, so it
-          // also carries rows for other games at the table. Before this check,
-          // the merge below folded whatever game's row arrived into the one on
-          // screen (keeping the old id), and any game ending cleared the
-          // screen -- including an old game's.
-          if (updatedGame.id !== activeGameIdRef.current) {
-            // A live game we aren't showing means we missed how it arrived
-            // (its INSERT, or a reconnect). Re-read rather than guess.
-            if (LIVE_GAME_STATUSES.includes(updatedGame.status)) {
-              refreshTableState(table.id);
-            }
-            return;
-          }
-
-          const previousStatus = lastGameStatusRef.current;
-          lastGameStatusRef.current = updatedGame.status;
-
-          // STATUS BEFORE PHASE. An ended game can carry any phase -- a win on
-          // his heels leaves phase 'play', a win mid-count leaves 'counting' --
-          // so nothing below may look at phase until status has said the game
-          // is still live.
-          //
-          // Ended, by a win, an admin force-end, a departing player, or the
-          // timeout. 'cutting' is a LIVE status, so this check can't be "not
-          // active" -- that would treat every cut as an ended game.
-          if (!LIVE_GAME_STATUSES.includes(updatedGame.status)) {
-            setActiveGame(null);
-            activeGameIdRef.current = null;
-            handAppliedSeqRef.current = ++handReadSeqRef.current; // outdates hand reads in flight
-            setMyHand([]);
-            setSelectedCards([]);
-            clearRevealed();
-            setCountStatus("idle");
-            setCountMessage(null);
-            lastGameStatusRef.current = null;
-            handKeyRef.current = null;
-            if (updatedGame.ended_reason === "won") {
-              // The winner and final scores render from this plus the
-              // roster, whose 121 arrives on its own table_members UPDATE.
-              // THE FINAL BOARD: the starter, the dealer, the last run and my
-              // hand, shown at once from what's already on screen; the
-              // opponent's hand and the crib aren't on screen yet (face-down
-              // until the read below brings them).
-              const segment = updatedGame.play_segment ?? 0;
-              const mine = myHandRef.current;
-              showFinishedGame({
-                id: updatedGame.id,
-                created_at: updatedGame.created_at ?? null,
-                winner_id: updatedGame.winner_id,
-                players: updatedGame.players ?? [],
-                ready_by: updatedGame.ready_by ?? [],
-                starter_card: updatedGame.starter_card,
-                dealer_id: updatedGame.dealer_id,
-                board: {
-                  finalRun: finalRunOf(playsRef.current, segment),
-                  // Only the kept four: a his-heels win can land before my
-                  // post-discard refetch, while the six dealt are still here.
-                  hands:
-                    mine && mine.cards.length === sizesFor(updatedGame.players).kept
-                      ? { [mine.userId]: mine.cards }
-                      : {},
-                  crib: null,
-                },
-              });
-              // Then the whole board from the server: the opponent's hand
-              // and the crib (never broadcast -- they can only be read), and
-              // the run again (the winning card's own INSERT is matched
-              // against the game on screen, which this branch has just
-              // cleared -- if it ever arrived after this UPDATE, it was
-              // dropped). Applied only if this won game is still on screen.
-              const wonId = updatedGame.id;
-              readWonBoard(wonId, segment).then((board) =>
-                setFinishedGame((current) =>
-                  current && current.id === wonId ? { ...current, board } : current
-                )
-              );
-            }
-            // The banner, shared with a game event's live read
-            // (notePlayerLeft, claimed left:<id>).
-            if (updatedGame.ended_reason === "player_left") {
-              notePlayerLeft(updatedGame.id);
-            }
-            return;
-          }
-
-          // A CUT CARD OR A DISCARD, in sound (playRowSounds: shared with a
-          // game event's live read, the same keys; quiet during a catch-up).
-          playRowSounds(updatedGame);
-
-          // Otherwise the game is live and something moved: a cut card, an
-          // acknowledgement, a discard, the starter, a play, a count, a reveal,
-          // a new hand. None of it ever carries a hand or the crib.
-          //
-          // Applied straight away so the screen reacts instantly -- but this
-          // payload is a snapshot after ONE statement, and is not trusted to be
-          // the final word. reconcileGame (below) re-reads the row and shows
-          // what the database actually holds.
-          setActiveGame((current) =>
-            current && current.id === updatedGame.id
-              ? {
-                  ...current,
-                  status: updatedGame.status,
-                  players: updatedGame.players ?? current.players,
-                  dealer_id: updatedGame.dealer_id,
-                  discarded_by: updatedGame.discarded_by ?? [],
-                  deal_cut: updatedGame.deal_cut ?? current.deal_cut,
-                  deal_cut_ack_by: updatedGame.deal_cut_ack_by ?? [],
-                  starter_card: updatedGame.starter_card,
-                  phase: updatedGame.phase ?? current.phase,
-                  current_player: updatedGame.current_player,
-                  play_count: updatedGame.play_count ?? 0,
-                  play_segment: updatedGame.play_segment ?? 0,
-                  count_step: updatedGame.count_step ?? 0,
-                  revealed_by: updatedGame.revealed_by ?? [],
-                  crib_revealed: updatedGame.crib_revealed ?? false,
-                  winner_id: updatedGame.winner_id,
-                  hand_no: updatedGame.hand_no ?? current.hand_no,
-                  ready_by: updatedGame.ready_by ?? [],
-                  win_claim_by: updatedGame.win_claim_by ?? null,
-                  // A payload without the column (a stale row) keeps what
-                  // the screen has, rather than wiping the confirmations.
-                  win_confirmed_by: updatedGame.win_confirmed_by ?? current.win_confirmed_by ?? [],
-                }
-              : current
-          );
-
-          // New hand, reveals, cut resolved -- the same follow-ups a fresh
-          // read triggers, so the two paths can't drift apart.
-          afterGameChange(updatedGame, previousStatus);
-
-          // And end every burst of events with an authoritative read.
-          reconcileGame(updatedGame.id);
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "tables",
-          filter: `id=eq.${table.id}`,
-        },
-        (payload) => {
-          const updatedTable = payload.new as {
-            status: string;
-            ended_reason: string | null;
-            computer_level?: string | null;
-          };
-          if (updatedTable.status !== "open" && spectating) {
-            spectateRef.current?.onTableEnded();
-            return;
-          }
-          if (updatedTable.status !== "open" && !leavingRef.current) {
-            const level = updatedTable.computer_level ?? table.computer_level;
-            setClosedComputerTable(Boolean(level));
-            setClosedHumanTable(!level);
-            setError(tableEndedMessage(updatedTable.ended_reason, level));
-          }
-        }
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          setRealtimeStatus("connected");
-          // CATCH UP on EVERY subscribe, the first one included.
-          // postgres_changes only streams events that happen while
-          // subscribed: after a reconnect anything that changed while we were
-          // down (a join, a new game, a nickname edit) was missed -- and on
-          // the FIRST subscribe, anything between the setup effect's reads
-          // and this moment was too (TABLE SYNC, gap A). The read tickets
-          // keep this from rolling anything back.
-          soundCatchUpRef.current = true;
-          refreshTableState(table.id);
-        } else if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
-          setRealtimeStatus("disconnected");
-        }
-      });
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [table, spectating, refreshTableState, readOwnHand, clearRevealed, resetHandState, afterGameChange, reconcileGame, showFinishedGame, applyWings, tableSound, playZero, playWonGameEffects, playRowSounds, notePlayerLeft]);
-
-  // THE PLAY LOG, LIVE (realtime stopgap): game_plays INSERTs for the game on
-  // screen only -- its own channel, filtered by game_id on the server, so a
-  // play at another table never reaches this one. Re-subscribed whenever the
-  // game on screen changes (a new game, the cut's game going active keeps the
-  // same id, a game ending clears it). Every SUBSCRIBED -- the first one and
-  // each reconnect -- is followed by a CATCH-UP READ of this game's plays
-  // (catchUpPlays): postgres_changes only streams what happens while
-  // subscribed, so a play made between the game appearing and the channel
-  // joining would otherwise be lost. Both paths merge by seq (mergePlays), so
-  // a play that comes both ways is applied once.
-  const playsGameId = activeGame?.id ?? null;
-  useEffect(() => {
-    if (!table || !playsGameId) return;
-    if (devOldListenersOff()) return; // the App A hand test only (never in production)
-    const gameId = playsGameId;
-    let cancelled = false;
-    const channel = supabase
-      .channel(`table-plays-${table.id}-${gameId}`)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "game_plays", filter: `game_id=eq.${gameId}` },
-        (payload) => {
-          const event = payload.new as PlayEvent & { game_id: string };
-          // The filter's game, and still the game on screen.
-          if (cancelled || event.game_id !== gameId || event.game_id !== activeGameIdRef.current) return;
-          // ...and the HAND on screen (moderation M5b1): never the previous
-          // hand's late play -- not its sound, its Go splash or its card.
-          if (
-            !playEventApplies({
-              eventGameId: event.game_id,
-              eventCreatedAt: event.created_at,
-              screenGameId: activeGameIdRef.current,
-              screenStatus: activeGameRef.current?.status,
-              screenPhase: activeGameRef.current?.phase,
-              handFloor: playsFloorRef.current,
-            })
-          ) {
-            return;
-          }
-
-          // A CARD PLAYED, on every screen, mine too.
-          if (event.kind === "play") {
-            tableSound.card(playKey(event.game_id, activeGameRef.current?.hand_no, event.seq));
-          }
-
-          // THE GO SPLASH: once per player per run -- a player stuck for
-          // several plays logs a go each time, like the one Go label.
-          if (event.kind === "go") {
-            showGo(goSplashKey(event.game_id, activeGameRef.current?.hand_no, event.segment, event.user_id));
-          }
-
-          // Once per seq: a play the catch-up read (or a refresh) already
-          // brought is not added again.
-          setPlays((current) => mergePlays(current, [event]));
-        }
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED" && !cancelled) void catchUpPlays(gameId);
-      });
-    return () => {
-      cancelled = true;
-      supabase.removeChannel(channel);
-    };
-  }, [table, playsGameId, tableSound, showGo, catchUpPlays]);
 
   // TABLE SYNC: CATCH UP when the tab becomes visible again or the device
   // comes back online -- the same full refresh as on subscribe. A hidden tab
@@ -2961,107 +2366,6 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     };
   }, [table, refreshTableState]);
 
-  // TABLE SYNC: THE SAFETY POLL. While the tab is visible, every
-  // SAFETY_POLL_CONNECTED_MS (30 s) while the channel reports SUBSCRIBED, and
-  // backing off while it doesn't -- 12 s, 24 s, then 60 s -- each wait
-  // randomised by +/-25% (nextPollDelayMs, lib/tableSync.ts), a LIGHT read --
-  // the table's live game row and the roster -- to
-  // repair anything a missed realtime event left wrong. Skipped while the tab
-  // is hidden, while one of my actions or a full refresh is in flight, and
-  // once the table has ended. A difference is applied (the game through
-  // reconcileGame and its tickets, the roster through the members guard) and
-  // logged as "[table-sync] poll repaired:", so a missed event shows in the
-  // console instead of being silently hidden.
-  // "Connected" is exactly the channel's last status being SUBSCRIBED
-  // (realtimeStatus, set in the subscribe callback above); "connecting"
-  // (startup) and "disconnected" (CLOSED, TIMED_OUT, CHANNEL_ERROR) back off
-  // from 12 s; connected again resets to 30 s.
-  // Every PROFILE_REFRESH_POLLS-th poll also re-reads everyone's profile
-  // (pollRefreshesProfiles): name and avatar edits arrive that way.
-  const realtimeConnected = realtimeStatus === "connected";
-  const pollCountRef = useRef(0);
-  useEffect(() => {
-    if (!table) return;
-    const tableId = table.id;
-    let polling = false;
-
-    async function pollOnce() {
-      // A SPECTATOR'S HEARTBEAT rides the safety poll (30 s connected, at
-      // most 75 s backed off: inside the 90 s cutoff), awaited before the
-      // reads (slice D: they need a current place at a private table).
-      await spectateRef.current?.heartbeat();
-      const eventsAtIssue = gameEventSeqRef.current;
-      const shown = activeGameRef.current;
-      const { data: fresh, error: gameError } = await supabase
-        .from("games")
-        .select(GAME_COLUMNS)
-        .eq("table_id", tableId)
-        .in("status", LIVE_GAME_STATUSES)
-        .maybeSingle();
-      // A games event arrived during the read: realtime is alive and the
-      // screen may be newer than this read. Don't compare.
-      if (!gameError && gameEventSeqRef.current === eventsAtIssue) {
-        if (fresh?.id !== shown?.id) {
-          // A new game, or the end of one, was missed: the full refresh
-          // rebinds everything (hands, plays, the result).
-          console.warn("[table-sync] poll repaired:", {
-            game: `live game ${shown?.id ?? "none"} -> ${fresh?.id ?? "none"}`,
-          });
-          await refreshTableState(tableId);
-        } else if (fresh && shown) {
-          const diff = gameDiff(shown, fresh);
-          if (diff.length > 0) {
-            console.warn("[table-sync] poll repaired:", { game: diff });
-            await reconcileGame(fresh.id);
-            // The play log is read, never derived from the row: a missed
-            // play's row change means its play event was missed too.
-            if (fresh.status === "active") await fetchPlays(fresh.id);
-          }
-        }
-      }
-      pollCountRef.current++;
-      await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));
-      // Who is watching: the eye, the list and the chat roster.
-      await loadSpectators(tableId);
-    }
-
-    // One timeout at a time, each wait chosen afresh (nextPollDelayMs): the
-    // backoff step counts the polls scheduled since this status began.
-    let disconnectedPolls = 0;
-    let timer: number | null = null;
-    let stopped = false;
-    const schedule = () => {
-      const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });
-      if (!realtimeConnected) disconnectedPolls++;
-      timer = window.setTimeout(tick, delay);
-    };
-    const tick = () => {
-      if (stopped) return;
-      schedule();
-      if (
-        polling ||
-        document.visibilityState !== "visible" ||
-        errorRef.current ||
-        actionsInFlightRef.current > 0 ||
-        refreshesInFlightRef.current > 0 ||
-        reconcileInFlightRef.current
-      ) {
-        return;
-      }
-      polling = true;
-      pollOnce().finally(() => {
-        polling = false;
-      });
-    };
-    schedule();
-    return () => {
-      stopped = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-    // realtimeConnected: a change of channel status starts the chain again
-    // at the new pace -- 30 s once connected, the backoff's first step (12 s)
-    // after a disconnect.
-  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);
 
   // Keeps the ref above in step with state. Assigning a ref is not a state
   // update, so this is a legitimate effect rather than a cascading render.
@@ -3399,7 +2703,8 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   //               then who is watching (loadSpectators)
   //   table       the table row: a spectator's heartbeat (it answers
   //               table_ended), a player's checkTableEnded
-  // The old postgres_changes listeners and the safety poll are unchanged.
+  // Since the M5 final cleanup (App B) these events are the only live path;
+  // the safety poll and the catch-up on every join repair anything missed.
   // GAME EVENTS (moderation M5b1): "this game changed". The same reads the
   // safety poll makes when it finds a difference, sooner:
   //   another game than the one on screen -> the full refresh;
@@ -3421,6 +2726,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const handleGameEvent = useCallback(
     (event: GameEvent) => {
       if (!table) return;
+      gameEventSeqRef.current++; // see the safety poll
       const tableId = table.id;
       const onScreenAtArrival = activeGameIdRef.current;
       const step = gameEventStep({
@@ -3489,6 +2795,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
   const handleScoresEvent = useCallback(
     (event: ScoresEvent) => {
       if (!table || isMuggins) return;
+      membersEventSeqRef.current++; // see the members read guard
       const tableId = table.id;
       const zero = zeroFromScoresEvent(event, {
         gameId: activeGameIdRef.current,
@@ -3518,6 +2825,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
       if (!table || event.tableId !== table.id.toLowerCase()) return;
       const tableId = table.id;
       if (event.kind === "members") {
+        membersEventSeqRef.current++; // see the members read guard
         void loadMembers(tableId);
       } else if (event.kind === "spectators") {
         void (async () => {
@@ -3545,8 +2853,9 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     (spectating
       ? !!spectatorList?.some((s) => s.userId === session.user.id)
       : members.some((m) => m.user_id === session.user.id));
+  const tableEventsRole = tableEventRole({ available: tableEventsOn, spectating });
   const { joined: tableChannelJoined } = useTableEvents({
-    role: tableEventRole({ available: tableEventsOn, spectating }),
+    role: tableEventsRole,
     tableId: table?.id ?? null,
     onEvent: handleTableEvent,
     onGameEvent: handleGameEvent,
@@ -3568,6 +2877,137 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
     chatDropRef.current = chat.dropSender;
     chatReceiveRef.current = chat.receive;
   }, [chat.dropSender, chat.receive]);
+
+  // THE TABLE CHANNEL IS THE LIVE PATH (M5 final cleanup, App B: the old
+  // postgres_changes channels are gone). Its joined state does what the old
+  // members channel's subscribe callback did:
+  //   * the status (tableChannelStatus): "connected" while joined; the
+  //     "Reconnecting..." note and the poll's backoff ("disconnected") only
+  //     after this role's channel at this table has been joined once and
+  //     then dropped -- never before the first join, never after it was
+  //     closed on purpose (the table ended, leaving, my place changed);
+  //   * a CATCH-UP READ on EVERY join, the first one included: events sent
+  //     while the channel was down (or before it first joined) are missed,
+  //     and the full refresh repairs the screen -- the game, my hand, the
+  //     plays, the result, the roster, the spectators. A catch-up: it marks
+  //     what already happened as heard (soundCatchUpRef) and never plays a
+  //     sound, a splash or a banner.
+  const channelKey = tableEventsRole && table ? `${tableEventsRole}|${table.id}` : null;
+  const [everJoinedKey, setEverJoinedKey] = useState<string | null>(null);
+  if (tableChannelJoined && channelKey && everJoinedKey !== channelKey) setEverJoinedKey(channelKey);
+  const realtimeStatus = tableChannelStatus({
+    on: !!channelKey,
+    joined: tableChannelJoined,
+    everJoined: !!channelKey && everJoinedKey === channelKey,
+  });
+  const catchUpTableId = table?.id ?? null;
+  useEffect(() => {
+    if (!tableChannelJoined || !catchUpTableId) return;
+    soundCatchUpRef.current = true;
+    void refreshTableState(catchUpTableId);
+  }, [tableChannelJoined, catchUpTableId, refreshTableState]);
+
+  // TABLE SYNC: THE SAFETY POLL. While the tab is visible, every
+  // SAFETY_POLL_CONNECTED_MS (30 s) while the table channel is joined, and
+  // backing off while it isn't -- 12 s, 24 s, then 60 s -- each wait
+  // randomised by +/-25% (nextPollDelayMs, lib/tableSync.ts), a LIGHT read --
+  // the table's live game row and the roster -- to
+  // repair anything a missed realtime event left wrong. Skipped while the tab
+  // is hidden, while one of my actions or a full refresh is in flight, and
+  // once the table has ended. A difference is applied (the game through
+  // reconcileGame and its tickets, the roster through the members guard) and
+  // logged as "[table-sync] poll repaired:", so a missed event shows in the
+  // console instead of being silently hidden.
+  // "Connected" is exactly the TABLE channel being joined (realtimeStatus,
+  // tableChannelStatus, above -- M5 final cleanup, App B: the old members
+  // channel is gone); "connecting" and "disconnected" back off from 12 s;
+  // connected again resets to 30 s.
+  // Every PROFILE_REFRESH_POLLS-th poll also re-reads everyone's profile
+  // (pollRefreshesProfiles): name and avatar edits arrive that way.
+  const realtimeConnected = realtimeStatus === "connected";
+  const pollCountRef = useRef(0);
+  useEffect(() => {
+    if (!table) return;
+    const tableId = table.id;
+    let polling = false;
+
+    async function pollOnce() {
+      // A SPECTATOR'S HEARTBEAT rides the safety poll (30 s connected, at
+      // most 75 s backed off: inside the 90 s cutoff), awaited before the
+      // reads (slice D: they need a current place at a private table).
+      await spectateRef.current?.heartbeat();
+      const eventsAtIssue = gameEventSeqRef.current;
+      const shown = activeGameRef.current;
+      const { data: fresh, error: gameError } = await supabase
+        .from("games")
+        .select(GAME_COLUMNS)
+        .eq("table_id", tableId)
+        .in("status", LIVE_GAME_STATUSES)
+        .maybeSingle();
+      // A games event arrived during the read: realtime is alive and the
+      // screen may be newer than this read. Don't compare.
+      if (!gameError && gameEventSeqRef.current === eventsAtIssue) {
+        if (fresh?.id !== shown?.id) {
+          // A new game, or the end of one, was missed: the full refresh
+          // rebinds everything (hands, plays, the result).
+          console.warn("[table-sync] poll repaired:", {
+            game: `live game ${shown?.id ?? "none"} -> ${fresh?.id ?? "none"}`,
+          });
+          await refreshTableState(tableId);
+        } else if (fresh && shown) {
+          const diff = gameDiff(shown, fresh);
+          if (diff.length > 0) {
+            console.warn("[table-sync] poll repaired:", { game: diff });
+            await reconcileGame(fresh.id);
+            // The play log is read, never derived from the row: a missed
+            // play's row change means its play event was missed too.
+            if (fresh.status === "active") await fetchPlays(fresh.id);
+          }
+        }
+      }
+      pollCountRef.current++;
+      await loadMembers(tableId, true, pollRefreshesProfiles(pollCountRef.current));
+      // Who is watching: the eye, the list and the chat roster.
+      await loadSpectators(tableId);
+    }
+
+    // One timeout at a time, each wait chosen afresh (nextPollDelayMs): the
+    // backoff step counts the polls scheduled since this status began.
+    let disconnectedPolls = 0;
+    let timer: number | null = null;
+    let stopped = false;
+    const schedule = () => {
+      const delay = nextPollDelayMs({ connected: realtimeConnected, disconnectedPolls, random: Math.random() });
+      if (!realtimeConnected) disconnectedPolls++;
+      timer = window.setTimeout(tick, delay);
+    };
+    const tick = () => {
+      if (stopped) return;
+      schedule();
+      if (
+        polling ||
+        document.visibilityState !== "visible" ||
+        errorRef.current ||
+        actionsInFlightRef.current > 0 ||
+        refreshesInFlightRef.current > 0 ||
+        reconcileInFlightRef.current
+      ) {
+        return;
+      }
+      polling = true;
+      pollOnce().finally(() => {
+        polling = false;
+      });
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+    // realtimeConnected: a change of channel status starts the chain again
+    // at the new pace -- 30 s once connected, the backoff's first step (12 s)
+    // after a disconnect.
+  }, [table, refreshTableState, reconcileGame, loadMembers, fetchPlays, loadSpectators, realtimeConnected]);
   const popupOpen = usePersonPopupOpen();
   // The first queued notice for someone I don't block (yet), shown only
   // while no other question and no person popup is open.

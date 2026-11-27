@@ -36,8 +36,11 @@ import {
 // channel is opened only once `role` is set -- my seat or spectator row
 // confirmed by a read -- and `role` is part of the effect's key: watching ->
 // seated (or seated -> watching) leaves and joins again. A refused join
-// (CHANNEL_ERROR) stays quiet: the old postgres_changes listeners and the
-// safety poll keep the screen right.
+// (CHANNEL_ERROR) stays quiet: the safety poll keeps the screen right.
+//
+// THE ONLY LIVE PATH since the M5 final cleanup (App B): the page's poll pace,
+// its "Reconnecting..." note and its catch-up read on every join all follow
+// `joined`.
 //
 // GAME EVENTS (moderation M5b1) arrive on the SAME channel (event 'game'),
 // each through the per-game version rule (acceptGameEvent), then onGameEvent.
