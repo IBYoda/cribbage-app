@@ -5,10 +5,13 @@
 // name comes from the picture's type (what the bucket checks), falling back
 // to its extension in any case; JPEG is always written as ".jpg". Pure;
 // tested by scripts/test-phase3.ts.
+//
+// Since the iPhone upload fix (2026-11-28) the Profile page always uploads
+// the JPEG it makes on the phone (lib/avatarImage.ts), so it always writes
+// "<user id>/avatar.jpg". An older avatar.png or avatar.webp may stay in the
+// folder as a harmless orphan: profiles.avatar_url points at the newest.
 
 export type AvatarExtension = "png" | "jpg" | "webp";
-
-export const AVATAR_TYPE_MESSAGE = "Please choose a PNG, JPEG or WebP picture.";
 
 const BY_TYPE: Record<string, AvatarExtension> = {
   "image/png": "png",

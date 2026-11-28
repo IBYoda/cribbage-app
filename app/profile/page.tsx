@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
@@ -10,20 +10,35 @@ import { BlockedPlayers } from "@/components/brand/BlockedPlayers";
 import { passwordPairProblem, passwordUpdateErrorMessage } from "@/lib/passwordForm";
 import { NICKNAME_MAX_LENGTH, nicknameProblem } from "@/lib/nickname";
 import { saveNickname } from "@/lib/profileNickname";
-import { AVATAR_TYPE_MESSAGE, avatarPath } from "@/lib/avatarPath";
+import { avatarPath } from "@/lib/avatarPath";
+import {
+  AVATAR_MESSAGES,
+  AVATAR_OUTPUT_TYPE,
+  avatarUpdateSaved,
+  convertedProblem,
+  pickedFileProblem,
+  type AvatarProblem,
+} from "@/lib/avatarImage";
+import { convertToAvatarJpeg } from "@/lib/avatarConvert";
 import { WingsFrame } from "@/components/Wings";
 import { getGodWins } from "@/lib/godWins";
 import { displayTier, initSeenTier, isCreator, placementFor, progress, wingsSplashSub } from "@/lib/wings";
 
-const AVATAR_MAX_BYTES = 2 * 1024 * 1024; // must match the bucket's file_size_limit in Supabase
+// Save Profile's line when the save threw (no connection, say).
+const PROFILE_SAVE_FAILED = "Couldn't save your profile. Check your connection and try again.";
 
 export default function ProfilePage() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [nickname, setNickname] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  // THE PICTURE (the iPhone upload fix): saved as soon as it is picked, apart
+  // from Save Profile. avatarPreview: the picked picture, shown while it
+  // saves; avatarState and its one line sit directly under the photo.
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [avatarState, setAvatarState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [avatarMessage, setAvatarMessage] = useState<string | null>(null);
+  const previewRef = useRef<string | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
   // Times this player has beaten God; null until read, or if it can't be.
@@ -65,22 +80,82 @@ export default function ProfilePage() {
     });
   }, [session]);
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    if (!file) {
-      setAvatarFile(null);
-      setAvatarPreview(null);
+  // The picked picture's preview, dropped (its object URL freed): the saved
+  // picture, or the old one after a failure, shows again.
+  function clearPreview() {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+    previewRef.current = null;
+    setAvatarPreview(null);
+  }
+  useEffect(() => () => {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+  }, []);
+
+  function avatarFailed(problem: AvatarProblem) {
+    clearPreview();
+    setAvatarState("error");
+    setAvatarMessage(AVATAR_MESSAGES[problem]);
+  }
+
+  // PICKED = SAVED: made into a 512 px JPEG on the phone (lib/avatarImage.ts,
+  // lib/avatarConvert.ts), uploaded as <uid>/avatar.jpg, then ONLY
+  // profiles.avatar_url is updated -- never the nickname, so the 7-day
+  // nickname lock can't refuse it. The picker is off while it saves.
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.target;
+    const file = input.files?.[0] ?? null;
+    // Cleared, so picking the same file again still fires a change.
+    input.value = "";
+    if (!file || !session || avatarState === "saving") return;
+    const userId = session.user.id;
+
+    const picked = pickedFileProblem(file.size);
+    if (picked) {
+      avatarFailed(picked);
       return;
     }
-    if (file.size > AVATAR_MAX_BYTES) {
-      setStatus("error");
-      setMessage("Image must be smaller than 2MB.");
+
+    clearPreview();
+    const shown = URL.createObjectURL(file);
+    previewRef.current = shown;
+    setAvatarPreview(shown);
+    setAvatarState("saving");
+    setAvatarMessage(AVATAR_MESSAGES.saving);
+
+    const jpeg = await convertToAvatarJpeg(file);
+    const converted = convertedProblem(jpeg);
+    if (converted || !jpeg) {
+      avatarFailed(converted ?? "unreadable");
       return;
     }
-    setAvatarFile(file);
-    setAvatarPreview(URL.createObjectURL(file));
-    setStatus("idle");
-    setMessage(null);
+
+    try {
+      const path = avatarPath(userId, { type: AVATAR_OUTPUT_TYPE });
+      if (!path) throw new Error("no avatar path");
+      const upload = new File([jpeg], "avatar.jpg", { type: AVATAR_OUTPUT_TYPE });
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(path, upload, { upsert: true, contentType: AVATAR_OUTPUT_TYPE });
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
+      // cache-bust so the new image shows immediately instead of a browser-cached old one
+      const newAvatarUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
+
+      const { data: rows, error: updateError } = await supabase
+        .from("profiles")
+        .update({ avatar_url: newAvatarUrl })
+        .eq("id", userId)
+        .select("id");
+      if (!avatarUpdateSaved(updateError, rows)) throw updateError ?? new Error("no profile row updated");
+
+      setAvatarUrl(newAvatarUrl);
+      clearPreview();
+      setAvatarState("saved");
+      setAvatarMessage(AVATAR_MESSAGES.saved);
+    } catch {
+      avatarFailed("save_failed");
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -100,64 +175,24 @@ export default function ProfilePage() {
     setStatus("saving");
     setMessage(null);
 
-    // 1. The profile row first, with the CURRENT picture: a refused nickname
-    // stops here, before anything is uploaded, so the picture never changes
-    // and the chosen file and preview stay on the page.
-    const saved = await saveNickname(session.user.id, nickname, { avatar_url: avatarUrl });
-
-    if (!saved.ok) {
+    // The NICKNAME only: the picture saves itself when picked
+    // (handleFileChange), so the row is never written with a stale picture.
+    // A thrown error (no connection) shows a message; the button never stays
+    // on "Saving...".
+    try {
+      const saved = await saveNickname(session.user.id, nickname);
+      if (!saved.ok) {
+        setStatus("error");
+        setMessage(saved.message);
+        return;
+      }
+      setNickname(saved.nickname);
+      setStatus("success");
+      setMessage("Profile saved.");
+    } catch {
       setStatus("error");
-      setMessage(saved.message);
-      return;
+      setMessage(PROFILE_SAVE_FAILED);
     }
-    setNickname(saved.nickname);
-
-    // 2. Then a new picture, if one was chosen: upload it, then point the
-    // (now existing) row at it. If either fails the nickname has still
-    // saved; the error shows and the file stays chosen for another try.
-    let newAvatarUrl = avatarUrl;
-
-    if (avatarFile) {
-      // One fixed name per type (lib/avatarPath.ts): the only names the
-      // avatars bucket accepts since step 3 slice E.
-      const path = avatarPath(session.user.id, avatarFile);
-      if (!path) {
-        setStatus("error");
-        setMessage(AVATAR_TYPE_MESSAGE);
-        return;
-      }
-
-      const { error: uploadError } = await supabase.storage
-        .from("avatars")
-        .upload(path, avatarFile, { upsert: true, contentType: avatarFile.type });
-
-      if (uploadError) {
-        setStatus("error");
-        setMessage(uploadError.message);
-        return;
-      }
-
-      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
-      // cache-bust so the new image shows immediately instead of a browser-cached old one
-      newAvatarUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
-
-      const { error: avatarError } = await supabase
-        .from("profiles")
-        .update({ avatar_url: newAvatarUrl })
-        .eq("id", session.user.id);
-
-      if (avatarError) {
-        setStatus("error");
-        setMessage(avatarError.message);
-        return;
-      }
-    }
-
-    setAvatarUrl(newAvatarUrl);
-    setAvatarFile(null);
-    setAvatarPreview(null);
-    setStatus("success");
-    setMessage("Profile saved.");
   }
 
   if (loading) {
@@ -222,12 +257,29 @@ export default function ProfilePage() {
               </div>
             )}
           </WingsFrame>
+          {/* The picture's one line, directly under the photo. */}
+          <p
+            role="status"
+            aria-live="polite"
+            data-avatar-message={avatarState}
+            className={`min-h-5 text-center text-sm ${
+              avatarState === "error"
+                ? "text-[var(--error-on-felt)]"
+                : avatarState === "saved"
+                  ? "text-[var(--success-on-felt)]"
+                  : ""
+            }`}
+          >
+            {avatarMessage}
+          </p>
           {standingText && <p className="text-sm">{standingText}</p>}
           <input
             type="file"
             accept="image/png,image/jpeg,image/webp"
             onChange={handleFileChange}
-            className="felt-file"
+            disabled={avatarState === "saving"}
+            aria-label="Choose a profile picture"
+            className="felt-file disabled:opacity-60"
           />
         </div>
 
