@@ -31,6 +31,10 @@ export default function ProfilePage() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [nickname, setNickname] = useState("");
+  // The nickname as saved (null until read): an unchanged name is re-sent
+  // exactly and never pre-checked, so an old name that breaks today's rules
+  // still saves (lib/nickname.ts).
+  const [savedNickname, setSavedNickname] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   // THE PICTURE (the iPhone upload fix): saved as soon as it is picked, apart
   // from Save Profile. avatarPreview: the picked picture, shown while it
@@ -67,6 +71,7 @@ export default function ProfilePage() {
         }
         if (data) {
           setNickname(data.nickname ?? "");
+          setSavedNickname(data.nickname ?? "");
           setAvatarUrl(data.avatar_url);
         }
       });
@@ -162,10 +167,11 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!session) return;
 
-    // Saved trimmed. Nicknames are unique in the database (case-insensitive,
-    // trimmed), so a taken one is refused there. The rules and messages are
+    // Saved normalized (trimmed, single spaces). The simple rules are
+    // pre-checked here only for a changed name; reserved words and
+    // look-alikes are refused by the server. The rules and messages are
     // shared with the Pick-a-nickname step (lib/nickname.ts).
-    const problem = nicknameProblem(nickname);
+    const problem = nicknameProblem(nickname, savedNickname);
     if (problem) {
       setStatus("error");
       setMessage(problem);
@@ -180,13 +186,14 @@ export default function ProfilePage() {
     // A thrown error (no connection) shows a message; the button never stays
     // on "Saving...".
     try {
-      const saved = await saveNickname(session.user.id, nickname);
+      const saved = await saveNickname(session.user.id, nickname, savedNickname);
       if (!saved.ok) {
         setStatus("error");
         setMessage(saved.message);
         return;
       }
       setNickname(saved.nickname);
+      setSavedNickname(saved.nickname);
       setStatus("success");
       setMessage("Profile saved.");
     } catch {

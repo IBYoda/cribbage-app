@@ -5,6 +5,13 @@
 -- The whole file is ONE DO block.
 --
 -- STATUS: written, NOT RUN yet.
+-- Re-run 2026-11-28 after nickname rules: 20 / 12 / clean (slice-e-ratelimits / slice-e-grants / slice-e-precheck).
+-- STATE-AWARE EDIT (nickname rules, 2026-11-28): N4. Once
+-- docs/sql/nickname-rules-part1.sql is in, a nickname with leading or
+-- trailing spaces is refused (nickname_invalid) and never trimmed, so N4
+-- sends the re-cased name without the added spaces, and also checks the
+-- spaced one is refused and changes nothing. Before that slice, N4 is as it
+-- was. Still 20 checks.
 --
 -- It WRITES -- temporary accounts in auth.users and their profiles (58 of
 -- them: 51 are follow targets), test tables, seats, games, follows and
@@ -54,7 +61,9 @@
 --       SQLSTATE P0001, detail nickname_locked, "You can change your nickname
 --       again in 7 days."; the nickname is unchanged.
 --   N4  the same nickname in another case and spacing: allowed, not counted
---       (nickname_changed_at unchanged).
+--       (nickname_changed_at unchanged). With the nickname rules in: the
+--       same nickname in another case only; the spaced one is refused
+--       (nickname_invalid), nickname and changed_at unchanged.
 --   N5  the client cannot rewrite nickname_changed_at (a direct update, and
 --       an upsert sending an old date with a new nickname: still refused).
 --   N6  nickname_changed_at moved back 7 days and a minute (as the owner):
@@ -106,6 +115,7 @@ declare
   v_n_rows int;
   v_n2_rows int;
   v_when timestamptz;
+  v_rules boolean := to_regprocedure('public.profiles_nickname_rules()') is not null;
   v_games_msg text := 'You have started 30 games in the last hour. Please take a break and try again a little later.';
   v_follow_msg text := 'You have changed who you follow 30 times in the last hour. Please try again a little later.';
 begin
@@ -393,10 +403,16 @@ begin
   v_checks := v_checks + 1;
 
   -- [N4] The same nickname, another case and spacing: not a change.
+  --      With the nickname rules in (v_rules), added spaces are refused, so
+  --      the re-cased name goes without them; the spaced one is tried after.
   v_state := null;
   begin
     execute 'set local role authenticated';
-    update public.profiles set nickname = '  ' || upper('senick2' || left(v_n::text, 6)) || ' ' where id = v_n;
+    if v_rules then
+      update public.profiles set nickname = upper('senick2' || left(v_n::text, 6)) where id = v_n;
+    else
+      update public.profiles set nickname = '  ' || upper('senick2' || left(v_n::text, 6)) || ' ' where id = v_n;
+    end if;
     execute 'reset role';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
@@ -405,6 +421,23 @@ begin
   select p.nickname_changed_at into v_when from public.profiles p where p.id = v_n;
   if v_state is not null or v_when is distinct from now() then
     raise exception 'FAIL [N4] the same nickname re-cased: error % (%), changed_at %; expected allowed, changed_at unchanged.', coalesce(v_state, 'none'), coalesce(v_msg, ''), v_when;
+  end if;
+  if v_rules then
+    v_state := null; v_detail := null;
+    begin
+      execute 'set local role authenticated';
+      update public.profiles set nickname = '  ' || upper('senick2' || left(v_n::text, 6)) || ' ' where id = v_n;
+      execute 'reset role';
+    exception when others then
+      get stacked diagnostics v_state = returned_sqlstate, v_detail = pg_exception_detail;
+    end;
+    execute 'reset role';
+    select p.nickname, p.nickname_changed_at into v_txt, v_when from public.profiles p where p.id = v_n;
+    if v_state is distinct from 'P0001' or v_detail is distinct from 'nickname_invalid'
+       or v_txt is distinct from upper('senick2' || left(v_n::text, 6)) or v_when is distinct from now() then
+      raise exception 'FAIL [N4] (nickname rules in) the re-cased name with added spaces: % / %, nickname now %, changed_at %; expected P0001 / nickname_invalid and nothing changed.',
+        coalesce(v_state, 'no error'), coalesce(v_detail, '-'), v_txt, v_when;
+    end if;
   end if;
   v_checks := v_checks + 1;
 

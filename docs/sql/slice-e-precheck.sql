@@ -5,6 +5,10 @@
 -- temp table, no SET.
 --
 -- STATUS: written, NOT RUN yet.
+-- Re-run 2026-11-28 after nickname rules: 20 / 12 / clean (slice-e-ratelimits / slice-e-grants / slice-e-precheck).
+-- STATE-AWARE EDIT (nickname rules, 2026-11-28): the part2
+-- "profiles triggers" row also accepts profiles_nickname_lock plus
+-- profiles_nickname_rules (docs/sql/nickname-rules-part1.sql).
 --
 -- ONE query, so the editor shows every row in one grid. Columns: section,
 -- item, value, note (all text). A note starting with STOP means: do not run
@@ -241,6 +245,11 @@ from (
                    and exists (select 1 from pg_trigger tg where tg.tgrelid = 'public.profiles'::regclass
                                  and tg.tgname = 'profiles_nickname_lock' and tg.tgenabled <> 'D')
               then 'after part 2'
+              when (select string_agg(tg.tgname::text, ', ' order by tg.tgname) from pg_trigger tg
+                    where tg.tgrelid = 'public.profiles'::regclass and not tg.tgisinternal and tg.tgenabled <> 'D')
+                   = 'profiles_nickname_lock, profiles_nickname_rules'
+                   and (select count(*) from pg_trigger tg where tg.tgrelid = 'public.profiles'::regclass and not tg.tgisinternal) = 2
+              then 'after part 2 (plus profiles_nickname_rules: nickname-rules-part1.sql is in)'
               else 'STOP: profiles has a trigger slice E does not know' end
 
   union all
