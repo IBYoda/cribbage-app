@@ -14,7 +14,10 @@
 --   select * from public.player_reports order by created_at;
 --
 -- WHAT THIS FILE DOES (one transaction):
---   0. GUARD: attempt_log_action_check allows exactly M6's ten actions or
+--   0. GUARD: moderation M7 part 1 must not be in (admin_report_chat,
+--      _report_table_chat or the chat columns on player_reports): roll M7
+--      back first (moderation-m7-part1-rollback.sql). Then:
+--      attempt_log_action_check allows exactly M6's ten actions or
 --      M3's nine (M6 never ran, or a half-rolled-back state): anything else
 --      means a later slice changed it -- roll that slice back first. It
 --      raises and changes nothing otherwise. It records how many reports
@@ -42,6 +45,15 @@ declare
   v_txt text;
   v_n integer;
 begin
+  -- Moderation M7 rolls back first: it builds on this table and two of
+  -- these functions.
+  if to_regprocedure('public.admin_report_chat(uuid)') is not null
+     or to_regprocedure('public._report_table_chat(uuid)') is not null
+     or exists (select 1 from pg_attribute a where a.attrelid = to_regclass('public.player_reports')
+                  and a.attname in ('chat', 'chat_status', 'chat_total', 'chat_kept') and not a.attisdropped) then
+    raise exception 'STOP: moderation M7 part 1 is in (admin_report_chat, _report_table_chat or the chat columns). Run docs/sql/moderation-m7-part1-rollback.sql first. Nothing was changed.';
+  end if;
+
   select pg_get_constraintdef(con.oid) into v_txt
   from pg_constraint con
   where con.conrelid = 'public.attempt_log'::regclass and con.conname = 'attempt_log_action_check';

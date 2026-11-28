@@ -470,6 +470,28 @@ import {
   showNoteCounter,
 } from "../lib/reports";
 import {
+  REPORT_CHAT_DELETED_NAME,
+  REPORT_CHAT_HIDE_LABEL,
+  REPORT_CHAT_LOAD_FAILED_TEXT,
+  REPORT_CHAT_NONE_TEXT,
+  REPORT_CHAT_NOT_AT_TABLE_TEXT,
+  REPORT_CHAT_NOTICE,
+  REPORT_CHAT_REPORTED_TAG,
+  REPORT_CHAT_UNAVAILABLE_TEXT,
+  chatLineTime,
+  chatSenderName,
+  earlierNotKeptCount,
+  earlierNotKeptText,
+  isReportedLine,
+  reportChatFromRows,
+  reportChatStatus,
+  reportChatStatusText,
+  reportChatView,
+  showReportChatNotice,
+  viewChatLabel,
+} from "../lib/reportChat";
+import { ADMIN_FIRST_TAB, ADMIN_TABS, adminTabAfterKey, adminTabLabel } from "../lib/adminTabs";
+import {
   CHAT_SEEN_MAX,
   acceptGameEvent,
   acceptScoresEvent,
@@ -6941,7 +6963,7 @@ check("kicked person: \"The host removed you from this table.\" and home -- play
 });
 check("admin: Recent kicks, through admin_recent_kicks only", () => {
   const page = readFileSync("app/admin/page.tsx", "utf8");
-  strictEqual(page.includes("<AdminRecentKicks />"), true);
+  strictEqual(page.includes("<AdminRecentKicks onCount={setKickCount} />"), true, "under the Kicks tab (moderation M7)");
   const ui = readFileSync("components/brand/AdminRecentKicks.tsx", "utf8");
   strictEqual(ui.includes("readRecentKicks(50).then((read) => {"), true);
   strictEqual(ui.includes("Recent kicks"), true);
@@ -7765,6 +7787,7 @@ check("reports: report_player only through lib/reports.ts with the table's id; n
   strictEqual(/supabase\.rpc\("report_player", \{\s*p_target: input\.targetId,\s*p_reason: input\.reason,\s*p_note: reportNote\(input\.note\),\s*p_table_id: input\.tableId,\s*\}\)/.test(lib), true);
   strictEqual(lib.includes('supabase.rpc("admin_list_reports", { p_limit: limit })'), true);
   strictEqual(lib.includes('supabase.rpc("admin_delete_report", { p_id: id })'), true);
+  strictEqual(lib.includes('supabase.rpc("admin_report_chat", { p_id: id })'), true, "(M7) the admin chat read");
   strictEqual(/\.from\(|\.channel\(|\.send\(|realtime/.test(m3CodeOnly(lib)), false, "RPCs only; no table, no channel");
   const walk = (d: string): string[] =>
     readdirSync(d).flatMap((f) => {
@@ -7775,7 +7798,7 @@ check("reports: report_player only through lib/reports.ts with the table's id; n
     for (const f of walk(dir)) {
       const src = m3CodeOnly(readFileSync(f, "utf8"));
       strictEqual(/player_reports/.test(src), false, `${f}: nobody touches player_reports`);
-      if (f !== "lib/reports.ts") strictEqual(/report_player|admin_list_reports|admin_delete_report|purge_old_reports/.test(src), false, `${f}: only lib/reports.ts calls the report RPCs`);
+      if (f !== "lib/reports.ts") strictEqual(/report_player|admin_list_reports|admin_delete_report|purge_old_reports|admin_report_chat|_report_table_chat/.test(src), false, `${f}: only lib/reports.ts calls the report RPCs`);
     }
   }
   const view = readFileSync("components/table/TableView.tsx", "utf8");
@@ -7830,11 +7853,170 @@ check("reports: the admin list -- plain-text note, counts, picture flag, Delete 
   strictEqual(/onDelete=\{\(\) => setDeleteAsk\(r\.id\)\}/.test(ui), true, "Delete asks first");
   strictEqual(/const result = await deleteReport\(id\);[\s\S]{0,160}setReports\(\(list\) => \(list \? list\.filter\(\(r\) => r\.id !== id\) : list\)\);/.test(ui), true);
   strictEqual(/supabase|\.rpc\(/.test(m3CodeOnly(ui)), false);
-  for (const f of ["lib/reports.ts", "components/table/ReportDialog.tsx", "components/brand/AdminReports.tsx"]) {
+  for (const f of ["lib/reports.ts", "lib/reportChat.ts", "components/table/ReportDialog.tsx", "components/brand/AdminReports.tsx"]) {
     strictEqual(readFileSync(f, "utf8").includes("dangerouslySetInnerHTML"), false, f);
   }
+  // (M7) Reports is the admin page's second tab, Kicks the third.
   const page = readFileSync("app/admin/page.tsx", "utf8");
-  strictEqual(page.indexOf("<AdminRecentKicks />") > 0 && page.indexOf("<AdminReports />") > page.indexOf("<AdminRecentKicks />"), true, "after Recent kicks");
+  strictEqual(page.indexOf("<AdminReports onCount={setReportCount} />") > 0 && page.indexOf("<AdminRecentKicks onCount={setKickCount} />") > page.indexOf("<AdminReports onCount={setReportCount} />"), true, "Reports, then Kicks");
+});
+// ---- Chat copied into behavior reports (moderation M7, docs/sql/moderation-m7-part1.sql) ----
+check("report chat (M7): the dialog's line shows only for a behavior report, between the choices and the note", () => {
+  strictEqual(REPORT_CHAT_NOTICE, "Your report includes a copy of this table's recent chat, so an admin can read it.");
+  strictEqual(showReportChatNotice("behavior"), true);
+  strictEqual(showReportChatNotice("nickname"), false);
+  strictEqual(showReportChatNotice("picture"), false);
+  strictEqual(showReportChatNotice(null), false, "nothing chosen yet");
+  const ui = readFileSync("components/table/ReportDialog.tsx", "utf8");
+  const line = '{showReportChatNotice(reason) && <p className="text-sm opacity-80">{REPORT_CHAT_NOTICE}</p>}';
+  strictEqual(ui.split(line).length, 2, "exactly once");
+  strictEqual(ui.indexOf("</fieldset>") < ui.indexOf(line) && ui.indexOf(line) < ui.indexOf("<textarea"), true, "between the three reasons and the details box");
+  strictEqual(ui.replace(line, "").includes("{REPORT_CHAT_NOTICE}"), false, "drawn nowhere else");
+});
+check("report chat (M7): each status's line on the admin card; copied is the link; no status shows nothing", () => {
+  strictEqual(reportChatStatus("copied"), "copied");
+  strictEqual(reportChatStatus("none"), "none");
+  strictEqual(reportChatStatus("not_at_table"), "not_at_table");
+  strictEqual(reportChatStatus("unavailable"), "unavailable");
+  strictEqual(reportChatStatus(null), null);
+  strictEqual(reportChatStatus("COPIED"), null);
+  strictEqual(reportChatStatus(3), null);
+  strictEqual(REPORT_CHAT_NONE_TEXT, "No chat was stored for this table.");
+  strictEqual(REPORT_CHAT_NOT_AT_TABLE_TEXT, "No chat copied. The reporter wasn't at this table.");
+  strictEqual(REPORT_CHAT_UNAVAILABLE_TEXT, "Chat wasn't available.");
+  strictEqual(reportChatStatusText("none"), REPORT_CHAT_NONE_TEXT);
+  strictEqual(reportChatStatusText("not_at_table"), REPORT_CHAT_NOT_AT_TABLE_TEXT);
+  strictEqual(reportChatStatusText("unavailable"), REPORT_CHAT_UNAVAILABLE_TEXT);
+  strictEqual(reportChatStatusText("copied"), null, "the link instead");
+  strictEqual(reportChatStatusText(null), null, "nickname/picture reports and reports from before M7");
+  strictEqual(viewChatLabel(12), "View chat (12 messages)");
+  strictEqual(viewChatLabel(1), "View chat (1 message)");
+  strictEqual(REPORT_CHAT_HIDE_LABEL, "Hide chat");
+  strictEqual(REPORT_CHAT_LOAD_FAILED_TEXT, "Couldn't load the chat. Try again.");
+  // The list's rows carry the status, the total and the reported person's id.
+  const rows = adminReportsFromRows([
+    { id: "a", created_at: "2026-11-28T10:00:00Z", reason: "behavior", reported_id: "B0B", chat_status: "copied", chat_total: 7 },
+    { id: "b", created_at: "2026-11-28T10:00:00Z", reason: "picture", chat_status: null, chat_total: null },
+    { id: "c", created_at: "2026-11-28T10:00:00Z", reason: "behavior", chat_status: "bogus", chat_total: 2.5 },
+  ]);
+  deepStrictEqual(rows.map((r) => [r.reportedId, r.chatStatus, r.chatTotal]), [["B0B", "copied", 7], [null, null, null], [null, null, null]]);
+});
+check("report chat (M7): lines -- local h:mm AM/PM, nickname or account deleted, the reported person's marked, earlier messages not kept", () => {
+  strictEqual(chatLineTime(new Date(2026, 10, 28, 15, 4).getTime()), "3:04 PM");
+  strictEqual(chatLineTime(new Date(2026, 10, 28, 0, 30).getTime()), "12:30 AM");
+  strictEqual(chatLineTime(new Date(2026, 10, 28, 12, 0).getTime()), "12:00 PM");
+  strictEqual(chatLineTime(new Date(2026, 10, 28, 9, 59).getTime()), "9:59 AM");
+  const people = { a: "Ann", b: "Bo", g: null, w: "  " };
+  strictEqual(chatSenderName(people, "a"), "Ann");
+  strictEqual(chatSenderName(people, "g"), "account deleted");
+  strictEqual(chatSenderName(people, "w"), REPORT_CHAT_DELETED_NAME);
+  strictEqual(chatSenderName(people, "zz"), "account deleted", "not in people");
+  strictEqual(chatSenderName(people, "toString"), "account deleted", "never the object's own keys");
+  strictEqual(isReportedLine({ s: "ABC" }, "abc"), true, "ids compared without case");
+  strictEqual(isReportedLine({ s: "abc" }, "abd"), false);
+  strictEqual(isReportedLine({ s: "abc" }, null), false);
+  strictEqual(earlierNotKeptCount(2050, 2000), 50);
+  strictEqual(earlierNotKeptCount(5, 5), 0);
+  strictEqual(earlierNotKeptCount(3, 9), 0, "never below 0");
+  strictEqual(earlierNotKeptText(50), "50 earlier messages not kept");
+  strictEqual(earlierNotKeptText(1), "1 earlier message not kept");
+  strictEqual(REPORT_CHAT_REPORTED_TAG, "reported");
+  // admin_report_chat's one row, oldest first as given; malformed lines skipped.
+  const at1 = new Date(2026, 10, 28, 15, 4).getTime();
+  const chat = reportChatFromRows([
+    {
+      chat_status: "copied", chat_total: 6, chat_kept: 4,
+      chat: {
+        people: { a: "Ann", b: "Bo", g: null, x: 5 },
+        lines: [
+          { s: "a", at: at1, text: "hi <b>there</b>" },
+          { s: "b", at: at1 + 60000, text: "go away" },
+          { s: "g", at: at1 + 120000, text: "who am I" },
+          { s: "b", at: "soon", text: "bad at" },
+          { s: "b", at: at1 + 180000, text: "bye" },
+        ],
+      },
+    },
+  ]);
+  if (!chat) throw new Error("no chat");
+  deepStrictEqual([chat.status, chat.total, chat.kept, chat.lines.length], ["copied", 6, 4, 4]);
+  strictEqual("x" in chat.people, false, "a malformed nickname is left out");
+  const view = reportChatView(chat, "b");
+  strictEqual(view.earlierNotKept, 2);
+  deepStrictEqual(view.lines.map((l) => `${l.time} ${l.name}${l.reported ? " [reported]" : ""}: ${l.text}`), [
+    "3:04 PM Ann: hi <b>there</b>",
+    "3:05 PM Bo [reported]: go away",
+    "3:06 PM account deleted: who am I",
+    "3:07 PM Bo [reported]: bye",
+  ]);
+  strictEqual(new Set(view.lines.map((l) => l.key)).size, 4, "unique keys");
+  strictEqual(reportChatFromRows([]), null, "a report that is gone");
+  strictEqual(reportChatFromRows(null), null);
+  deepStrictEqual(reportChatFromRows([{ chat_status: "none", chat_total: 0, chat_kept: 0, chat: null }]), { status: "none", total: 0, kept: 0, people: {}, lines: [] });
+});
+check("report chat (M7): the admin card -- link under the note, read once then kept, Hide chat, plain text, error keeps the link", () => {
+  const lib = readFileSync("lib/reports.ts", "utf8");
+  const read = lib.slice(lib.indexOf("export async function readReportChat("));
+  strictEqual(read.includes('supabase.rpc("admin_report_chat", { p_id: id })'), true);
+  strictEqual(read.includes('error.message === "Admins only." ? error.message : REPORT_CHAT_LOAD_FAILED_TEXT'), true, "never raw database text");
+  strictEqual(read.includes("if (!chat) return { ok: false, text: REPORT_CHAT_LOAD_FAILED_TEXT };"), true, "no row: the same line");
+  strictEqual(/supabase|\.rpc\(|from "react"/.test(m3CodeOnly(readFileSync("lib/reportChat.ts", "utf8"))), false, "lib/reportChat.ts is pure");
+  const ui = readFileSync("components/brand/AdminReports.tsx", "utf8");
+  const row = ui.slice(ui.indexOf("function AdminReportRow("), ui.indexOf("function useReportChat("));
+  strictEqual(row.indexOf("<AdminReportChatLink report={r} chat={chat} />") > row.indexOf("&ldquo;{note}&rdquo;") && row.indexOf("&ldquo;{note}&rdquo;") > 0, true, "the link under the reporter's quote");
+  // The conversation drops below the avatar / text / Delete row and spans the card's inner width.
+  strictEqual(/<li className="flex flex-col gap-2 rounded-xl border border-\[var\(--brass\)\] p-3">\s*<div className="flex gap-3">/.test(row), true, "the card: the row, then the chat");
+  strictEqual(/Delete\s*<\/button>\s*<\/div>\s*\{chat\.view && <AdminReportChatLines view=\{chat\.view\} \/>\}\s*<\/li>/.test(row), true, "the chat after the row (Delete), inside the card, outside the text column");
+  const card = ui.slice(ui.indexOf("function useReportChat("));
+  strictEqual(card.includes("const statusText = reportChatStatusText(r.chatStatus);"), true);
+  strictEqual(card.includes('if (statusText) return <p className="opacity-90">{statusText}</p>;'), true, "none / not_at_table / unavailable: plain text");
+  strictEqual(card.includes('if (r.chatStatus !== "copied") return null;'), true, "no status: nothing");
+  strictEqual(/if \(chat\) \{\s*setOpen\(\(o\) => !o\);\s*return;\s*\}\s*if \(loadingRef\.current\) return;/.test(card), true, "read once, then kept; a second tap while reading does nothing");
+  strictEqual(/const read = await readReportChat\(r\.id\);[\s\S]{0,120}if \(!read\.ok\) \{\s*setError\(read\.text\);\s*return;\s*\}\s*setChat\(read\.chat\);\s*setOpen\(true\);/.test(card), true, "a failure keeps the link");
+  strictEqual(card.includes("{chat.open ? REPORT_CHAT_HIDE_LABEL : viewChatLabel(r.chatTotal ?? 0)}"), true);
+  strictEqual(card.includes("{chat.error && <p"), true, "the error under the link");
+  strictEqual(card.includes("reportChatView(chat, r.reportedId)"), true, "the reported person's lines");
+  strictEqual(card.includes("{earlierNotKeptText(view.earlierNotKept)}"), true);
+  strictEqual(card.indexOf("view.earlierNotKept > 0") < card.indexOf("view.lines.map"), true, "the earlier-messages line on top");
+  strictEqual(card.includes('l.reported ? "report-chat__line report-chat__line--reported" : "report-chat__line"'), true);
+  strictEqual(card.includes('{l.reported && <span className="report-chat__tag">{REPORT_CHAT_REPORTED_TAG}</span>}'), true);
+  strictEqual(card.includes('<span className="opacity-75">{l.time}</span> <span className="font-semibold">{l.name}</span>'), true, "time nickname: text");
+  strictEqual(card.includes(": {l.text}"), true);
+  strictEqual(/dangerouslySetInnerHTML|innerHTML/.test(ui), false, "text nodes only");
+  const css = readFileSync("app/globals.css", "utf8");
+  strictEqual(/\.report-chat__line--reported \{\s*background: rgb\(226 193 125 \/ 0\.18\);\s*box-shadow: inset 0 0 0 1px var\(--brass\);/.test(css), true, "warm gold tint, gold outline");
+  strictEqual(/\.report-chat__link \{[^}]*text-decoration: underline;/.test(css), true, "an underlined link");
+});
+check("admin tabs (M7): Tables, Reports, Kicks with loaded counts; opens on Tables; gold filled vs outlined; every list stays mounted", () => {
+  deepStrictEqual(ADMIN_TABS.map((t) => t.name), ["Tables", "Reports", "Kicks"]);
+  strictEqual(ADMIN_FIRST_TAB, "tables");
+  strictEqual(adminTabLabel("Tables", 4), "Tables (4)");
+  strictEqual(adminTabLabel("Reports", 1), "Reports (1)");
+  strictEqual(adminTabLabel("Kicks", 0), "Kicks (0)");
+  strictEqual(adminTabLabel("Kicks", null), "Kicks", "still loading, or failed");
+  strictEqual(adminTabAfterKey("tables", "ArrowRight"), "reports");
+  strictEqual(adminTabAfterKey("kicks", "ArrowRight"), "tables");
+  strictEqual(adminTabAfterKey("tables", "ArrowLeft"), "kicks");
+  strictEqual(adminTabAfterKey("reports", "End"), "kicks");
+  strictEqual(adminTabAfterKey("kicks", "Home"), "tables");
+  strictEqual(adminTabAfterKey("tables", "a"), null);
+  const page = readFileSync("app/admin/page.tsx", "utf8");
+  strictEqual(page.includes("const [tab, setTab] = useState<AdminTab>(ADMIN_FIRST_TAB);"), true, "local state, opens on Tables");
+  strictEqual(page.includes('<div role="tablist" aria-label="Admin sections" className="grid w-full grid-cols-3 gap-2">'), true, "a full-width row of three equal buttons");
+  strictEqual(page.indexOf('role="tablist"') < page.indexOf('id="admin-panel-tables"'), true, "under the title, above the lists");
+  strictEqual(page.includes('${tab === t.tab ? "peg-btn--brass" : "peg-btn--ghost"}'), true, "gold filled, gold outlined");
+  strictEqual(page.includes("min-w-0 text-center leading-tight"), true, "a long label wraps inside its third (320px)");
+  strictEqual(page.includes("{adminTabLabel(t.name, counts[t.tab])}"), true);
+  strictEqual(page.includes("tables: tablesLoaded ? tables.length : null,"), true);
+  for (const p of ["tables", "reports", "kicks"]) {
+    strictEqual(page.includes(`id="admin-panel-${p}" aria-labelledby="admin-tab-${p}" hidden={tab !== "${p}"}`), true, `${p}: hidden, not unmounted`);
+  }
+  const tables = page.slice(page.indexOf('id="admin-panel-tables"'), page.indexOf('id="admin-panel-reports"'));
+  strictEqual(tables.includes("No open tables right now.") && tables.includes("<AdminTableRow"), true, "Force-End rows under Tables");
+  const reportsUi = readFileSync("components/brand/AdminReports.tsx", "utf8");
+  strictEqual(reportsUi.includes("onCount?.(reports ? reports.length : null);"), true);
+  strictEqual(readFileSync("components/brand/AdminRecentKicks.tsx", "utf8").includes("onCount?.(kicks ? kicks.length : null);"), true);
+  strictEqual(reportsUi.includes("{REPORTS_AUTO_DELETE_TEXT}"), true, "the 90-day line stays");
 });
 // ---- Table events (moderation M5a, docs/sql/moderation-m5a-part1.sql) ----
 check("table events: the topic, the payload, and the version rule (> for members/spectators, >= for table)", () => {

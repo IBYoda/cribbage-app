@@ -52,7 +52,8 @@
 --       end-empty-tables bodies.
 --   K4  authenticated may execute exactly 60 functions in public:
 --       send_table_message and get_table_spectators among them,
---       chat_topic_allows not.
+--       chat_topic_allows not. (STATE-AWARE: 61 once moderation M7 part 1
+--       is in, the 60 plus admin_report_chat.)
 --   C1  SEND_TABLE_MESSAGE STILL WORKS: H (seated) and S (current
 --       spectator) send -- one stored 'chat' row each on table:<T>, sender
 --       the caller; K (kicked), R (removed) and O (nobody there) get NBC02
@@ -206,10 +207,13 @@ begin
   where ns.nspname = 'public' and p.prokind in ('f', 'p')
     and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
     and has_function_privilege('authenticated', p.oid, 'EXECUTE');
-  if v_n <> 60
+  -- Moderation M7 part 1 adds admin_report_chat (61).
+  if v_n <> (case when to_regprocedure('public.admin_report_chat(uuid)') is not null then 61 else 60 end)
      or not has_function_privilege('authenticated', 'public.send_table_message(uuid, text)', 'EXECUTE')
-     or not has_function_privilege('authenticated', 'public.get_table_spectators(uuid)', 'EXECUTE') then
-    raise exception 'FAIL [K4] authenticated may execute % functions in public (want 60, with send_table_message and get_table_spectators).', v_n;
+     or not has_function_privilege('authenticated', 'public.get_table_spectators(uuid)', 'EXECUTE')
+     or (to_regprocedure('public.admin_report_chat(uuid)') is not null
+         and not has_function_privilege('authenticated', 'public.admin_report_chat(uuid)', 'EXECUTE')) then
+    raise exception 'FAIL [K4] authenticated may execute % functions in public (want 60 with send_table_message and get_table_spectators; 61 with admin_report_chat once moderation M7 part 1 is in).', v_n;
   end if;
   v_checks := v_checks + 1;
 

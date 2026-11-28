@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
@@ -9,10 +9,17 @@ import { AdminTableRow, type AdminTable } from "@/components/brand/AdminTableRow
 import { AdminRecentKicks } from "@/components/brand/AdminRecentKicks";
 import { AdminReports } from "@/components/brand/AdminReports";
 import { adminTableLabel, seatedNames } from "@/lib/tableListing";
+import { ADMIN_FIRST_TAB, ADMIN_TABS, adminTabAfterKey, adminTabLabel, type AdminTab } from "@/lib/adminTabs";
 
 // A game is "live" while it is either cutting for deal or being played. Both
 // occupy the table's one-live-game slot, so both must be listed and killable.
 const LIVE_GAME_STATUSES = ["cutting", "active"];
+
+// THE TABS: Tables, Reports, Kicks (lib/adminTabs.ts), a full-width row of
+// three equal buttons under the title, the chosen one gold-filled. All
+// three lists load when the page opens (each label shows how many are
+// loaded) and stay mounted; a tab only shows its list and hides the others,
+// so an opened report chat stays read. The tab is this page's own state.
 
 export default function AdminPage() {
   const [session, setSession] = useState<Session | null>(null);
@@ -21,6 +28,11 @@ export default function AdminPage() {
   const [tables, setTables] = useState<AdminTable[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [actionInFlight, setActionInFlight] = useState<string | null>(null);
+  const [tablesLoaded, setTablesLoaded] = useState(false);
+  const [tab, setTab] = useState<AdminTab>(ADMIN_FIRST_TAB);
+  const [reportCount, setReportCount] = useState<number | null>(null);
+  const [kickCount, setKickCount] = useState<number | null>(null);
+  const tabRefs = useRef<Partial<Record<AdminTab, HTMLButtonElement | null>>>({});
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -119,6 +131,7 @@ export default function AdminPage() {
           };
         })
       );
+      setTablesLoaded(true);
     }
 
     loadAdminData();
@@ -202,29 +215,72 @@ export default function AdminPage() {
     );
   }
 
-  return (
-    <CardRoomFrame title="Admin: Active Tables">
-      {error && <p className="text-sm text-[var(--error-on-felt)]">{error}</p>}
+  const counts: Record<AdminTab, number | null> = {
+    tables: tablesLoaded ? tables.length : null,
+    reports: reportCount,
+    kicks: kickCount,
+  };
 
-      {tables.length === 0 ? (
-        <p className="text-sm">No open tables right now.</p>
-      ) : (
-        <ul className="flex w-full flex-col gap-3">
-          {tables.map((t) => (
-            <AdminTableRow
-              key={t.id}
-              table={t}
-              actionInFlight={actionInFlight}
-              onForceEndTable={() => handleForceEndTable(t.id)}
-              onForceEndGame={(gameId) => handleForceEndGame(t.id, gameId)}
-            />
-          ))}
-        </ul>
-      )}
+  return (
+    <CardRoomFrame title="Admin">
+      <div role="tablist" aria-label="Admin sections" className="grid w-full grid-cols-3 gap-2">
+        {ADMIN_TABS.map((t) => (
+          <button
+            key={t.tab}
+            ref={(el) => {
+              tabRefs.current[t.tab] = el;
+            }}
+            type="button"
+            role="tab"
+            id={`admin-tab-${t.tab}`}
+            aria-controls={`admin-panel-${t.tab}`}
+            aria-selected={tab === t.tab}
+            tabIndex={tab === t.tab ? 0 : -1}
+            onClick={() => setTab(t.tab)}
+            onKeyDown={(e) => {
+              const next = adminTabAfterKey(tab, e.key);
+              if (!next) return;
+              e.preventDefault();
+              setTab(next);
+              tabRefs.current[next]?.focus();
+            }}
+            className={`peg-btn peg-btn--small peg-btn--pair min-w-0 text-center leading-tight ${tab === t.tab ? "peg-btn--brass" : "peg-btn--ghost"}`}
+          >
+            {adminTabLabel(t.name, counts[t.tab])}
+          </button>
+        ))}
+      </div>
+
+      <div role="tabpanel" id="admin-panel-tables" aria-labelledby="admin-tab-tables" hidden={tab !== "tables"} className="w-full">
+        <div className="flex w-full flex-col gap-3">
+          {error && <p className="text-sm text-[var(--error-on-felt)]">{error}</p>}
+
+          {tables.length === 0 ? (
+            <p className="text-sm">No open tables right now.</p>
+          ) : (
+            <ul className="flex w-full flex-col gap-3">
+              {tables.map((t) => (
+                <AdminTableRow
+                  key={t.id}
+                  table={t}
+                  actionInFlight={actionInFlight}
+                  onForceEndTable={() => handleForceEndTable(t.id)}
+                  onForceEndGame={(gameId) => handleForceEndGame(t.id, gameId)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div role="tabpanel" id="admin-panel-reports" aria-labelledby="admin-tab-reports" hidden={tab !== "reports"} className="w-full">
+        <AdminReports onCount={setReportCount} />
+      </div>
 
       {/* Moderation M3: who kicked whom, newest first. */}
-      <AdminRecentKicks />
-      <AdminReports />
+      <div role="tabpanel" id="admin-panel-kicks" aria-labelledby="admin-tab-kicks" hidden={tab !== "kicks"} className="w-full">
+        <AdminRecentKicks onCount={setKickCount} />
+      </div>
     </CardRoomFrame>
   );
 }

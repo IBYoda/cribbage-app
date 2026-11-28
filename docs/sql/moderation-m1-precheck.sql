@@ -6,6 +6,10 @@
 --
 -- STATUS: written, NOT RUN yet.
 --
+-- UPDATED FOR MODERATION M7 (docs/sql/moderation-m7-part1.sql): the grants
+-- row also accepts 61 with admin_report_chat (the 60 left by moderation
+-- M5c1 c2 plus M7's admin RPC; never _report_table_chat).
+--
 -- DEPLOY ORDER (slice M1):
 --   1. THIS FILE                                  (state "before part 1")
 --   2. docs/sql/moderation-m1-part1.sql          (add-only)
@@ -52,7 +56,8 @@
 --            whose name contains "block" (expected none).
 --   grants   the client-executable functions (49 before part 1, 52 after;
 --            53 after moderation M2 part 1, 56 after M3 part 1, 59 after
---            M6 part 1, 60 after M5a part 1, 61 after M5c1 part 1);
+--            M6 part 1, 60 after M5a part 1, 61 after M5c1 part 1, 60 after
+--            M5c1 c2, 61 after M7 part 1);
 --            postgres's global default ACL for new functions (INFO).
 --   count    blocks rows, blockers, the longest list; attempt_log
 --            block_change rows; profiles that cannot be blocked by nickname
@@ -372,6 +377,15 @@ from (
   select 4, 1, '', 'grants', 'functions authenticated may execute in public (distinct names)',
          (select count(*) from client_fns)::text,
          case
+           when (select count(*) from client_fns) = 61
+                and exists (select 1 from client_fns cf where cf.name = 'admin_report_chat')
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                and not exists (select 1 from client_fns cf where cf.name in ('chat_topic_allows', '_report_table_chat'))
+             then 'after moderation M7 part 1: the 60 (moderation M5c1 c2) plus admin_report_chat (61)'
+           when (select count(*) from client_fns) = 60
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                and not exists (select 1 from client_fns cf where cf.name = 'chat_topic_allows')
+             then 'after moderation M5c1 c2: the 61 without chat_topic_allows (60)'
            when (select count(*) from client_fns) = 49
                 and not exists (select 1 from client_fns cf where cf.name not in (select e.name from slice_e_fns e))
              then 'before part 1: slice E''s 49'
@@ -436,18 +450,20 @@ from (
                 and (select count(*) from client_fns cf where cf.name in ('kick_player', 'kick_topic_allows', 'admin_recent_kicks')) = 3
                 and (select count(*) from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report')) = 3
              then 'after moderation M5c1 part 1: the 60 plus send_table_message'
-           else 'STOP: neither 49, 52, 53, 56, 59, 60 nor 61; see the next two rows (slice-e-grants-verification.sql X1 would fail)' end
+           else 'STOP: neither 49, 52, 53, 56, 59, 60 nor 61; see the next two rows (or 61 with admin_report_chat once moderation M7 part 1 is in; slice-e-grants-verification.sql X1 would fail)' end
 
   union all
-  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id, M3''s three, M6''s three and M5a''s one aside)',
+  select 4, 2, '', 'grants', 'executable by authenticated but in neither list (M2''s block_player_by_id, M3''s three, M6''s three, M5a''s one, M5c1''s one and M7''s one aside)',
          coalesce((select string_agg(cf.name, ', ' order by cf.name) from client_fns cf
                    where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
                      and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks',
-                                         'report_player', 'admin_list_reports', 'admin_delete_report', 'table_topic_allows')), '(none)'),
+                                         'report_player', 'admin_list_reports', 'admin_delete_report', 'table_topic_allows',
+                                         'send_table_message', 'admin_report_chat')), '(none)'),
          case when exists (select 1 from client_fns cf
                            where cf.name not in (select e.name from slice_e_fns e) and cf.name not in (select m.name from m1_fns m)
                              and cf.name not in ('block_player_by_id', 'kick_player', 'kick_topic_allows', 'admin_recent_kicks',
-                                                 'report_player', 'admin_list_reports', 'admin_delete_report', 'table_topic_allows'))
+                                                 'report_player', 'admin_list_reports', 'admin_delete_report', 'table_topic_allows',
+                                                 'send_table_message', 'admin_report_chat'))
               then 'STOP: paste back' else '' end
 
   union all

@@ -5,6 +5,10 @@
 --
 -- STATUS: written, NOT RUN yet.
 --
+-- UPDATED FOR MODERATION M7 (docs/sql/moderation-m7-part1.sql): the grants
+-- row also accepts 61 with admin_report_chat (the 60 left by moderation
+-- M5c1 c2 plus M7's admin RPC; never _report_table_chat).
+--
 -- Every row has a section, an item, a value and a note. A note starting
 -- "STOP" means: do not run the next file; paste the result back. The first
 -- row ("state") says where M6 stands:
@@ -50,8 +54,12 @@
 with new_fns(o, name, sig, lf, client) as (
   values
     (1, '_report_avatar_object', 'public._report_avatar_object(uuid, text)', '045267155656c63ce47b152cef6c9044', false),
-    (2, 'report_player', 'public.report_player(uuid, text, text, uuid)', 'cbbe554a4e170379f8c6b7ac88b1cecc', true),
-    (3, 'admin_list_reports', 'public.admin_list_reports(integer)', 'b2bcdc0cd74f7453e964ec3bc31c6998', true),
+    -- Moderation M7 part 1 replaces these two (their M7 bodies are accepted
+    -- once admin_report_chat exists).
+    (2, 'report_player', 'public.report_player(uuid, text, text, uuid)',
+     case when to_regprocedure('public.admin_report_chat(uuid)') is not null then '2dd85cea07caa56de74f5bfdef7d3b07' else 'cbbe554a4e170379f8c6b7ac88b1cecc' end, true),
+    (3, 'admin_list_reports', 'public.admin_list_reports(integer)',
+     case when to_regprocedure('public.admin_report_chat(uuid)') is not null then '05e0e3809b944590a850ddc8ce259570' else 'b2bcdc0cd74f7453e964ec3bc31c6998' end, true),
     (4, 'admin_delete_report', 'public.admin_delete_report(uuid)', '77cd0a0d585977060ad7153baf64ff0f', true),
     (5, 'purge_old_reports', 'public.purge_old_reports()', '62eaf1170d97a02e1783d7f0197a9767', false)
 ),
@@ -205,6 +213,9 @@ from (
            when to_regclass('public.player_reports') is null then 'before part 1: absent, as expected'
            when (select t.cols from pr_state t) = 'id uuid not null, created_at timestamp with time zone not null, reporter_id uuid not null, reported_id uuid not null, reason text not null, note text, table_id uuid, reporter_nickname text, reported_nickname text, reported_avatar_url text, avatar_object_updated_at timestamp with time zone, avatar_object_size bigint'
              then 'after part 1: as part 1 wrote it'
+           when (select t.cols from pr_state t) = 'id uuid not null, created_at timestamp with time zone not null, reporter_id uuid not null, reported_id uuid not null, reason text not null, note text, table_id uuid, reporter_nickname text, reported_nickname text, reported_avatar_url text, avatar_object_updated_at timestamp with time zone, avatar_object_size bigint, chat jsonb, chat_status text, chat_total integer, chat_kept integer'
+                and to_regprocedure('public.admin_report_chat(uuid)') is not null
+             then 'after part 1 and moderation M7 part 1: plus chat, chat_status, chat_total, chat_kept'
            else 'STOP: a table by that name with other columns' end
 
   union all
@@ -229,7 +240,7 @@ from (
            when n.fn_oid is null then 'before part 1: absent, as expected'
            when n.m = n.lf and n.definer and n.empty_path and not n.anon_x and not n.public_x and not n.service_x
                 and n.auth_x = n.client
-             then 'after part 1: part 1''s body and grants'
+             then 'after part 1: part 1''s body (moderation M7''s for report_player and admin_list_reports once M7 is in) and grants'
            else 'STOP: not part 1''s body, or the wrong grants' end
   from new_fn_state n
 
@@ -270,6 +281,11 @@ from (
   select 6, 1, 'grants', 'functions authenticated may execute in public (distinct names)',
          (select count(*) from client_fns)::text,
          case
+           when (select count(*) from client_fns) = 61
+                and exists (select 1 from client_fns cf where cf.name = 'admin_report_chat')
+                and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                and not exists (select 1 from client_fns cf where cf.name in ('chat_topic_allows', '_report_table_chat'))
+             then 'after moderation M7 part 1: the 60 (moderation M5c1 c2) plus admin_report_chat (61)'
            when (select count(*) from client_fns) = 56
                 and not exists (select 1 from client_fns cf where cf.name in ('report_player', 'admin_list_reports', 'admin_delete_report'))
              then 'before part 1: 56 (slice E''s 49, M1''s 3, M2''s 1, M3''s 3)'
@@ -285,7 +301,7 @@ from (
                 and exists (select 1 from client_fns cf where cf.name = 'table_topic_allows')
                 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
              then 'after part 1, moderation M5a part 1 and M5c1 part 1: the 60 plus send_table_message'
-           else 'STOP: neither 56, 59, 60 nor 61 (slice-e-grants-verification.sql X1 would fail)' end
+           else 'STOP: neither 56, 59, 60 nor 61 (or 61 with admin_report_chat once moderation M7 part 1 is in; slice-e-grants-verification.sql X1 would fail)' end
 
   union all
   -- ==== names ====================================================================
