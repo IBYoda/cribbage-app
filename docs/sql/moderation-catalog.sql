@@ -25,6 +25,11 @@
 -- expects exactly 2 policies (M3's kicks, M5a's table events) and shows an
 -- INFO row for c2; section 02 marks chat_topic_allows INFO (removed) instead
 -- of STOP; section 10 expects 60 names (the 61 without chat_topic_allows).
+-- UPDATED FOR MODERATION M7 (moderation-m7-part1.sql): admin_report_chat is
+-- a known client function once it exists (section 10 then expects 61: the
+-- 60 left by c2 plus it; never the helper _report_table_chat), and both new
+-- function names are M7's own in the names list. Section 01's C4 row
+-- accepts them as its "chat"-named functions.
 -- UPDATED FOR THE M5 FINAL CLEANUP (moderation-m5-cleanup-part1.sql): the
 -- app listens to no table (App B, PR #144), and part 1 takes game_plays,
 -- games, profiles, table_members and tables out of supabase_realtime. Section
@@ -156,7 +161,8 @@ m1_names(name) as (
          ('kick_topic_allows'), ('admin_recent_kicks'),
          ('player_reports'), ('player_reports_pkey'), ('player_reports_created_at_idx'), ('player_reports_reported_idx'),
          ('player_reports_reporter_idx'), ('player_reports_pair_idx'), ('_report_avatar_object'), ('report_player'),
-         ('admin_list_reports'), ('admin_delete_report'), ('purge_old_reports')
+         ('admin_list_reports'), ('admin_delete_report'), ('purge_old_reports'),
+         ('_report_table_chat'), ('admin_report_chat')
 ),
 fp_live as (
   select f.o, f.fn, f.kind, f.lf, f.crlf, f.src, l.n, l.sig, l.m, l.info
@@ -218,6 +224,10 @@ expected_fns(name) as (
   -- Moderation M5c1 part 1's chat RPC, once it exists.
   select 'send_table_message'
   where to_regprocedure('public.send_table_message(uuid, text)') is not null
+  union all
+  -- Moderation M7 part 1's admin chat RPC, once it exists.
+  select 'admin_report_chat'
+  where to_regprocedure('public.admin_report_chat(uuid)') is not null
   union all
   -- Moderation M2 part 1's block by account id, once it exists.
   select 'block_player_by_id'
@@ -346,6 +356,17 @@ from (
 
   union all
   select 1, 8, '', 0, 'realtime', 'C4 view: relations with "chat" in the name / public functions with "chat" besides chat_topic_allows / buckets with "chat"',
+         c4.val,
+         -- STATE-AWARE (moderation M7 part 1 adds _report_table_chat and
+         -- admin_report_chat; either order, since the list sorts by the
+         -- database collation).
+         case when c4.val = '0 / (none) / 0'
+                then 'C4 today expects 0 / (none) / 0 (before moderation M7 part 1)'
+              when c4.val in ('0 / _report_table_chat, admin_report_chat / 0', '0 / admin_report_chat, _report_table_chat / 0')
+                   and to_regprocedure('public.admin_report_chat(uuid)') is not null
+                then 'as moderation M7 part 1 left it: _report_table_chat (internal) and admin_report_chat (admins); no chat relation or bucket'
+              else 'C4 expects 0 / (none) / 0, or 0 / _report_table_chat, admin_report_chat / 0 once moderation M7 part 1 is in' end
+  from (select
          (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
           where c.relname ilike '%chat%' and c.relkind in ('r', 'p', 'v', 'm', 'f')
             and n.nspname not in ('pg_catalog', 'information_schema')
@@ -353,8 +374,7 @@ from (
            || ' / ' || coalesce((select string_agg(p.proname::text, ', ' order by p.proname)
                                  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                                  where n.nspname = 'public' and p.proname ilike '%chat%' and p.proname <> 'chat_topic_allows'), '(none)')
-           || ' / ' || (select count(*) from storage.buckets b where b.id ilike '%chat%' or b.name ilike '%chat%')::text,
-         'C4 today expects 0 / (none) / 0'
+           || ' / ' || (select count(*) from storage.buckets b where b.id ilike '%chat%' or b.name ilike '%chat%')::text as val) c4
 
   union all
   -- ==== 02. Function fingerprints =================================================
@@ -580,11 +600,14 @@ from (
               when (select count(*) from client_fns) = 60 and to_regprocedure('public.table_topic_allows(text)') is not null
                    and to_regprocedure('public.send_table_message(uuid, text)') is null
                 then 'as moderation M5a part 1 left it (60)'
+              when (select count(*) from client_fns) = 61 and to_regprocedure('public.admin_report_chat(uuid)') is not null
+                   and to_regprocedure('public.chat_topic_allows(text, boolean)') is null
+                then 'as moderation M7 part 1 left it (61: the 60 after M5c1 c2 plus admin_report_chat)'
               when (select count(*) from client_fns) = 61 and to_regprocedure('public.send_table_message(uuid, text)') is not null
                 then 'as moderation M5c1 part 1 left it (61)'
               when (select count(*) from client_fns) = 60 and (to_regprocedure('public.chat_topic_allows(text, boolean)') is null and to_regprocedure('public.send_table_message(uuid, text)') is not null)
                 then 'as moderation M5c1 c2 left it (60: chat_topic_allows removed)'
-              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a, 61 after M5c1, 60 after M5c1 c2); see the next two rows' end
+              else 'FLAG: not 49 (52 after moderation M1 part 1, 53 after M2, 56 after M3, 59 after M6, 60 after M5a, 61 after M5c1, 60 after M5c1 c2, 61 after M7); see the next two rows' end
 
   union all
   select 10, 1, '', 0, 'client fn', 'executable by authenticated but not in slice E''s 49 (plus M1''s 3 once public.blocks exists)',

@@ -6,10 +6,15 @@ import { readRecentKicks, recentKickLine, type RecentKick } from "@/lib/kicks";
 // THE ADMIN PAGE'S RECENT KICKS (moderation M3): the newest 50 kicks from
 // admin_recent_kicks (admins only; the server refuses anyone else), each
 // with its time, the table's code, who kicked whom, and whether it ended a
-// live game. Read once when the page opens.
-export function AdminRecentKicks() {
+// live game. Read once when the page opens. onCount tells the admin page's
+// Kicks tab how many are loaded (null until then, or on an error).
+export function AdminRecentKicks({ onCount }: { onCount?: (n: number | null) => void } = {}) {
   const [kicks, setKicks] = useState<RecentKick[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onCount?.(kicks ? kicks.length : null);
+  }, [kicks, onCount]);
 
   useEffect(() => {
     let cancelled = false;

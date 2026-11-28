@@ -43,6 +43,12 @@
 -- once chat_topic_allows is gone (and send_table_message exists), X1
 -- expects 60 names: the 61 without chat_topic_allows. Re-run it after c2.
 --
+-- UPDATED FOR MODERATION M7 (docs/sql/moderation-m7-part1.sql): once
+-- admin_report_chat(uuid) exists, X1 expects 61 names (the 60 plus
+-- admin_report_chat; never _report_table_chat). M7 adds no table (only
+-- columns on player_reports, which keeps no client privilege), so T1 is
+-- unchanged. Re-run it after M7 part 1.
+--
 -- It WRITES -- one temporary function in public (X2), two temporary accounts
 -- in auth.users, and a few storage.objects rows in the avatars bucket written
 -- as one of them (rows only: no file is uploaded, and every row is rolled
@@ -135,6 +141,8 @@ declare
   -- Moderation M5c1 c2 is in when chat_topic_allows is gone (after M5c1).
   v_c2 boolean := to_regprocedure('public.send_table_message(uuid, text)') is not null
                   and to_regprocedure('public.chat_topic_allows(text, boolean)') is null;
+  -- Moderation M7 part 1 is in when its admin RPC exists.
+  v_m7 boolean := to_regprocedure('public.admin_report_chat(uuid)') is not null;
   v_expected_fns text[] := array[
     'acknowledge_deal_cut', 'can_read_game', 'can_read_table', 'chat_topic_allows', 'claim_win',
     'clear_win_claim', 'computer_acknowledge_deal_cut', 'computer_confirm_count', 'computer_discard_to_crib',
@@ -190,6 +198,12 @@ begin
     v_expected_fns := array_remove(v_expected_fns, 'chat_topic_allows');
     if array_length(v_expected_fns, 1) <> 60 then
       raise exception 'SETUP: the expected function list has % names after moderation M5c1 c2; expected 60 (the 61 without chat_topic_allows).', array_length(v_expected_fns, 1);
+    end if;
+  end if;
+  if v_m7 then
+    v_expected_fns := v_expected_fns || array['admin_report_chat'];
+    if array_length(v_expected_fns, 1) <> 61 then
+      raise exception 'SETUP: the expected function list has % names after moderation M7 part 1; expected 61 (M7 needs M5c1 c2: the 60 plus admin_report_chat).', array_length(v_expected_fns, 1);
     end if;
   end if;
 
@@ -292,7 +306,7 @@ begin
                                                   where e.name not in (select o.name from open_fns o)))
   into v_bad;
   if v_bad <> '' then
-    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1; 59 after M6 part 1; 60 after M5a part 1; 61 after M5c1 part 1; 60 after M5c1 c2): %.', array_length(v_expected_fns, 1), v_bad;
+    raise exception 'FAIL [X1] functions authenticated may execute differ from the expected % (49; 52 after moderation M1 part 1; 53 after M2 part 1; 56 after M3 part 1; 59 after M6 part 1; 60 after M5a part 1; 61 after M5c1 part 1; 60 after M5c1 c2; 61 after M7 part 1): %.', array_length(v_expected_fns, 1), v_bad;
   end if;
   v_checks := v_checks + 1;
 

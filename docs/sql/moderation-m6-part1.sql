@@ -114,6 +114,10 @@
 --   admin_list_reports      b2bcdc0cd74f7453e964ec3bc31c6998 / 98d5a52aef5700d7b1c021fbe70365a3
 --   admin_delete_report     77cd0a0d585977060ad7153baf64ff0f / 27373e7cbb0b36afb6578e46239479ac
 --   purge_old_reports       62eaf1170d97a02e1783d7f0197a9767 / 9e1553c176dd777888721303c9792346
+-- Moderation M7 (moderation-m7-part1.sql) later REPLACES report_player (M6's
+-- body plus one chat-copy block; LF 2dd85cea07caa56de74f5bfdef7d3b07) and
+-- admin_list_reports (two more result columns; LF
+-- 05e0e3809b944590a850ddc8ce259570); the other three stay as above.
 --
 -- NOT TOUCHED: every existing function body (this slice replaces NO
 -- function), every existing policy, grant and cron job.

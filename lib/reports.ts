@@ -12,12 +12,24 @@
 // The limits (10 an hour, 30 a day, one per person a day) are the server's;
 // the app only shows its answers.
 //
-// Pure rules plus the three RPC calls (writeReport, readReports,
-// deleteReport). No component calls the server for reports itself, and
-// nothing reads the player_reports table directly (no client can). Tested
-// by scripts/test-phase3.ts.
+// MODERATION M7 (docs/sql/moderation-m7-part1.sql): a behavior report also
+// carries a copy of the table's stored chat, taken by the server
+// (report_player's arguments and answers are unchanged). Admins read one
+// report's copy with readReportChat; the chat rules are lib/reportChat.ts.
+//
+// Pure rules plus the four RPC calls (writeReport, readReports,
+// deleteReport, readReportChat). No component calls the server for reports
+// itself, and nothing reads the player_reports table directly (no client
+// can). Tested by scripts/test-phase3.ts.
 
 import { blockQuestion } from "@/lib/personMenu";
+import {
+  REPORT_CHAT_LOAD_FAILED_TEXT,
+  reportChatFromRows,
+  reportChatStatus,
+  type ReportChat,
+  type ReportChatStatus,
+} from "@/lib/reportChat";
 
 export type ReportReason = "nickname" | "picture" | "behavior";
 
@@ -165,12 +177,18 @@ export type AdminReport = {
   tableCode: string | null;
   reporterNickname: string | null;
   reporterNicknameNow: string | null;
+  // (M7) whose chat lines the card highlights.
+  reportedId: string | null;
   reportedNickname: string | null;
   reportedNicknameNow: string | null;
   reportedAvatarUrl: string | null;
   pictureChanged: boolean;
   reporterReportCount: number;
   reportedReportCount: number;
+  // (M7) the chat copy's status and how many messages were stored; null for
+  // nickname and picture reports and reports from before M7.
+  chatStatus: ReportChatStatus | null;
+  chatTotal: number | null;
 };
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -190,12 +208,15 @@ export function adminReportsFromRows(rows: unknown): AdminReport[] {
         tableCode: str(row.table_code),
         reporterNickname: str(row.reporter_nickname),
         reporterNicknameNow: str(row.reporter_nickname_now),
+        reportedId: str(row.reported_id),
         reportedNickname: str(row.reported_nickname),
         reportedNicknameNow: str(row.reported_nickname_now),
         reportedAvatarUrl: str(row.reported_avatar_url),
         pictureChanged: row.picture_changed === true,
         reporterReportCount: num(row.reporter_report_count),
         reportedReportCount: num(row.reported_report_count),
+        chatStatus: reportChatStatus(row.chat_status),
+        chatTotal: typeof row.chat_total === "number" && Number.isInteger(row.chat_total) ? row.chat_total : null,
       },
     ];
   });
@@ -242,5 +263,23 @@ export async function deleteReport(id: string): Promise<{ ok: true } | { ok: fal
     return { ok: false, text: REPORT_DELETE_FAILED_TEXT };
   } catch {
     return { ok: false, text: REPORT_DELETE_FAILED_TEXT };
+  }
+}
+
+// (M7) One report's chat copy (admin_report_chat: admins only; one row, none
+// for a report that is gone). Any failure is the plain "Couldn't load the
+// chat. Try again." -- never raw database text ("Admins only." aside).
+export type ReportChatResult = { ok: true; chat: ReportChat } | { ok: false; text: string };
+
+export async function readReportChat(id: string): Promise<ReportChatResult> {
+  try {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase.rpc("admin_report_chat", { p_id: id });
+    if (error) return { ok: false, text: error.message === "Admins only." ? error.message : REPORT_CHAT_LOAD_FAILED_TEXT };
+    const chat = reportChatFromRows(data);
+    if (!chat) return { ok: false, text: REPORT_CHAT_LOAD_FAILED_TEXT };
+    return { ok: true, chat };
+  } catch {
+    return { ok: false, text: REPORT_CHAT_LOAD_FAILED_TEXT };
   }
 }

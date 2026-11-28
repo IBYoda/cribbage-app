@@ -36,6 +36,15 @@
 -- of 59 is slice-e-grants-verification.sql's job; here only "at least 59").
 -- It fingerprints no other function: M3 and M1 are checked by behavior (a
 -- kick and a block still work).
+-- UPDATED FOR MODERATION M7 (moderation-m7-part1.sql): once
+-- admin_report_chat(uuid) exists, K1 expects player_reports' twelve columns
+-- plus chat, chat_status, chat_total, chat_kept, and K2 expects M7 part 1's
+-- bodies of report_player (2dd85cea07caa56de74f5bfdef7d3b07) and admin_list_reports
+-- (05e0e3809b944590a850ddc8ce259570); the other three are unchanged. Everything
+-- else here holds as it is: report_player still mentions no realtime. (K3),
+-- C13 reads admin_list_reports' columns by name, and these reports are filed
+-- by people at no table (or as plain inserts), so their chat columns are
+-- null or not_at_table.
 --
 -- PEOPLE: R (reports T, X, W), T (seated at T1, an avatar file), X (at no
 -- table; avatar_url points into T's folder), W (an avatar file), U (a
@@ -211,7 +220,9 @@ begin
   into v_txt
   from pg_attribute a
   where a.attrelid = 'public.player_reports'::regclass and a.attnum > 0 and not a.attisdropped;
-  if v_txt is distinct from 'id uuid not null, created_at timestamp with time zone not null, reporter_id uuid not null, reported_id uuid not null, reason text not null, note text, table_id uuid, reporter_nickname text, reported_nickname text, reported_avatar_url text, avatar_object_updated_at timestamp with time zone, avatar_object_size bigint' then
+  if v_txt is distinct from 'id uuid not null, created_at timestamp with time zone not null, reporter_id uuid not null, reported_id uuid not null, reason text not null, note text, table_id uuid, reporter_nickname text, reported_nickname text, reported_avatar_url text, avatar_object_updated_at timestamp with time zone, avatar_object_size bigint'
+                             || (case when to_regprocedure('public.admin_report_chat(uuid)') is not null
+                                      then ', chat jsonb, chat_status text, chat_total integer, chat_kept integer' else '' end) then
     v_bad := v_bad || 'columns "' || coalesce(v_txt, '?') || '"; ';
   end if;
   if not exists (select 1 from pg_constraint con where con.conrelid = 'public.player_reports'::regclass and con.contype = 'p'
@@ -281,8 +292,11 @@ begin
   for v_rec in
     select * from (values
       ('public._report_avatar_object(uuid, text)', '045267155656c63ce47b152cef6c9044', false),
-      ('public.report_player(uuid, text, text, uuid)', 'cbbe554a4e170379f8c6b7ac88b1cecc', true),
-      ('public.admin_list_reports(integer)', 'b2bcdc0cd74f7453e964ec3bc31c6998', true),
+      -- Moderation M7 part 1 replaces these two (STATE-AWARE).
+      ('public.report_player(uuid, text, text, uuid)',
+       case when to_regprocedure('public.admin_report_chat(uuid)') is not null then '2dd85cea07caa56de74f5bfdef7d3b07' else 'cbbe554a4e170379f8c6b7ac88b1cecc' end, true),
+      ('public.admin_list_reports(integer)',
+       case when to_regprocedure('public.admin_report_chat(uuid)') is not null then '05e0e3809b944590a850ddc8ce259570' else 'b2bcdc0cd74f7453e964ec3bc31c6998' end, true),
       ('public.admin_delete_report(uuid)', '77cd0a0d585977060ad7153baf64ff0f', true),
       ('public.purge_old_reports()', '62eaf1170d97a02e1783d7f0197a9767', false)
     ) as t(sig, lf, client)

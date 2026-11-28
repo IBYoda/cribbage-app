@@ -5,6 +5,10 @@
 --
 -- STATUS: written, NOT RUN yet.
 --
+-- UPDATED FOR MODERATION M7 (docs/sql/moderation-m7-part1.sql): the grants
+-- row also accepts 61 with admin_report_chat (the 60 left by moderation
+-- M5c1 c2 plus M7's admin RPC; never _report_table_chat).
+--
 -- Every row has a section, an item, a value and a note. A note starting
 -- "STOP" means: do not run the next file; paste the result back. The first
 -- row ("state") says where M5b2 stands:
@@ -275,13 +279,18 @@ from (
   -- ==== grants ===================================================================
   select 6, 1, 'grants', 'functions authenticated may execute in public (distinct names)',
          (select count(*) from client_fns)::text,
-         case when (select count(*) from client_fns) = 60 and not exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+         case when (select count(*) from client_fns) = 61
+                   and exists (select 1 from client_fns cf where cf.name = 'admin_report_chat')
+                   and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
+                   and not exists (select 1 from client_fns cf where cf.name in ('chat_topic_allows', '_report_table_chat'))
+                then 'as expected before and after part 1 (M5b2 grants nothing to clients): after moderation M7 part 1, the 60 plus admin_report_chat (61)'
+              when (select count(*) from client_fns) = 60 and not exists (select 1 from client_fns cf where cf.name = 'send_table_message')
                 then 'as expected before and after part 1 (M5b2 grants nothing to clients)'
               when (select count(*) from client_fns) = 61 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
                 then 'as expected before and after part 1 (M5b2 grants nothing to clients): the 60 plus moderation M5c1''s send_table_message'
               when (select count(*) from client_fns) = 60 and exists (select 1 from client_fns cf where cf.name = 'send_table_message')
                    and not exists (select 1 from client_fns cf where cf.name = 'chat_topic_allows')
                 then 'as expected before and after part 1 (M5b2 grants nothing to clients): after moderation M5c1 c2, without chat_topic_allows'
-              else 'STOP: expected 60 (61 once moderation M5c1 part 1 is in, 60 again after c2; slice-e-grants-verification.sql X1 would fail)' end
+              else 'STOP: expected 60 (61 once moderation M5c1 part 1 is in, 60 again after c2, 61 with admin_report_chat once moderation M7 part 1 is in; slice-e-grants-verification.sql X1 would fail)' end
 ) z
 order by z.s, z.o, z.item;

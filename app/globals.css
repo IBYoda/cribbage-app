@@ -2599,6 +2599,55 @@ section.felt-panel {
   outline: 3px solid var(--cream);
   outline-offset: 2px;
 }
+/* THE CHAT COPY ON AN ADMIN REPORT CARD (components/brand/AdminReports.tsx,
+   moderation M7): an underlined gold link (a 44px target), the conversation
+   in a darker inset, each line its own row; the reported person's lines a
+   warm gold tint with a gold outline and a small "reported" tag. */
+.report-chat__link {
+  min-height: 44px;
+  color: var(--brass);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.report-chat__link:focus-visible {
+  outline: 3px solid var(--cream);
+  outline-offset: 2px;
+}
+.report-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.25);
+}
+.report-chat__line,
+.report-chat__earlier {
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.report-chat__earlier {
+  font-style: italic;
+  opacity: 0.8;
+}
+.report-chat__line--reported {
+  background: rgb(226 193 125 / 0.18);
+  box-shadow: inset 0 0 0 1px var(--brass);
+}
+.report-chat__tag {
+  display: inline-block;
+  margin-left: 0.375rem;
+  padding: 0 0.375rem;
+  border-radius: 6px;
+  background: var(--brass);
+  color: #1f1608;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  vertical-align: 1px;
+}
 /* "Watching": a spectator's thin row under the header -- 20px, text only. */
 .watching-row {
   display: flex;

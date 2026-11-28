@@ -14,6 +14,7 @@ import {
   showNoteCounter,
   type ReportReason,
 } from "@/lib/reports";
+import { REPORT_CHAT_NOTICE, showReportChatNotice } from "@/lib/reportChat";
 
 // THE REPORT DIALOG (moderation M6): "Report <name>", "What's the
 // problem?", three choices, an optional note (200 characters, a counter
@@ -31,6 +32,10 @@ import {
 //
 // The form is mounted only while open (keyed by person), so every open
 // starts empty.
+//
+// Moderation M7: while "Behavior at this table" is chosen, one small line
+// between the choices and the note says the report includes a copy of the
+// table's recent chat (the server takes it; nothing more is sent).
 export function ReportDialog({
   target,
   onSend,
@@ -138,6 +143,8 @@ function ReportForm({
           </label>
         ))}
       </fieldset>
+      {/* (M7) only for a behavior report: the server copies the table's chat. */}
+      {showReportChatNotice(reason) && <p className="text-sm opacity-80">{REPORT_CHAT_NOTICE}</p>}
       <div className="flex flex-col gap-1">
         <textarea
           className="report-note"
