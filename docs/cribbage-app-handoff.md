@@ -28,7 +28,7 @@ A real-time multiplayer cribbage companion app for 2-4 players, playing remotely
 
 ## Current state
 
-**Version 2.0 (Nov 4, 2026): stable and good, live at https://cribbage-app.vercel.app.** Phases 1, 2 and 3 are done, as are the computer opponents, Self-Scoring (Muggins) tables on every size, the leaderboard and the nickname gate. The PRD's "Version 2.0" section (near its top) lists what v2.0 includes.
+**Version 2.0 (Nov 4, 2026): stable and good, live at https://nobs.raynewood.com.** (The old address, https://cribbage-app.vercel.app, still works until it is redirected.) Phases 1, 2 and 3 are done, as are the computer opponents, Self-Scoring (Muggins) tables on every size, the leaderboard and the nickname gate. The PRD's "Version 2.0" section (near its top) lists what v2.0 includes.
 
 From here, new work exists only under the rule recorded in the PRD's **Backlog (frozen at v2.0)** section: bug and security items only. Everything else is in its **Ideas (not work)** section.
 
