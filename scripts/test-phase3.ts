@@ -405,7 +405,19 @@ import {
   rankWithTies,
   toggledSet,
 } from "../lib/follows";
-import { AVATAR_TYPE_MESSAGE, avatarExtension, avatarPath } from "../lib/avatarPath";
+import { avatarExtension, avatarPath } from "../lib/avatarPath";
+import {
+  AVATAR_JPEG_QUALITY,
+  AVATAR_MAX_BYTES,
+  AVATAR_MAX_INPUT_BYTES,
+  AVATAR_MESSAGES,
+  AVATAR_OUTPUT_TYPE,
+  AVATAR_SIZE,
+  avatarUpdateSaved,
+  centreSquare,
+  convertedProblem,
+  pickedFileProblem,
+} from "../lib/avatarImage";
 import {
   ALREADY_BLOCKED_TEXT,
   BLOCK_FAILED_TEXT,
@@ -6260,12 +6272,88 @@ check("avatar file names (step 3 slice E): one fixed, lower-case name per type",
   strictEqual(avatarPath("u1", { type: "", name: "a.svg" }), null);
   // Every name produced is one of the four the storage policy allows.
   for (const ext of ["png", "jpg", "webp"]) strictEqual(["png", "jpg", "jpeg", "webp"].includes(ext), true);
-  // The profile page uses it, and refuses with the message when it says no.
+  // The profile page always writes the JPEG it made: <uid>/avatar.jpg.
+  strictEqual(avatarPath("u1", { type: AVATAR_OUTPUT_TYPE }), "u1/avatar.jpg");
   const page = readFileSync("app/profile/page.tsx", "utf8");
-  strictEqual(page.includes("const path = avatarPath(session.user.id, avatarFile);"), true);
-  strictEqual(/if \(!path\) \{\s*setStatus\("error"\);\s*setMessage\(AVATAR_TYPE_MESSAGE\);\s*return;/.test(page), true);
+  strictEqual(page.includes("const path = avatarPath(userId, { type: AVATAR_OUTPUT_TYPE });"), true);
   strictEqual(page.includes('avatarFile.name.split(".").pop()'), false, "no raw extension any more");
-  strictEqual(AVATAR_TYPE_MESSAGE, "Please choose a PNG, JPEG or WebP picture.");
+});
+
+// The iPhone upload fix (2026-11-28): picked = saved, made on the phone.
+// The canvas work (lib/avatarConvert.ts) cannot run in node; these check the
+// rules it follows and how the page wires them.
+check("profile picture: made into a 512 px JPEG on the phone, the rules and the words", () => {
+  strictEqual(AVATAR_SIZE, 512);
+  strictEqual(AVATAR_JPEG_QUALITY, 0.85);
+  strictEqual(AVATAR_OUTPUT_TYPE, "image/jpeg");
+  strictEqual(AVATAR_MAX_BYTES, 2 * 1024 * 1024, "the bucket's file_size_limit");
+  strictEqual(AVATAR_MAX_INPUT_BYTES, 25 * 1024 * 1024);
+  deepStrictEqual(AVATAR_MESSAGES, {
+    saving: "Saving your picture...",
+    saved: "Picture saved.",
+    unreadable: "That file couldn't be read as a picture. Try a different one.",
+    save_failed: "Couldn't save your picture. Check your connection and try again.",
+    too_large: "That picture is too large to read. Pick a smaller one.",
+  });
+  // The picked file: a 5 MB phone photo is fine; past 25 MB too large; empty unreadable.
+  strictEqual(pickedFileProblem(5 * 1024 * 1024), null);
+  strictEqual(pickedFileProblem(25 * 1024 * 1024), null);
+  strictEqual(pickedFileProblem(25 * 1024 * 1024 + 1), "too_large");
+  strictEqual(pickedFileProblem(0), "unreadable");
+  strictEqual(pickedFileProblem(Number.NaN), "unreadable");
+  // The converted JPEG: none, empty or over the bucket's 2 MB -> unreadable.
+  strictEqual(convertedProblem({ size: 80_000 }), null);
+  strictEqual(convertedProblem({ size: 2 * 1024 * 1024 }), null);
+  strictEqual(convertedProblem({ size: 2 * 1024 * 1024 + 1 }), "unreadable");
+  strictEqual(convertedProblem({ size: 0 }), "unreadable");
+  strictEqual(convertedProblem(null), "unreadable");
+  // The centre square: as large as the shorter side, from the middle.
+  deepStrictEqual(centreSquare(4032, 3024), { sx: 504, sy: 0, side: 3024 }); // an iPhone photo, landscape
+  deepStrictEqual(centreSquare(3024, 4032), { sx: 0, sy: 504, side: 3024 }); // portrait
+  deepStrictEqual(centreSquare(512, 512), { sx: 0, sy: 0, side: 512 });
+  deepStrictEqual(centreSquare(101, 100), { sx: 0, sy: 0, side: 100 }); // odd difference: floored
+  strictEqual(centreSquare(0, 100), null);
+  strictEqual(centreSquare(100, Number.NaN), null);
+  // The update saved only with no error and exactly one row (a missing
+  // profile row is a failure, never a quiet success).
+  strictEqual(avatarUpdateSaved(null, [{ id: "u1" }]), true);
+  strictEqual(avatarUpdateSaved(null, []), false);
+  strictEqual(avatarUpdateSaved(null, null), false);
+  strictEqual(avatarUpdateSaved({ message: "x" }, [{ id: "u1" }]), false);
+  strictEqual(avatarUpdateSaved(null, [{ id: "a" }, { id: "b" }]), false);
+});
+check("profile picture: saved when picked, only avatar_url written, one line under the photo", () => {
+  const page = readFileSync("app/profile/page.tsx", "utf8");
+  const pick = page.slice(page.indexOf("async function handleFileChange"), page.indexOf("async function handleSubmit"));
+  const submit = page.slice(page.indexOf("async function handleSubmit"), page.indexOf("if (loading) {"));
+  // Converted first, then uploaded with upsert, then ONLY avatar_url, counted.
+  const at = [
+    "pickedFileProblem(file.size)",
+    "await convertToAvatarJpeg(file)",
+    "convertedProblem(jpeg)",
+    '.upload(path, upload, { upsert: true, contentType: AVATAR_OUTPUT_TYPE })',
+    "?t=${Date.now()}",
+    ".update({ avatar_url: newAvatarUrl })",
+    '.select("id");',
+    "avatarUpdateSaved(updateError, rows)",
+  ].map((s) => pick.indexOf(s));
+  strictEqual(at.every((i, k) => i > 0 && (k === 0 || i > at[k - 1])), true, `in order: ${at}`);
+  strictEqual(/nickname/.test(pick.replace(/\/\/[^\n]*/g, "")), false, "the picture never writes the nickname");
+  strictEqual(pick.includes('avatarFailed("save_failed")'), true, "anything thrown is a save failure");
+  // Save Profile: the nickname only, never the picture, inside try/catch.
+  strictEqual(submit.includes("await saveNickname(session.user.id, nickname);"), true);
+  strictEqual(/avatar_url|\.upload\(|avatarPath/.test(submit), false);
+  strictEqual(/try \{[\s\S]*\} catch \{\s*setStatus\("error"\);\s*setMessage\(PROFILE_SAVE_FAILED\);/.test(submit), true);
+  // The line sits directly under the photo; the picker is off while it saves.
+  const ui = page.slice(page.indexOf("</WingsFrame>"), page.indexOf('<label htmlFor="nickname"'));
+  strictEqual(/^<\/WingsFrame>\s*\{\/\*[^*]*\*\/\}\s*<p\s+role="status"/.test(ui), true, "the line right after the photo");
+  strictEqual(ui.includes("{avatarMessage}"), true);
+  strictEqual(ui.includes('disabled={avatarState === "saving"}'), true);
+  // The canvas: a square crop drawn at AVATAR_SIZE, white under it, JPEG at the quality.
+  const conv = readFileSync("lib/avatarConvert.ts", "utf8");
+  strictEqual(conv.includes("ctx.drawImage(img, square.sx, square.sy, square.side, square.side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);"), true);
+  strictEqual(conv.includes("canvas.toBlob(resolve, AVATAR_OUTPUT_TYPE, AVATAR_JPEG_QUALITY)"), true);
+  strictEqual(conv.includes('ctx.fillStyle = "#ffffff";'), true);
 });
 
 // ---- The Block List (moderation M1: lib/blocks.ts, docs/sql/moderation-m1-*.sql)
