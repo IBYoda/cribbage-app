@@ -55,6 +55,16 @@ export const RATE_LIMITED_TEXT = "You've done that too many times in the last ho
 // One wording for joining and watching alike, and no reason.
 export const REFUSED_TEXT = "You can't join this table.";
 
+// RETRY ON THE TABLE PAGE'S ERROR SCREEN (components/table/TableView.tsx):
+// whether trying again can help with the error shown. Everything keeps Retry
+// (a failed call, a full table, a rate limit, a lockout, an unknown error)
+// EXCEPT the plain refusal "You can't join this table.": a kicked or blocked
+// person gets that answer every time, so the screen offers Back to home
+// instead. Closed tables and "Go to table NNNN" have screens of their own.
+export function errorOffersRetry(errorText: string): boolean {
+  return errorText !== REFUSED_TEXT;
+}
+
 // The one-line note where a start can quietly end a single-player game.
 export const QUIET_CLOSE_NOTE = "Starting or joining another table ends any single-player game you have open.";
 

@@ -1,20 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppearanceProvider } from "@/components/AppearanceProvider";
 import { SoundProvider } from "@/components/SoundProvider";
 import { APPEARANCE_INLINE_SCRIPT } from "@/lib/appearance";
-import { displayFont } from "@/lib/fonts";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+// Self-hosted, never fetched from Google at build time (lib/fonts.ts).
+import { displayFont, geistMono, geistSans } from "@/lib/fonts";
 
 export const metadata: Metadata = {
   title: "Nobs!",
