@@ -10,7 +10,8 @@
 --   1. The read-only pre-check, docs/sql/computer-normie-precheck.sql, comes
 --      before this file.
 --   2. The new Normie account was created in the dashboard (Authentication
---      -> Users -> Add user) with the email normie@yodawood.com. Its user id,
+--      -> Users -> Add user); its login email is now normie@raynewood.com
+--      (changed on 2026-11-27, docs/sql/computer-emails-part1.sql). Its user id,
 --      14fec049-681d-47c5-81de-a176f9c59ed1, is written into section 4.
 --   3. This file, with the medium computer's id
 --      (740523b1-816f-4208-95c9-0d720238fd77) checked in section 4, and the
@@ -172,7 +173,7 @@ grant execute on function public.get_computer_profiles() to authenticated;
 -- 4. Rainman's nickname and avatar, and the new Normie account
 -- ===========================================================================
 -- The ids are fixed: the new Normie created in the dashboard on 2026-11-08
--- (normie@yodawood.com), and the medium computer as it was in production.
+-- (now normie@raynewood.com), and the medium computer as it was in production.
 -- The new Normie takes over the old Normie's picture (blue-guy.jpg);
 -- Rainman gets its own (Rainman.png). Both are in the avatars Storage bucket
 -- under computers/.
