@@ -66,6 +66,7 @@ import { CardRoomFrame } from "@/components/brand/CardRoomFrame";
 import {
   GENERIC_ERROR_TEXT,
   REFUSED_TEXT,
+  errorOffersRetry,
   TABLE_ENDED_TEXT,
   joinOutcome,
   logUnexpectedError,
@@ -3209,7 +3210,7 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
               Try a different code
             </Link>
           </div>
-        ) : (
+        ) : errorOffersRetry(error) ? (
           <div className="flex flex-col gap-2.5">
             <button
               onClick={() => setRetryKey((k) => k + 1)}
@@ -3217,6 +3218,18 @@ export function TableView({ spectate }: { spectate?: SpectateProps } = {}) {
             >
               Retry
             </button>
+            <Link href="/tables/join" className="peg-btn peg-btn--ghost">
+              Try a different code
+            </Link>
+          </div>
+        ) : (
+          // "You can't join this table." (kicked, or on the creator's Block
+          // List): the same answer every time, so no Retry (lib/oneTable.ts
+          // errorOffersRetry).
+          <div className="flex flex-col gap-2.5">
+            <Link href="/" className="peg-btn peg-btn--brass">
+              Back to home
+            </Link>
             <Link href="/tables/join" className="peg-btn peg-btn--ghost">
               Try a different code
             </Link>

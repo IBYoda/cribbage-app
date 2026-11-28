@@ -58,6 +58,7 @@ import {
   QUIET_CLOSE_NOTE,
   RATE_LIMITED_TEXT,
   REFUSED_TEXT,
+  errorOffersRetry,
   TABLE_EMPTY_ENDED_TEXT,
   TABLE_ENDED_TEXT,
   TABLE_FULL_TEXT,
@@ -1550,7 +1551,7 @@ check("Slice B: with ?t=, the table is read by id; a code that now belongs to an
   // An ended table read by id: its own reason.
   strictEqual(code.includes("setError(tableEndedMessage(tableRow.ended_reason, tableRow.computer_level));"), true);
   // The closed human table's screen: Back to home and Try a different code, no Retry.
-  const closed = code.slice(code.indexOf(") : closedHumanTable ? ("), code.indexOf(") : (", code.indexOf(") : closedHumanTable ? (") + 5));
+  const closed = code.slice(code.indexOf(") : closedHumanTable ? ("), code.indexOf(") : errorOffersRetry(error) ? (", code.indexOf(") : closedHumanTable ? (") + 5));
   strictEqual(closed.includes('<Link href="/" className="peg-btn peg-btn--brass">'), true);
   strictEqual(closed.includes('<Link href="/tables/join" className="peg-btn peg-btn--ghost">'), true);
   strictEqual(closed.includes("Retry"), false);
@@ -8649,6 +8650,64 @@ check("travel board: New Game asks first only with something to lose and no winn
 });
 check("travel board: the calculator's total comes back only as 0-29", () => {
   deepStrictEqual(["12", "0", "29", "30", "-1", "1.5", "abc", "", null].map(parseCalcTotal), [12, 0, 29, null, null, null, null, null, null]);
+});
+
+check("retry: the table page's error screen offers Retry unless the answer can't change", () => {
+  // Kicked or blocked: the same plain refusal every time -> no Retry.
+  strictEqual(errorOffersRetry(REFUSED_TEXT), false);
+  strictEqual(errorOffersRetry(rpcRefusal({ message: REFUSED_TEXT, code: "P0001" }).text), false);
+  // Everything else on that screen can come right on another try.
+  for (const text of [
+    GENERIC_ERROR_TEXT,
+    TABLE_FULL_TEXT,
+    TABLE_ENDED_TEXT,
+    RATE_LIMITED_TEXT,
+    rpcRefusal({ message: "You can join at most 20 tables an hour. Please try again later.", details: "rate_limited" }).text,
+    lockedOutText(5),
+    lockedOutText(null),
+    notFoundText("1234"),
+    alreadyAtTableText("1234"),
+    "You can't join this table", // not the exact refusal: mapped to the generic error anyway
+  ]) {
+    strictEqual(errorOffersRetry(text), true, text);
+  }
+  // The screen: Retry only behind the rule; the refusal gets Back to home.
+  const view = readFileSync("components/table/TableView.tsx", "utf8");
+  const at = view.indexOf(") : errorOffersRetry(error) ? (");
+  strictEqual(at > 0, true);
+  const branch = view.slice(at, view.indexOf("</CardRoomFrame>", at));
+  strictEqual(branch.indexOf("Retry") < branch.indexOf('<Link href="/" className="peg-btn peg-btn--brass">'), true);
+  strictEqual(branch.split("setRetryKey").length - 1, 1);
+});
+check("fonts: Geist and Geist Mono are self-hosted too; nothing tracked loads next/font/google", () => {
+  const fonts = readFileSync("lib/fonts.ts", "utf8");
+  const layout = readFileSync("app/layout.tsx", "utf8");
+  strictEqual(layout.includes('from "next/font/google"'), false);
+  strictEqual(layout.includes('import { displayFont, geistMono, geistSans } from "@/lib/fonts";'), true);
+  strictEqual(layout.includes("${geistSans.variable} ${geistMono.variable} ${displayFont.variable}"), true);
+  strictEqual(fonts.includes('variable: "--font-geist-sans"') && fonts.includes('variable: "--font-geist-mono"'), true);
+  strictEqual(fonts.split('display: "swap"').length - 1, 3);
+  for (const [dir, file] of [["geist", "geist-latin-wght-normal.woff2"], ["geist-mono", "geist-mono-latin-wght-normal.woff2"]]) {
+    strictEqual(fonts.includes(`src: "./font-files/${dir}/${file}"`), true, file);
+    strictEqual(readFileSync(`lib/font-files/${dir}/${file}`).subarray(0, 4).toString("latin1"), "wOF2", file);
+    strictEqual(readFileSync(`lib/font-files/${dir}/OFL.txt`, "utf8").includes("SIL Open Font License"), true, dir);
+  }
+  const credits = readFileSync("CREDITS.md", "utf8");
+  strictEqual(credits.includes("- Geist:") && credits.includes("- Geist Mono:"), true);
+  strictEqual(credits.includes("next/font/google"), false);
+});
+check("display font: Playfair Display is self-hosted, never fetched from Google", () => {
+  const fonts = readFileSync("lib/fonts.ts", "utf8");
+  strictEqual(fonts.includes('from "next/font/local"'), true);
+  strictEqual(fonts.includes('from "next/font/google"'), false);
+  strictEqual(fonts.includes('variable: "--font-display"') && fonts.includes('display: "swap"'), true);
+  for (const face of ["700-normal", "700-italic", "900-italic"]) {
+    const file = `lib/font-files/playfair-display/playfair-display-latin-${face}.woff2`;
+    strictEqual(fonts.includes(`./font-files/playfair-display/playfair-display-latin-${face}.woff2`), true, face);
+    strictEqual(readFileSync(file).subarray(0, 4).toString("latin1"), "wOF2", file);
+  }
+  strictEqual(readFileSync("lib/font-files/playfair-display/OFL.txt", "utf8").includes("SIL Open Font License"), true);
+  strictEqual(readFileSync("CREDITS.md", "utf8").includes("Playfair Display"), true);
 });
 
 console.log(`All ${passed} Phase 3 helper checks passed.`);
