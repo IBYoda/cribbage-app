@@ -192,10 +192,14 @@ import {
 import {
   NICKNAME_LOCKED_FALLBACK,
   NICKNAME_MAX_LENGTH,
+  NICKNAME_MESSAGES,
+  NICKNAME_SAVE_FAILED,
   needsNickname,
   nicknameProblem,
   nicknameSaveErrorMessage,
   nicknameStepHref,
+  nicknameToSave,
+  normalizeNickname,
   safeReturnPath,
 } from "../lib/nickname";
 import {
@@ -4153,22 +4157,85 @@ check("nickname: the save's rules and messages are the Profile page's", () => {
   strictEqual(nicknameProblem("x".repeat(30)), null);
   strictEqual(nicknameProblem(` ${"x".repeat(30)} `), null); // trimmed first
   strictEqual(nicknameProblem("x".repeat(31)), "Nicknames are at most 30 characters.");
-  strictEqual(nicknameSaveErrorMessage({ code: "23505", message: "duplicate key value" }), "That nickname is taken.");
-  strictEqual(nicknameSaveErrorMessage({ code: "42501", message: "permission denied" }), "permission denied");
-  strictEqual(nicknameSaveErrorMessage({ message: "Failed to fetch" }), "Failed to fetch");
 });
-check("nickname: the 7-day lock (step 3 slice E) shows the server's words, or a plain fallback", () => {
-  strictEqual(
-    nicknameSaveErrorMessage({ code: "P0001", message: "You can change your nickname again in 3 days.", details: "nickname_locked" }),
-    "You can change your nickname again in 3 days."
-  );
+check("nickname rules: normalized before saving (trimmed, runs of spaces made one)", () => {
+  strictEqual(normalizeNickname("  Walt   Bob  "), "Walt Bob");
+  strictEqual(normalizeNickname("Walt"), "Walt");
+  strictEqual(normalizeNickname("a\tb"), "a\tb"); // only spaces collapse; a tab is a bad character
+  const r = nicknameToSave("  Swollen    Nobs ");
+  strictEqual(r.ok && r.nickname, "Swollen Nobs");
+  // 30 once collapsed is fine, though 34 were typed.
+  strictEqual(nicknameProblem(`${"x".repeat(15)}     ${"y".repeat(14)}`), null);
+});
+check("nickname rules: the client pre-check uses the server's words", () => {
+  strictEqual(NICKNAME_MESSAGES.empty, "Please enter a nickname.");
+  strictEqual(NICKNAME_MESSAGES.characters, "Nicknames can use letters, numbers, spaces and . - _ ' ! only.");
+  strictEqual(NICKNAME_MESSAGES.tooLong, "Nicknames are at most 30 characters.");
+  strictEqual(NICKNAME_MESSAGES.noLetterOrDigit, "Nicknames need at least one letter or number.");
+  for (const bad of ["Walt\u{1F600}", "W\u00e1lter", "W\u0430lt", "Walt\u200b", "a\tb", "a\u00a0b", "D$", "a@b", "#1", "a|b"]) {
+    strictEqual(nicknameProblem(bad), NICKNAME_MESSAGES.characters, JSON.stringify(bad));
+  }
+  strictEqual(nicknameProblem(`${"x".repeat(31)}$`), NICKNAME_MESSAGES.characters); // characters first, as the server
+  for (const bad of ["...", "!!!", "- _", "'"]) strictEqual(nicknameProblem(bad), NICKNAME_MESSAGES.noLetterOrDigit, bad);
+  for (const good of ["O'Neil-Smith_Jr. Go!", "Walt1", "Walt!", "42", "Swollen Nobs"]) strictEqual(nicknameProblem(good), null, good);
+  // Reserved words and look-alikes are the server's alone.
+  for (const serverOnly of ["Admin", "Staff_Mike", "Wa1t", "WaIt"]) strictEqual(nicknameProblem(serverOnly), null, serverOnly);
+});
+check("nickname rules: the same name as saved is never pre-checked, and re-sent exactly", () => {
+  // D$, a real old name that breaks today's rules: saving it again works.
+  strictEqual(nicknameProblem("D$", "D$"), null);
+  const same = nicknameToSave(" D$ ", "D$");
+  strictEqual(same.ok && same.nickname, "D$");
+  // An old double space is re-sent as saved, so the server sees no change.
+  const spaced = nicknameToSave("Bob  Smith", "Bob  Smith");
+  strictEqual(spaced.ok && spaced.nickname, "Bob  Smith");
+  // A real change is checked, case included (the server calls it a change too).
+  strictEqual(nicknameProblem("d$", "D$"), NICKNAME_MESSAGES.characters);
+  strictEqual(nicknameProblem("D$2", "D$"), NICKNAME_MESSAGES.characters);
+  // Empty is always refused, even when nothing was saved.
+  strictEqual(nicknameProblem("", ""), NICKNAME_MESSAGES.empty);
+  strictEqual(nicknameProblem("  ", null), NICKNAME_MESSAGES.empty);
+  strictEqual(nicknameProblem("D$", ""), NICKNAME_MESSAGES.characters); // nothing saved yet: a new name
+});
+check("nickname rules: refusals show the server's words, 23505 is taken, anything else one generic line", () => {
+  for (const [details, message] of [
+    ["nickname_invalid", "Nicknames can't start or end with a space or have two spaces in a row."],
+    ["nickname_unavailable", "That nickname isn't available."],
+    ["nickname_taken", "That nickname is taken."],
+    ["nickname_locked", "You can change your nickname again in 3 days."],
+  ]) {
+    strictEqual(nicknameSaveErrorMessage({ code: "P0001", message, details }), message, details);
+  }
+  // A worded refusal with no words: a plain version of each.
+  strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: "", details: "nickname_invalid" }), NICKNAME_SAVE_FAILED);
+  strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: " ", details: "nickname_unavailable" }), "That nickname isn't available.");
+  strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: null, details: "nickname_taken" }), "That nickname is taken.");
   strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: "", details: "nickname_locked" }), NICKNAME_LOCKED_FALLBACK);
-  // Still: a taken nickname in words, anything else as sent.
+  // The unique index.
+  strictEqual(nicknameSaveErrorMessage({ code: "23505", message: "duplicate key value" }), "That nickname is taken.");
   strictEqual(nicknameSaveErrorMessage({ code: "23505", message: "duplicate key value", details: "Key exists" }), "That nickname is taken.");
-  strictEqual(nicknameSaveErrorMessage({ code: "P0001", message: "something else", details: null }), "something else");
-  // The save sends the error object as Supabase returns it (details included).
+  // Anything else: never the raw text.
+  strictEqual(NICKNAME_SAVE_FAILED, "Couldn't save your nickname. Check your connection and try again.");
+  for (const raw of [
+    { code: "42501", message: "permission denied for table profiles" },
+    { message: "TypeError: Failed to fetch" },
+    { code: "P0001", message: "something else", details: null },
+    { code: "P0001", message: "Too many changes.", details: "rate_limited" },
+    { code: "23502", message: "null value in column", details: "nickname" },
+  ]) {
+    strictEqual(nicknameSaveErrorMessage(raw), NICKNAME_SAVE_FAILED, raw.message);
+  }
+  // The save sends the normalized name, and the error object as Supabase
+  // returns it (details included); a throw is the generic line.
   const save = readFileSync("lib/profileNickname.ts", "utf8");
+  strictEqual(save.includes("const checked = nicknameToSave(raw, saved);"), true);
+  strictEqual(save.includes("upsert({ id: userId, nickname })"), true);
   strictEqual(save.includes("if (error) return { ok: false, message: nicknameSaveErrorMessage(error) };"), true);
+  strictEqual(/catch \{\s*return \{ ok: false, message: NICKNAME_SAVE_FAILED \};/.test(save), true);
+  // The Profile page passes the saved nickname to both.
+  const page = readFileSync("app/profile/page.tsx", "utf8");
+  strictEqual(page.includes("nicknameProblem(nickname, savedNickname)"), true);
+  strictEqual(page.includes("setSavedNickname(saved.nickname);"), true);
 });
 check("nickname: the return path is a same-site path or the home page", () => {
   // Fine.
@@ -6364,7 +6431,7 @@ check("profile picture: saved when picked, only avatar_url written, one line und
   strictEqual(/nickname/.test(pick.replace(/\/\/[^\n]*/g, "")), false, "the picture never writes the nickname");
   strictEqual(pick.includes('avatarFailed("save_failed")'), true, "anything thrown is a save failure");
   // Save Profile: the nickname only, never the picture, inside try/catch.
-  strictEqual(submit.includes("await saveNickname(session.user.id, nickname);"), true);
+  strictEqual(submit.includes("await saveNickname(session.user.id, nickname, savedNickname);"), true);
   strictEqual(/avatar_url|\.upload\(|avatarPath/.test(submit), false);
   strictEqual(/try \{[\s\S]*\} catch \{\s*setStatus\("error"\);\s*setMessage\(PROFILE_SAVE_FAILED\);/.test(submit), true);
   // The line sits directly under the photo; the picker is off while it saves.

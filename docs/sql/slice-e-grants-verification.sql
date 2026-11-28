@@ -5,6 +5,7 @@
 -- The whole file is ONE DO block.
 --
 -- STATUS: written, NOT RUN yet.
+-- Re-run 2026-11-28 after nickname rules: 20 / 12 / clean (slice-e-ratelimits / slice-e-grants / slice-e-precheck).
 --
 -- UPDATED FOR MODERATION M1 (docs/sql/moderation-m1-part1.sql): once
 -- public.blocks exists, T1 expects it with NO privilege for any client role,

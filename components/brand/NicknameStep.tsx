@@ -11,8 +11,10 @@ type Save = (userId: string, raw: string) => ReturnType<typeof saveNickname>;
 // or sit at a table -- on the home page in place of the menu, and at
 // /nickname for the direct routes (Start a Table, single player, a table
 // link or code), which come back afterwards. Only the nickname; the picture
-// stays on the Profile page. The rules and the "That nickname is taken."
-// message are the Profile page's own (lib/nickname.ts, lib/profileNickname.ts).
+// stays on the Profile page. The rules and their messages are the Profile
+// page's own (lib/nickname.ts, lib/profileNickname.ts): the typed name is
+// normalized and pre-checked there, and the server's refusals (taken, not
+// available, the 7-day lock) come back as its own words in the error line.
 //
 // save: the real save by default; the dev mock passes a fake one.
 export function NicknameStep({
